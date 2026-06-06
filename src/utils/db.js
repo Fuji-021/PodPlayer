@@ -3,7 +3,29 @@ import Dexie from 'dexie';
 import store from '@/store';
 // import pkg from "../../package.json";
 
-const db = new Dexie('yesplaymusic');
+// [播客改造] 导出 db 实例，供 utils/podcast/db.js 复用，避免多个 Dexie 实例冲突。
+export const db = new Dexie('yesplaymusic');
+
+// [播客改造] v6：新增本地收藏表（favorites）
+//   favorites: 已收藏的播客单集（id = episode.id；存全量元数据，方便"我的收藏"列表展示）
+// ⚠️ Dexie schema 是增量的，但稳妥起见把 v5 的播客 3 表也声明在 v6，
+// 防止任何边缘情况下表被误删。
+db.version(6).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+});
+
+// [播客改造] v5：新增播客订阅 / 单集 / 单集播放进度三张表。
+//   podcasts: 一档节目（id = feedUrl）
+//   episodes: 一集（id = `${feedUrl}::${guid}`，按 podcastId/pubTime 建索引方便查询）
+//   episodeProgress: 每集已听到的秒数（id = episode.id）
+db.version(5).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime',
+  episodeProgress: '&id, updatedAt',
+});
 
 db.version(4).stores({
   trackDetail: '&id, updateTime',

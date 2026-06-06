@@ -8,6 +8,10 @@ export default {
       state.player.sendSelfToIpcMain();
     }
   },
+  // [播客改造 A-7.1] 同步播客收藏 id 列表（来自 Dexie）
+  setPodcastFavoriteIds(state, ids) {
+    state.podcastFavorites.episodeIds = ids || [];
+  },
   changeLang(state, lang) {
     state.settings.lang = lang;
   },

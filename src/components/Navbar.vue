@@ -15,7 +15,9 @@
         <router-link to="/" :class="{ active: $route.name === 'home' }">{{
           $t('nav.home')
         }}</router-link>
+        <!-- [播客改造] 暂时屏蔽"发现"入口（源码保留） -->
         <router-link
+          v-if="false"
           to="/explore"
           :class="{ active: $route.name === 'explore' }"
           >{{ $t('nav.explore') }}</router-link
@@ -27,7 +29,8 @@
         >
       </div>
       <div class="right-part">
-        <div class="search-box">
+        <!-- [播客改造] 暂时屏蔽顶栏搜索框（源码保留），后续可改为播客本地搜索 -->
+        <div v-if="false" class="search-box">
           <div class="container" :class="{ active: inputFocus }">
             <svg-icon icon-class="search" />
             <div class="input">
@@ -57,11 +60,12 @@
         <svg-icon icon-class="settings" />
         {{ $t('library.userProfileMenu.settings') }}
       </div>
-      <div v-if="!isLooseLoggedIn" class="item" @click="toLogin">
+      <!-- [播客改造] 暂时屏蔽网易云登录/退出菜单项（源码保留） -->
+      <div v-if="false" class="item" @click="toLogin">
         <svg-icon icon-class="login" />
         {{ $t('login.login') }}
       </div>
-      <div v-if="isLooseLoggedIn" class="item" @click="logout">
+      <div v-if="false" class="item" @click="logout">
         <svg-icon icon-class="logout" />
         {{ $t('library.userProfileMenu.logout') }}
       </div>

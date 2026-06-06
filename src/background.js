@@ -20,6 +20,8 @@ import {
 import { createProtocol } from 'vue-cli-plugin-electron-builder/lib';
 import { startNeteaseMusicApi } from './electron/services';
 import { initIpcMain } from './electron/ipcMain.js';
+// [播客改造] 主进程 RSS/OPML 抓取，绕开渲染进程 CORS 限制。
+import { registerPodcastIpc } from './electron/podcastFetch';
 import { createMenu } from './electron/menu';
 import { createTray } from '@/electron/tray';
 import { createTouchBar } from './electron/touchBar';
@@ -101,6 +103,15 @@ class Background {
   init() {
     log('initializing');
 
+    // [播客改造] 让本 fork 作为独立应用运行：使用独立的应用名与用户数据目录，
+    // 避免与已安装的 YesPlayMusic 正式版共用单实例锁和本地数据，
+    // 从而允许两者同时运行、互不干扰（正式版作为对照组保留）。
+    app.setName('YesPlayMusicPodcast');
+    app.setPath(
+      'userData',
+      require('path').join(app.getPath('appData'), 'YesPlayMusicPodcast')
+    );
+
     // Make sure the app is singleton.
     if (!app.requestSingleInstanceLock()) return app.quit();
 
@@ -154,7 +165,7 @@ class Background {
 
     const expressApp = express();
     expressApp.use('/', express.static(__dirname + '/'));
-    expressApp.use('/api', expressProxy('http://127.0.0.1:10754'));
+    expressApp.use('/api', expressProxy('http://127.0.0.1:10755'));
     expressApp.use('/player', (req, res) => {
       this.window.webContents
         .executeJavaScript('window.yesplaymusic.player')
@@ -167,7 +178,7 @@ class Background {
           });
         });
     });
-    this.expressApp = expressApp.listen(27232, '127.0.0.1');
+    this.expressApp = expressApp.listen(27233, '127.0.0.1');
   }
 
   createWindow() {
@@ -253,13 +264,15 @@ class Background {
           ? `${process.env.WEBPACK_DEV_SERVER_URL}/#/library`
           : process.env.WEBPACK_DEV_SERVER_URL
       );
-      if (!process.env.IS_TEST) this.window.webContents.openDevTools();
+      // [播客改造] 开发模式不再自动弹出开发者控制台（按 F12 可手动调出），让窗口更清爽。
+      // 如需调试时自动打开，取消下一行注释即可。
+      // if (!process.env.IS_TEST) this.window.webContents.openDevTools();
     } else {
       createProtocol('app');
       this.window.loadURL(
         showLibraryDefault
-          ? 'http://localhost:27232/#/library'
-          : 'http://localhost:27232'
+          ? 'http://localhost:27233/#/library'
+          : 'http://localhost:27233'
       );
     }
   }
@@ -397,6 +410,9 @@ class Background {
 
       // init ipcMain
       initIpcMain(this.window, this.store, this.trayEventEmitter);
+
+      // [播客改造] 注册 podcast 相关 IPC handler
+      registerPodcastIpc();
 
       // set proxy
       const proxyRules = this.store.get('proxy');

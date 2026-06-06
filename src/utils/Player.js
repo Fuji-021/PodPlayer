@@ -7,6 +7,8 @@ import { getLyric, getMP3, getTrackDetail, scrobble } from '@/api/track';
 import store from '@/store';
 import { isAccountLoggedIn } from '@/utils/auth';
 import { cacheTrackSource, getTrackSource } from '@/utils/db';
+// [播客改造 S-1] 单集进度按集保存：用 Dexie 的 episodeProgress 表
+import { saveEpisodeProgress, getEpisodeProgress } from '@/utils/podcast/db';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
 import { Howl, Howler } from 'howler';
 import shuffle from 'lodash/shuffle';
@@ -68,6 +70,7 @@ export default class {
     this._reversed = false;
     this._volume = 1; // 0 to 1
     this._volumeBeforeMuted = 1; // 用于保存静音前的音量
+    this._playbackRate = 1; // [播客改造] 播放倍速，0.5–3.0
     this._personalFMLoading = false; // 是否正在私人FM中加载新的track
     this._personalFMNextLoading = false; // 是否正在缓存私人FM的下一首歌曲
 
@@ -152,6 +155,15 @@ export default class {
     this._volume = volume;
     this._howler?.volume(volume);
   }
+  // [播客改造] 播放倍速：底层走 howler.rate()（HTML5 模式下用 audio.playbackRate）
+  get playbackRate() {
+    return this._playbackRate;
+  }
+  set playbackRate(rate) {
+    const r = Math.max(0.5, Math.min(3, Number(rate) || 1));
+    this._playbackRate = r;
+    this._howler?.rate(r);
+  }
   get list() {
     return this.shuffle ? this._shuffledList : this._list;
   }
@@ -217,10 +229,18 @@ export default class {
     this._howler?.volume(this.volume);
 
     if (this._enabled) {
-      // 恢复当前播放歌曲
-      this._replaceCurrentTrack(this.currentTrackID, false).then(() => {
-        this._howler?.seek(localStorage.getItem('playerCurrentTrackTime') ?? 0);
-      }); // update audio source and init howler
+      if (this._currentTrack && this._currentTrack.podcastAudioUrl) {
+        // [播客改造 S-1] 播客单集走自己的恢复路径，避免 _replaceCurrentTrack
+        // 用网易云接口去查 pod:xxx 这种 id，造成 _currentTrack=undefined、播放器死锁
+        this._loadCurrentPodcastEpisode(false);
+      } else {
+        // 原逻辑：网易云曲目按 id 查询恢复
+        this._replaceCurrentTrack(this.currentTrackID, false).then(() => {
+          this._howler?.seek(
+            localStorage.getItem('playerCurrentTrackTime') ?? 0
+          );
+        });
+      }
       this._initMediaSession();
     }
 
@@ -253,6 +273,16 @@ export default class {
       if (this._howler === null) return;
       this._progress = this._howler.seek();
       localStorage.setItem('playerCurrentTrackTime', this._progress);
+      // [播客改造 S-1] 播客单集进度按集保存（Dexie put 是非阻塞 async）
+      const t = this._currentTrack;
+      if (
+        t &&
+        t.podcastEpisodeId &&
+        typeof this._progress === 'number' &&
+        this._progress > 0
+      ) {
+        saveEpisodeProgress(t.podcastEpisodeId, Math.floor(this._progress));
+      }
       if (isCreateMpris) {
         ipcRenderer?.send('playerCurrentTrackTime', this._progress);
       }
@@ -304,6 +334,8 @@ export default class {
     if (firstTrackID !== 'first') this._shuffledList.unshift(firstTrackID);
   }
   async _scrobble(track, time, completed = false) {
+    // [播客改造] 播客单集不调用网易云的"听歌打卡"接口
+    if (track && track.podcastAudioUrl) return;
     console.debug(
       `[debug][Player.js] scrobble track 👉 ${track.name} by ${track.ar[0].name} 👉 time:${time} completed: ${completed}`
     );
@@ -329,17 +361,44 @@ export default class {
       });
     }
   }
-  _playAudioSource(source, autoplay = true) {
+  async _playAudioSource(source, autoplay = true) {
+    // [播客改造 A-7.10] 切集淡入淡出：若旧 howler 还在播，先做 ~180ms 淡出再 unload，
+    // 避免硬切的"啪嗒"感。淡入由 play() 内已有的 fade(0, volume, PLAY_PAUSE_FADE_DURATION) 完成。
+    const old = this._howler;
+    if (old && typeof old.playing === 'function' && old.playing()) {
+      await new Promise(resolve => {
+        let done = false;
+        const finish = () => {
+          if (!done) {
+            done = true;
+            resolve();
+          }
+        };
+        try {
+          old.once('fade', finish);
+          old.fade(old.volume(), 0, 180);
+        } catch (e) {
+          finish();
+        }
+        // 兜底：极少情况下 'fade' 事件可能不触发
+        setTimeout(finish, 220);
+      });
+    }
     Howler.unload();
+    // [播客改造] 播客音频常见格式为 m4a/aac/mp4，加入 format 嗅探列表。
     this._howler = new Howl({
       src: [source],
       html5: true,
       preload: true,
-      format: ['mp3', 'flac'],
+      format: ['mp3', 'flac', 'm4a', 'aac', 'mp4'],
       onend: () => {
         this._nextTrackCallback();
       },
     });
+    // [播客改造] 新建 howler 实例后立即应用当前倍速，避免换曲后被重置为 1.0
+    if (this._playbackRate && this._playbackRate !== 1) {
+      this._howler.rate(this._playbackRate);
+    }
     this._howler.on('loaderror', (_, errCode) => {
       // https://developer.mozilla.org/en-US/docs/Web/API/MediaError/code
       // code 3: MEDIA_ERR_DECODE
@@ -482,6 +541,10 @@ export default class {
     return this._getAudioSourceBlobURL(buffer);
   }
   _getAudioSource(track) {
+    // [播客改造] 播客单集自带音频直链，跳过网易云查询链。
+    if (track && track.podcastAudioUrl) {
+      return Promise.resolve(track.podcastAudioUrl);
+    }
     return this._getAudioSourceFromCache(String(track.id))
       .then(source => {
         return source ?? this._getAudioSourceFromNetease(track);
@@ -495,6 +558,21 @@ export default class {
     autoplay = true,
     ifUnplayableThen = UNPLAYABLE_CONDITION.PLAY_NEXT_TRACK
   ) {
+    // [播客改造 A-7.3 / 同根 S-1] 播客单集 id（pod:xxx）不能查网易云。
+    // 若是当前曲（列表循环/单曲循环都会 next 回到自己），原地 seek(0) 重播；
+    // 若是别的播客 id（A-7.5 加入播放列表后才会发生），目前简单 noop。
+    if (typeof id === 'string' && String(id).startsWith('pod:')) {
+      if (this._currentTrack && this._currentTrack.id === id) {
+        this._howler?.seek(0);
+        if (autoplay) this.play();
+        return Promise.resolve(true);
+      }
+      console.warn(
+        '[Player] 暂不支持跳到非当前的播客单集（待 A-7.5 实现）：',
+        id
+      );
+      return Promise.resolve(false);
+    }
     if (autoplay && this._currentTrack.name) {
       this._scrobble(this.currentTrack, this._howler?.seek());
     }
@@ -666,6 +744,11 @@ export default class {
   _nextTrackCallback() {
     this._scrobble(this._currentTrack, 0, true);
     if (!this.isPersonalFM && this.repeatMode === 'one') {
+      // [播客改造 A-7.3] 播客单曲循环：把已保存进度归零，再走通用重播路径
+      const t = this._currentTrack;
+      if (t && t.podcastEpisodeId) {
+        saveEpisodeProgress(t.podcastEpisodeId, 0).catch(() => {});
+      }
       this._replaceCurrentTrack(this.currentTrackID);
     } else {
       this._playNextTrack(this.isPersonalFM);
@@ -996,5 +1079,103 @@ export default class {
   }
   removeTrackFromQueue(index) {
     this._playNextList.splice(index, 1);
+  }
+
+  // [播客改造] 播放一集播客。
+  // episode 是 utils/podcast/rssParser.js 解析出的单集对象。
+  // 这里把它包装成播放引擎认识的 "track" 形状（含 al/ar/dt 等字段），
+  // 关键扩展字段是 podcastAudioUrl —— 它让 _getAudioSource 直接返回音频地址，
+  // 跳过整条网易云查询链。
+  playPodcastEpisode(episode, podcastTitle) {
+    if (!episode?.audioUrl) {
+      store.dispatch('showToast', '该单集没有音频地址');
+      return;
+    }
+    const track = {
+      // 用一个不会与网易云 id 冲突的字符串 id
+      id: `pod:${episode.id}`,
+      name: episode.title || '未命名单集',
+      ar: [{ id: 0, name: podcastTitle || episode.podcastId || '' }],
+      al: {
+        id: 0,
+        name: podcastTitle || '',
+        picUrl:
+          episode.coverUrl ||
+          'http://s4.music.126.net/style/web2/img/default/default_album.jpg',
+      },
+      dt: (episode.duration || 0) * 1000, // 毫秒
+      podcastAudioUrl: episode.audioUrl,
+      podcastEpisodeId: episode.id,
+    };
+
+    this._enabled = true;
+    this._isPersonalFM = false;
+    // 单集播放列表，只有它一首；source 类型用 'podcast' 便于将来区分
+    this._list = [track.id];
+    this._current = 0;
+    this._playlistSource = { type: 'podcast', id: episode.podcastId };
+    this._currentTrack = track;
+    this._updateMediaSessionMetaData(track);
+
+    // 走统一恢复路径（autoplay=true），含进度续播
+    return this._loadCurrentPodcastEpisode(true);
+  }
+
+  // [播客改造 S-1] 按 this._currentTrack（必须是已构造好的播客 track）装载 howler，
+  // 不查网易云。autoplay 控制是否自动播放（重启时为 false，新点一集时为 true）。
+  // 同时从 episodeProgress 表读上次进度，howler 加载完成后 seek 过去。
+  async _loadCurrentPodcastEpisode(autoplay) {
+    const track = this._currentTrack;
+    if (!track || !track.podcastAudioUrl) return false;
+
+    // [播客改造 progress-bug] 立即调 setTitle 让 document.title 含节目名
+    // → state.title 一定与原默认值"YesPlayMusic"不同 → Vue 重渲染读到正确 _progress
+    // 之前用 commit('updateTitle', document.title) 不工作的原因：重启时 title 没变化
+    if (track.name) setTitle(track);
+
+    // 读上次进度
+    let savedPos = 0;
+    try {
+      const saved = await getEpisodeProgress(track.podcastEpisodeId);
+      if (saved && typeof saved.position === 'number') {
+        savedPos = saved.position;
+      }
+    } catch (e) {
+      console.warn('[播客 S-1] 读取单集进度失败：', e);
+    }
+    // Fallback：episodeProgress 还没有这一集的数据时，用原项目的全局进度兜底
+    if (savedPos < 1) {
+      const legacy = parseFloat(
+        localStorage.getItem('playerCurrentTrackTime') || '0'
+      );
+      if (legacy > 1) savedPos = legacy;
+    }
+
+    const replaced = await this._replaceCurrentTrackAudio(
+      track,
+      autoplay,
+      false
+    );
+    if (replaced && savedPos > 1 && this._howler) {
+      // howler HTML5 模式下，立即 seek 可能尚未生效；统一在 'load' 时再 seek 一次最稳。
+      const seekTo = () => {
+        try {
+          this._howler?.seek(savedPos);
+          // [播客改造] 同步 _progress 让 UI 立即知道当前位置（vue-slider 的 :value 重读）
+          this._progress = savedPos;
+          // [播客改造 progress-bug] 再调一次 setTitle 触发 Vue 重渲染读到 savedPos
+          if (track.name) setTitle(track);
+        } catch (e) {
+          /* ignore */
+        }
+      };
+      // 已加载就立刻 seek；否则等 load。
+      if (this._howler.state() === 'loaded') {
+        seekTo();
+      } else {
+        this._howler.once('load', seekTo);
+      }
+    }
+    return replaced;
   }
 }

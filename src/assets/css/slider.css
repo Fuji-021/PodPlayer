@@ -38,10 +38,11 @@
   padding: 2px 6px;
   min-width: 20px;
   text-align: center;
-  color: #000;
+  /* [播客改造] 跟随主题：深色模式下白字深底，浅色模式下黑字白底 */
+  color: var(--color-text);
   border-radius: 5px;
-  border-color: #fff;
-  background-color: #fff;
+  border-color: var(--color-body-bg);
+  background-color: var(--color-body-bg);
   box-sizing: content-box;
   box-shadow: 0.5px 0.5px 2px 1px rgba(0, 0, 0, 0.08);
 }

@@ -1,6 +1,13 @@
 // import store, { state, dispatch, commit } from "@/store";
 import { isAccountLoggedIn, isLooseLoggedIn } from '@/utils/auth';
 import { likeATrack } from '@/api/track';
+// [播客改造 A-7.1] 本地收藏 DAO
+import {
+  addFavorite as podAddFavorite,
+  removeFavorite as podRemoveFavorite,
+  getAllFavoriteIds as podGetAllFavoriteIds,
+  isFavorited as podIsFavorited,
+} from '@/utils/podcast/db';
 import { getPlaylistDetail } from '@/api/playlist';
 import { getTrackDetail } from '@/api/track';
 import {
@@ -33,8 +40,15 @@ export default {
     });
   },
   likeATrack({ state, commit, dispatch }, id) {
+    // [播客改造 A-7.1] 当前在播的是播客单集 → 走本地收藏分支；
+    // 走 vuex action `togglePodcastFavorite` 由 Player.vue 触发更合适，这里仍保留旧
+    // 兼容入口：若被旧代码路径调到、且当前是播客，则改派到本地收藏。
+    const cur = state.player && state.player.currentTrack;
+    if (cur && cur.podcastEpisodeId) {
+      return dispatch('togglePodcastFavorite', cur);
+    }
     if (!isAccountLoggedIn()) {
-      dispatch('showToast', '此操作需要登录网易云账号');
+      // [播客改造 A-7.1] 不再弹"需登录网易云"——非播客且未登录时静默忽略
       return;
     }
     let like = true;
@@ -197,5 +211,37 @@ export default {
         commit('updateData', { key: 'user', value: result.profile });
       }
     });
+  },
+  // [播客改造 A-7.1] 启动时把本地收藏 id 列表加载进 vuex，UI 用作快速判定
+  async fetchPodcastFavorites({ commit }) {
+    try {
+      const ids = await podGetAllFavoriteIds();
+      commit('setPodcastFavoriteIds', ids);
+    } catch (e) {
+      console.warn('[播客 A-7.1] 加载收藏失败：', e);
+    }
+  },
+  // 切换收藏。track 是当前播放引擎里的 track 对象（含 podcastEpisodeId / 元数据）
+  async togglePodcastFavorite({ commit, dispatch }, track) {
+    if (!track || !track.podcastEpisodeId) return;
+    const id = track.podcastEpisodeId;
+    const already = await podIsFavorited(id);
+    if (already) {
+      await podRemoveFavorite(id);
+    } else {
+      await podAddFavorite({
+        id,
+        podcastId: track.al && track.al.id ? track.al.id : '',
+        podcastTitle: track.al && track.al.name ? track.al.name : '',
+        title: track.name || '',
+        coverUrl: track.al && track.al.picUrl ? track.al.picUrl : '',
+        audioUrl: track.podcastAudioUrl || '',
+        duration: track.dt ? Math.floor(track.dt / 1000) : 0,
+      });
+      dispatch('showToast', '已加入收藏');
+    }
+    // 刷新 store 里的 id 列表
+    const ids = await podGetAllFavoriteIds();
+    commit('setPodcastFavoriteIds', ids);
   },
 };

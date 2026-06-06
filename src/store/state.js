@@ -27,6 +27,10 @@ export default {
       allData: [],
     },
   },
+  // [播客改造 A-7.1] 本地收藏的播客单集 id 列表（快速判定用，全量数据在 Dexie favorites 表）
+  podcastFavorites: {
+    episodeIds: [],
+  },
   contextMenu: {
     clickObjectID: 0,
     showMenu: false,

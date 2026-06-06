@@ -1,10 +1,20 @@
 <template>
-  <button class="button-icon"><slot></slot></button>
+  <!-- [播客改造] 屏蔽原生 hover tooltip（用户不喜欢，但 title 文案保留在调用处，
+       后续如想恢复，把 inheritAttrs 改回 true，或在下方 filteredAttrs 里把 title 留下） -->
+  <button class="button-icon" v-bind="filteredAttrs"><slot></slot></button>
 </template>
 
 <script>
 export default {
   name: 'ButtonIcon',
+  inheritAttrs: false,
+  computed: {
+    filteredAttrs() {
+      const a = { ...this.$attrs };
+      delete a.title;
+      return a;
+    },
+  },
 };
 </script>
 

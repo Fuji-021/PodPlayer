@@ -75,7 +75,9 @@
           >
             {{ $t('library.artists') }}
           </div>
+          <!-- [播客改造] 暂时屏蔽 MV 标签页（源码保留） -->
           <div
+            v-if="false"
             class="tab"
             :class="{ active: currentTab === 'mvs' }"
             @click="updateCurrentTab('mvs')"

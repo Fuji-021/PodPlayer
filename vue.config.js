@@ -9,7 +9,11 @@ module.exports = {
   productionSourceMap: false,
   devServer: {
     disableHostCheck: true,
-    port: process.env.DEV_SERVER_PORT || 8080,
+    // [播客改造] 锁死端口，端口被占就直接报错而不是悄悄换端口。
+    // 原因：IndexedDB 数据库按 origin (host+port) 隔离，
+    //       换端口会导致数据"丢失"（其实是被路由到了另一个数据库实例）。
+    host: 'localhost',
+    port: parseInt(process.env.DEV_SERVER_PORT, 10) || 8080,
     proxy: {
       '^/api': {
         target: 'http://localhost:3000',

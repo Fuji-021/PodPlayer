@@ -99,9 +99,11 @@ const routes = [
   {
     path: '/library',
     name: 'library',
-    component: () => import('@/views/library.vue'),
+    // [播客改造] 原 library.vue 是网易云音乐库，保留源码不删；
+    // /library 现在指向播客库新页面，作为本软件的主功能页。
+    component: () => import('@/views/podcastLibrary.vue'),
     meta: {
-      requireLogin: true,
+      requireLogin: false,
       keepAlive: true,
       savePosition: true,
     },
@@ -112,6 +114,24 @@ const routes = [
     component: () => import('@/views/playlist.vue'),
     meta: {
       requireLogin: true,
+    },
+  },
+  // [播客改造 A-23] 节目详情页（二级）：feedUrlEncoded 是 encodeURIComponent 后的 feedUrl
+  {
+    path: '/library/podcast/:feedUrlEncoded',
+    name: 'podcastDetail',
+    component: () => import('@/views/podcastDetail.vue'),
+    meta: {
+      requireLogin: false,
+    },
+  },
+  // [播客改造 C-5] 单集详情页（三级）：guidEncoded 是 encodeURIComponent 后的 guid
+  {
+    path: '/library/podcast/:feedUrlEncoded/episode/:guidEncoded',
+    name: 'episodeDetail',
+    component: () => import('@/views/episodeDetail.vue'),
+    meta: {
+      requireLogin: false,
     },
   },
   {
