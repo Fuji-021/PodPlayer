@@ -21,7 +21,8 @@
         v-for="ep in episodes"
         :key="ep.id"
         class="episode-row"
-        @click="playEpisode(ep)"
+        @click="goEpisodeDetail(ep)"
+        @contextmenu.prevent="openEpisodeMenu($event, ep)"
       >
         <div class="ep-main">
           <div class="ep-title">{{ ep.title }}</div>
@@ -37,10 +38,40 @@
             </span>
           </div>
         </div>
-        <!-- [C-5] ⓘ 按钮进单集详情 -->
-        <button class="ep-info" @click.stop="goEpisodeDetail(ep)">
-          <svg-icon icon-class="info" />
+        <!-- [S-3] 三点冒号入口（替代 ⓘ）：弹"加入播放列表/收藏/下载"菜单 -->
+        <button class="ep-menu-btn" @click.stop="openEpisodeMenu($event, ep)">
+          <svg-icon icon-class="menu-dots-vertical" />
         </button>
+      </div>
+    </div>
+
+    <!-- [S-3] 单集操作菜单（贴触发点） -->
+    <div
+      v-if="episodeMenu.open"
+      ref="episodeMenu"
+      class="ep-ctx-menu"
+      :style="{ left: episodeMenu.x + 'px', top: episodeMenu.y + 'px' }"
+      @click.stop
+    >
+      <div class="ctx-item" @click="onMenuPlay">
+        <svg-icon icon-class="play-circle" />
+        <span>立即播放</span>
+      </div>
+      <div class="ctx-item" @click="onMenuQueue">
+        <svg-icon icon-class="layer-plus" />
+        <span>加入播放列表</span>
+      </div>
+      <div class="ctx-item" @click="onMenuFavorite">
+        <svg-icon
+          :icon-class="
+            isFavorited(episodeMenu.target) ? 'heart-solid' : 'heart'
+          "
+        />
+        <span>{{ isFavorited(episodeMenu.target) ? '取消收藏' : '收藏' }}</span>
+      </div>
+      <div class="ctx-item" @click="onMenuDownload">
+        <svg-icon icon-class="download" />
+        <span>下载</span>
       </div>
     </div>
 
@@ -86,6 +117,9 @@ export default {
       podcast: null,
       episodes: [],
       showConfirmUnsub: false,
+      // [S-3] 单集菜单
+      episodeMenu: { open: false, x: 0, y: 0, target: null },
+      episodeMenuOutsideListener: null,
     };
   },
   computed: {
@@ -123,6 +157,74 @@ export default {
     playEpisode(ep) {
       const title = this.podcast ? this.podcast.title : '';
       this.$store.state.player.playPodcastEpisode(ep, title);
+    },
+    // [S-3] 单集菜单
+    openEpisodeMenu(e, ep) {
+      const w = 200;
+      const h = 184;
+      const x = Math.min(e.clientX, window.innerWidth - w - 10);
+      const y = Math.min(e.clientY, window.innerHeight - h - 10);
+      this.episodeMenu = { open: true, x, y, target: ep };
+      this.$nextTick(() => {
+        this.episodeMenuOutsideListener = ev => {
+          const root = this.$refs.episodeMenu;
+          if (root && !root.contains(ev.target)) this.closeEpisodeMenu();
+        };
+        document.addEventListener('mousedown', this.episodeMenuOutsideListener);
+      });
+    },
+    closeEpisodeMenu() {
+      this.episodeMenu.open = false;
+      this.episodeMenu.target = null;
+      if (this.episodeMenuOutsideListener) {
+        document.removeEventListener(
+          'mousedown',
+          this.episodeMenuOutsideListener
+        );
+        this.episodeMenuOutsideListener = null;
+      }
+    },
+    onMenuPlay() {
+      const ep = this.episodeMenu.target;
+      this.closeEpisodeMenu();
+      if (ep) this.playEpisode(ep);
+    },
+    onMenuQueue() {
+      this.closeEpisodeMenu();
+      this.$store.dispatch('showToast', '播放列表功能即将上线');
+    },
+    onMenuFavorite() {
+      const ep = this.episodeMenu.target;
+      this.closeEpisodeMenu();
+      if (!ep) return;
+      // 拼一个 track-like 对象给收藏 action
+      const title = (this.podcast && this.podcast.title) || '';
+      const track = {
+        id: `pod:${ep.id}`,
+        name: ep.title,
+        al: {
+          id: 0,
+          name: title,
+          picUrl: ep.coverUrl || '',
+        },
+        dt: (ep.duration || 0) * 1000,
+        podcastAudioUrl: ep.audioUrl,
+        podcastEpisodeId: ep.id,
+      };
+      this.$store.dispatch('togglePodcastFavorite', track);
+    },
+    onMenuDownload() {
+      this.closeEpisodeMenu();
+      this.$store.dispatch('showToast', '下载功能即将上线');
+    },
+    // [S-3] 当前 episode 是否已收藏
+    isFavorited(ep) {
+      if (!ep) return false;
+      const ids =
+        (this.$store.state.podcastFavorites &&
+          this.$store.state.podcastFavorites.episodeIds) ||
+        [];
+      return ids.includes(ep.id);
     },
     // [C-5] 进单集详情页
     goEpisodeDetail(ep) {
@@ -291,8 +393,8 @@ export default {
       font-weight: 600;
     }
   }
-  // [C-5] ⓘ 按钮
-  .ep-info {
+  // [S-3] 三点冒号按钮
+  .ep-menu-btn {
     background: transparent;
     color: var(--color-text);
     opacity: 0.4;
@@ -364,6 +466,38 @@ export default {
     background: var(--color-primary-bg-for-transparent);
   }
 }
+// [S-3] 单集操作弹出菜单
+.ep-ctx-menu {
+  position: fixed;
+  z-index: 220;
+  background: var(--color-body-bg);
+  color: var(--color-text);
+  border-radius: 10px;
+  padding: 4px;
+  width: 200px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22),
+    0 0 0 1px var(--color-secondary-bg-for-transparent);
+}
+.ctx-item {
+  padding: 9px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: 0.15s;
+  .svg-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+  &:hover {
+    background: var(--color-secondary-bg-for-transparent);
+  }
+}
+
 .btn-danger {
   background: #e74c3c;
   color: #fff;

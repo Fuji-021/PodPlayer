@@ -1,6 +1,11 @@
 <template>
   <div class="win32-titlebar">
-    <div class="title">{{ title }}</div>
+    <!-- [播客改造 A-27] 软件名 → PodPlayer + on-air-square logo + @Fujii 署名 -->
+    <div class="title">{{ playerTitle }}</div>
+    <div class="brand">
+      <svg-icon class="brand-logo" icon-class="on-air-square" />
+      <span class="brand-sig">@Fujii</span>
+    </div>
     <div class="controls">
       <div
         class="button minimize codicon codicon-chrome-minimize"
@@ -35,6 +40,9 @@ const ipcRenderer =
 
 export default {
   name: 'Win32Titlebar',
+  components: {
+    SvgIcon: () => import('@/components/SvgIcon.vue'),
+  },
   data() {
     return {
       isMaximized: false,
@@ -42,6 +50,10 @@ export default {
   },
   computed: {
     ...mapState(['title']),
+    // [A-27] 把"YesPlayMusic"替换为"PodPlayer"
+    playerTitle() {
+      return (this.title || 'PodPlayer').replace(/YesPlayMusic/g, 'PodPlayer');
+    },
   },
   created() {
     if (process.env.IS_ELECTRON === true) {
@@ -81,6 +93,29 @@ export default {
     padding: 8px 12px;
     font-size: 12px;
     font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-right: 0;
+  }
+  // [A-27 / bug 修复] 品牌区域：与 .title 同亮度（删除 opacity: 0.6）
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 6px;
+    flex-shrink: 0;
+    .brand-logo {
+      width: 14px;
+      height: 14px;
+    }
+    .brand-sig {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
   }
   .controls {
     height: 32px;

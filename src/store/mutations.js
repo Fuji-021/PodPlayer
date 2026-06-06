@@ -12,6 +12,10 @@ export default {
   setPodcastFavoriteIds(state, ids) {
     state.podcastFavorites.episodeIds = ids || [];
   },
+  // [播客改造 C-14] 切换音频缓冲状态
+  setAudioBuffering(state, val) {
+    state.audioBuffering = !!val;
+  },
   changeLang(state, lang) {
     state.settings.lang = lang;
   },

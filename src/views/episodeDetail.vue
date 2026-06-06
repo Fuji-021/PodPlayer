@@ -20,9 +20,20 @@
           <span v-if="progressLabel" class="prog">· {{ progressLabel }}</span>
         </div>
         <div class="actions">
+          <!-- [S-3] 主播放 button：play-circle 大按钮 -->
           <button class="play-btn" @click="play">
-            <svg-icon icon-class="play" />
-            <span>{{ resumeAvailable ? '继续播放' : '播放' }}</span>
+            <svg-icon icon-class="play-circle" />
+            <span>{{ resumeAvailable ? '继续播放' : '立即播放' }}</span>
+          </button>
+          <!-- [S-3] 三个小入口：收藏 / 下载 / 加入播放列表 -->
+          <button class="mini-btn" :class="{ favorited: isFav }" @click="onFav">
+            <svg-icon :icon-class="isFav ? 'heart-solid' : 'heart'" />
+          </button>
+          <button class="mini-btn" @click="onQueue">
+            <svg-icon icon-class="layer-plus" />
+          </button>
+          <button class="mini-btn" @click="onDownload">
+            <svg-icon icon-class="download" />
           </button>
           <a
             v-if="episode.link"
@@ -89,6 +100,14 @@ export default {
         this.progressSec < (this.episode.duration || Infinity) - 30
       );
     },
+    isFav() {
+      if (!this.episode) return false;
+      const ids =
+        (this.$store.state.podcastFavorites &&
+          this.$store.state.podcastFavorites.episodeIds) ||
+        [];
+      return ids.includes(this.episode.id);
+    },
   },
   watch: {
     episodeId: {
@@ -112,6 +131,26 @@ export default {
     play() {
       const title = (this.podcast && this.podcast.title) || '';
       this.$store.state.player.playPodcastEpisode(this.episode, title);
+    },
+    // [S-3] 三个小入口
+    onFav() {
+      if (!this.episode) return;
+      const title = (this.podcast && this.podcast.title) || '';
+      const track = {
+        id: `pod:${this.episode.id}`,
+        name: this.episode.title,
+        al: { id: 0, name: title, picUrl: this.episode.coverUrl || '' },
+        dt: (this.episode.duration || 0) * 1000,
+        podcastAudioUrl: this.episode.audioUrl,
+        podcastEpisodeId: this.episode.id,
+      };
+      this.$store.dispatch('togglePodcastFavorite', track);
+    },
+    onQueue() {
+      this.$store.dispatch('showToast', '播放列表功能即将上线');
+    },
+    onDownload() {
+      this.$store.dispatch('showToast', '下载功能即将上线');
     },
     goPodcast() {
       this.$router.push({
@@ -229,6 +268,31 @@ export default {
   &:hover {
     opacity: 1;
     text-decoration: underline;
+  }
+}
+// [S-3] 小图标按钮：收藏 / 下载 / 加入播放列表
+.mini-btn {
+  background: transparent;
+  color: var(--color-text);
+  opacity: 0.55;
+  border-radius: 50%;
+  padding: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: 0.15s;
+  .svg-icon {
+    width: 18px;
+    height: 18px;
+  }
+  &:hover {
+    opacity: 1;
+    background: var(--color-secondary-bg-for-transparent);
+  }
+  &.favorited {
+    opacity: 1;
+    color: #e74c3c;
   }
 }
 

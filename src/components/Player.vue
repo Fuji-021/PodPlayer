@@ -33,6 +33,12 @@
       >
         {{ formatTrackTime(hoverTime) }}
       </div>
+      <!-- [C-14 bug-2] 加载中：从当前进度位置开始往右移动的小条 -->
+      <div
+        v-if="audioBuffering"
+        class="buffering-bar"
+        :style="{ left: bufferingLeftPercent + '%' }"
+      ></div>
     </div>
     <div class="controls">
       <div class="playing">
@@ -272,7 +278,7 @@ export default {
     };
   },
   computed: {
-    ...mapState(['player', 'settings', 'data']),
+    ...mapState(['player', 'settings', 'data', 'audioBuffering']),
     currentTrack() {
       return this.player.currentTrack;
     },
@@ -298,6 +304,13 @@ export default {
     },
     totalTimeText() {
       return this.formatTrackTime(this.player.currentTrackDuration || 0);
+    },
+    // [bug 修复] 加载条起点 = 当前进度百分比
+    bufferingLeftPercent() {
+      const dur = this.player.currentTrackDuration || 0;
+      const p = this.player.progress || 0;
+      if (dur <= 0) return 0;
+      return Math.min(100, Math.max(0, (p / dur) * 100));
     },
     // [播客改造 A-21] 倍速显示固定 1 位小数（步进 0.1 不会有更多位数）
     rateLabel() {
@@ -560,6 +573,35 @@ export default {
 .progress-bar ::v-deep .vue-slider:active .vue-slider-dot-handle {
   visibility: visible;
 }
+// [C-14 / bug 修复] 缓冲条：从 :style="left=当前进度%" 起点开始，
+// 向右一段距离循环移动，营造"正在加载"感
+.buffering-bar {
+  position: absolute;
+  top: 50%;
+  height: 2px;
+  width: 80px;
+  background: var(--color-primary);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 5;
+  animation: bufferingMove 1.2s ease-in-out infinite;
+  transform-origin: left center;
+}
+@keyframes bufferingMove {
+  0% {
+    transform: translate(0, -50%) scaleX(0.3);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translate(40px, -50%) scaleX(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(90px, -50%) scaleX(0.3);
+    opacity: 0.45;
+  }
+}
+
 // [播客改造 A-7.8] 进度条 hover 时间小气泡：跟主题色一致，不扎眼，位置稍下移但不紧贴
 .progress-hover-tip {
   position: absolute;

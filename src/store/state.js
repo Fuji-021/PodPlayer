@@ -31,6 +31,8 @@ export default {
   podcastFavorites: {
     episodeIds: [],
   },
+  // [播客改造 C-14] 当前是否在加载音频（点单集到出声的等待）
+  audioBuffering: false,
   contextMenu: {
     clickObjectID: 0,
     showMenu: false,

@@ -56,6 +56,20 @@
     </nav>
 
     <ContextMenu ref="userProfileMenu">
+      <!-- [A-26] "我的"二级菜单：收藏 / 下载 / 收听历史 / 设置 -->
+      <div class="item" @click="toFavorites">
+        <svg-icon icon-class="heart" />
+        我的收藏
+      </div>
+      <div class="item" @click="toDownloads">
+        <svg-icon icon-class="download" />
+        我的下载
+      </div>
+      <div class="item" @click="toHistory">
+        <svg-icon icon-class="queue" />
+        收听历史
+      </div>
+      <hr />
       <div class="item" @click="toSettings">
         <svg-icon icon-class="settings" />
         {{ $t('library.userProfileMenu.settings') }}
@@ -68,11 +82,6 @@
       <div v-if="false" class="item" @click="logout">
         <svg-icon icon-class="logout" />
         {{ $t('library.userProfileMenu.logout') }}
-      </div>
-      <hr />
-      <div class="item" @click="toGitHub">
-        <svg-icon icon-class="github" />
-        {{ $t('nav.github') }}
       </div>
     </ContextMenu>
   </div>
@@ -160,6 +169,16 @@ export default {
     },
     toSettings() {
       this.$router.push({ name: 'settings' });
+    },
+    // [A-26] 我的入口
+    toFavorites() {
+      this.$router.push({ name: 'favorites' });
+    },
+    toDownloads() {
+      this.$store.dispatch('showToast', '下载功能即将上线');
+    },
+    toHistory() {
+      this.$store.dispatch('showToast', '收听历史即将上线');
     },
     toGitHub() {
       window.open('https://github.com/qier222/YesPlayMusic');

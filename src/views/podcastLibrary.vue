@@ -1,7 +1,49 @@
 <template>
   <div class="podcast-library">
     <div class="header">
-      <h1>播客库</h1>
+      <h1>我的订阅</h1>
+      <!-- [A-28 改进] 默认只显示当前排序的小按钮，点击右展开三个选项，
+           空闲 2.5s 自动收回，比一直占着横排好看 -->
+      <div
+        class="sort-group"
+        :class="{ expanded: sortMenuOpen }"
+        @mouseenter="resetSortTimer"
+        @mouseleave="startSortTimer"
+      >
+        <button
+          class="sort-btn current"
+          :class="{ active: sortMenuOpen }"
+          @click="toggleSortMenu"
+        >
+          <svg-icon :icon-class="currentSortIcon" />
+        </button>
+        <transition-group name="sort-fade" tag="div" class="sort-extra">
+          <button
+            v-if="sortMenuOpen && sortBy !== 'updatedAt'"
+            key="updatedAt"
+            class="sort-btn"
+            @click="setSort('updatedAt')"
+          >
+            <svg-icon icon-class="sort-alt" />
+          </button>
+          <button
+            v-if="sortMenuOpen && sortBy !== 'title'"
+            key="title"
+            class="sort-btn"
+            @click="setSort('title')"
+          >
+            <svg-icon icon-class="sort-alpha-down-alt" />
+          </button>
+          <button
+            v-if="sortMenuOpen && sortBy !== 'episodeTime'"
+            key="episodeTime"
+            class="sort-btn"
+            @click="setSort('episodeTime')"
+          >
+            <svg-icon icon-class="arrow-down-small-big" />
+          </button>
+        </transition-group>
+      </div>
       <!-- [播客改造 A-22] 添加订阅 + 导入 OPML 合并为 + 号按钮 + 弹窗。
            A-23 之后 podcast 详情已拆为独立路由，本页只在订阅列表显示。 -->
       <div class="actions">
@@ -40,38 +82,38 @@
     <!-- [A-23] 订阅列表（一级界面）。节目详情已拆为 /library/podcast/:feedUrlEncoded 独立路由，
          < > 自然作为浏览器前进后退使用 -->
     <div class="podcast-grid">
-      <div v-if="!podcasts.length" class="empty-tip">
+      <div v-if="!sortedPodcasts.length" class="empty-tip">
         还没有订阅。点击右上角 + 号添加 RSS 链接或导入文件。
       </div>
       <div
-        v-for="p in podcasts"
+        v-for="p in sortedPodcasts"
         :key="p.id"
         class="podcast-card"
-        @click="openPodcast(p)"
+        :class="{ 'unsub-mode': unsubModeId === p.id }"
+        @click="onCardClick(p)"
         @contextmenu.prevent="onCardContextMenu($event, p)"
       >
-        <img
-          class="cover"
-          :src="p.coverUrl"
-          loading="lazy"
-          @error="onCoverError"
-        />
+        <div class="cover-wrap">
+          <img
+            class="cover"
+            :src="p.coverUrl"
+            loading="lazy"
+            @error="onCoverError"
+          />
+          <!-- [B-25 / bug-3] 右键后在封面上叠加 overlay，而不是单独小弹窗 -->
+          <div
+            v-if="unsubModeId === p.id"
+            class="unsub-overlay"
+            @click.stop="askUnsubscribe(p)"
+            @mouseenter="cancelUnsubAutoClose"
+            @mouseleave="scheduleUnsubAutoClose"
+          >
+            <svg-icon icon-class="heart-crack" />
+            <div class="label">取消订阅</div>
+          </div>
+        </div>
         <div class="title">{{ p.title || '(无标题)' }}</div>
         <div class="author">{{ p.author || '' }}</div>
-      </div>
-    </div>
-
-    <!-- [B-25] 卡片右键菜单（只有"取消订阅"一项）-->
-    <div
-      v-if="contextMenu.open"
-      ref="contextMenu"
-      class="ctx-menu"
-      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
-      @click.stop
-    >
-      <div class="ctx-item danger" @click="askUnsubscribe(contextMenu.target)">
-        <svg-icon icon-class="heart-crack" />
-        <span>取消订阅</span>
       </div>
     </div>
 
@@ -160,8 +202,17 @@ import {
   importRssText,
   getAllPodcasts,
   deletePodcast,
+  getEpisodesByPodcast,
 } from '@/utils/podcast/service';
 import SvgIcon from '@/components/SvgIcon.vue';
+
+// [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
+async function getLatestEpisodeTime(podcastId) {
+  const eps = await getEpisodesByPodcast(podcastId);
+  if (!eps.length) return 0;
+  // getEpisodesByPodcast 已经 reverse 按 pubTime 排序，第一条就是最新
+  return eps[0].pubTime || 0;
+}
 
 export default {
   name: 'PodcastLibrary',
@@ -183,15 +234,59 @@ export default {
       importDone: 0,
       importTotal: 1,
       importSuccessMsg: '',
-      // [B-25] 卡片右键菜单 + 取消订阅确认弹窗
-      contextMenu: { open: false, x: 0, y: 0, target: null },
-      contextMenuOutsideListener: null,
+      // [B-25 / bug-3] 卡片 unsub-overlay 模式：当前激活的卡片 id
+      unsubModeId: null,
+      unsubModeOutsideListener: null,
+      unsubModeKeyListener: null,
+      unsubModeAutoTimer: null,
       unsubTarget: null,
+      // [A-28] 排序：updatedAt(导入) / title(名称) / episodeTime(最新一集)；方向 asc/desc
+      sortBy: localStorage.getItem('podcastLibrary.sortBy') || 'updatedAt',
+      sortDir: localStorage.getItem('podcastLibrary.sortDir') || 'desc',
+      sortMenuOpen: false,
+      sortMenuTimer: null,
+      sortOutsideListener: null,
     };
+  },
+  computed: {
+    // [A-28] 当前排序对应的图标（考虑方向）
+    currentSortIcon() {
+      if (this.sortBy === 'title') {
+        return this.sortDir === 'asc'
+          ? 'sort-alpha-down-alt'
+          : 'sort-alpha-up-alt';
+      }
+      if (this.sortBy === 'episodeTime') {
+        return this.sortDir === 'asc'
+          ? 'arrow-up-small-big'
+          : 'arrow-down-small-big';
+      }
+      return 'sort-alt'; // updatedAt
+    },
+    // [A-28] 排序后的订阅列表
+    sortedPodcasts() {
+      const arr = [...this.podcasts];
+      const sign = this.sortDir === 'asc' ? 1 : -1;
+      const byKey = {
+        updatedAt: p => p.updatedAt || 0,
+        title: p => (p.title || '').toLowerCase(),
+        episodeTime: p => p.latestEpisodeTime || 0,
+      };
+      const getKey = byKey[this.sortBy] || byKey.updatedAt;
+      arr.sort((a, b) => {
+        const ka = getKey(a);
+        const kb = getKey(b);
+        if (ka < kb) return -1 * sign;
+        if (ka > kb) return 1 * sign;
+        return 0;
+      });
+      return arr;
+    },
   },
   beforeDestroy() {
     this.closePlusMenu();
-    this.closeContextMenu();
+    this.closeUnsubMode();
+    this.closeSortMenu();
   },
   activated() {
     this.loadPodcasts();
@@ -201,15 +296,78 @@ export default {
   },
   methods: {
     async loadPodcasts() {
-      this.podcasts = await getAllPodcasts();
-      // [播客改造 诊断] 用户报告"节目丢失"——打印实际从 Dexie 拿到的节目数
-      // 用户按 F12 在 Console 标签可看到结果
+      const list = await getAllPodcasts();
+      // [A-28] 并行查每档"最新一集"时间，用于按更新时间排序
+      const latest = await Promise.all(
+        list.map(p => getLatestEpisodeTime(p.id).catch(() => 0))
+      );
+      this.podcasts = list.map((p, i) => ({
+        ...p,
+        latestEpisodeTime: latest[i] || 0,
+      }));
       console.log(
         '[播客库] loaded',
         this.podcasts.length,
         'podcasts:',
         this.podcasts.map(p => p.title)
       );
+    },
+    // [A-28] 切换排序：同 key 切换方向，跨 key 用合理默认方向
+    setSort(key) {
+      if (this.sortBy === key) {
+        this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        this.sortBy = key;
+        this.sortDir = key === 'title' ? 'asc' : 'desc';
+      }
+      localStorage.setItem('podcastLibrary.sortBy', this.sortBy);
+      localStorage.setItem('podcastLibrary.sortDir', this.sortDir);
+      // 选中后自动收回菜单
+      this.closeSortMenu();
+    },
+    // [A-28 改进] 排序菜单：默认折叠为 1 个按钮，点击展开，空闲 2.5s 收回
+    toggleSortMenu() {
+      if (this.sortMenuOpen) {
+        // 已展开 + 再点 current → 切换当前 sortBy 的方向
+        this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+        localStorage.setItem('podcastLibrary.sortDir', this.sortDir);
+        this.resetSortTimer();
+      } else {
+        this.sortMenuOpen = true;
+        this.startSortTimer();
+        // [bug 修复] 点击外面也能收回
+        this.$nextTick(() => {
+          this.sortOutsideListener = ev => {
+            if (!ev.target.closest('.sort-group')) {
+              this.closeSortMenu();
+            }
+          };
+          document.addEventListener('mousedown', this.sortOutsideListener);
+        });
+      }
+    },
+    closeSortMenu() {
+      this.sortMenuOpen = false;
+      if (this.sortMenuTimer) {
+        clearTimeout(this.sortMenuTimer);
+        this.sortMenuTimer = null;
+      }
+      if (this.sortOutsideListener) {
+        document.removeEventListener('mousedown', this.sortOutsideListener);
+        this.sortOutsideListener = null;
+      }
+    },
+    startSortTimer() {
+      if (this.sortMenuTimer) clearTimeout(this.sortMenuTimer);
+      if (!this.sortMenuOpen) return;
+      this.sortMenuTimer = setTimeout(() => {
+        this.sortMenuOpen = false;
+        this.sortMenuTimer = null;
+      }, 2500);
+    },
+    resetSortTimer() {
+      if (this.sortMenuTimer) clearTimeout(this.sortMenuTimer);
+      this.sortMenuTimer = null;
     },
     // [播客改造 A-22] + 号弹窗：点击外部关闭，与倍速面板同款策略
     togglePlusMenu() {
@@ -358,33 +516,67 @@ export default {
       });
     },
     // [B-25] 右键封面卡片 → 弹小菜单"取消订阅"
+    // [B-25 / bug-3] 卡片点击行为：unsub-overlay 模式时点卡片 = 关闭模式
+    onCardClick(p) {
+      if (this.unsubModeId === p.id) {
+        this.closeUnsubMode();
+        return;
+      }
+      this.openPodcast(p);
+    },
     onCardContextMenu(e, p) {
-      // 边界保护：菜单宽 180px / 高 ~44px，避免超出视窗
-      const x = Math.min(e.clientX, window.innerWidth - 200);
-      const y = Math.min(e.clientY, window.innerHeight - 60);
-      this.contextMenu = { open: true, x, y, target: p };
+      // 再次右键同一张卡 = 关闭模式（多一种关闭方式）
+      if (this.unsubModeId === p.id) {
+        this.closeUnsubMode();
+        return;
+      }
+      this.unsubModeId = p.id;
       this.$nextTick(() => {
-        this.contextMenuOutsideListener = ev => {
-          const root = this.$refs.contextMenu;
-          if (root && !root.contains(ev.target)) {
-            this.closeContextMenu();
+        // 点击外部任意位置关闭
+        this.unsubModeOutsideListener = ev => {
+          if (!ev.target.closest('.podcast-card')) {
+            this.closeUnsubMode();
           }
         };
-        document.addEventListener('mousedown', this.contextMenuOutsideListener);
+        // Esc 键关闭
+        this.unsubModeKeyListener = ev => {
+          if (ev.key === 'Escape') this.closeUnsubMode();
+        };
+        document.addEventListener('mousedown', this.unsubModeOutsideListener);
+        document.addEventListener('keydown', this.unsubModeKeyListener);
+        // [UI 改] 5s 不操作自动复原（用户不需要手动关）
+        this.scheduleUnsubAutoClose();
       });
     },
-    closeContextMenu() {
-      this.contextMenu.open = false;
-      if (this.contextMenuOutsideListener) {
-        document.removeEventListener(
-          'mousedown',
-          this.contextMenuOutsideListener
-        );
-        this.contextMenuOutsideListener = null;
+    scheduleUnsubAutoClose() {
+      if (this.unsubModeAutoTimer) clearTimeout(this.unsubModeAutoTimer);
+      this.unsubModeAutoTimer = setTimeout(() => {
+        this.closeUnsubMode();
+      }, 5000);
+    },
+    cancelUnsubAutoClose() {
+      if (this.unsubModeAutoTimer) {
+        clearTimeout(this.unsubModeAutoTimer);
+        this.unsubModeAutoTimer = null;
       }
     },
+    closeUnsubMode() {
+      this.unsubModeId = null;
+      if (this.unsubModeOutsideListener) {
+        document.removeEventListener(
+          'mousedown',
+          this.unsubModeOutsideListener
+        );
+        this.unsubModeOutsideListener = null;
+      }
+      if (this.unsubModeKeyListener) {
+        document.removeEventListener('keydown', this.unsubModeKeyListener);
+        this.unsubModeKeyListener = null;
+      }
+      this.cancelUnsubAutoClose();
+    },
     askUnsubscribe(p) {
-      this.closeContextMenu();
+      this.closeUnsubMode();
       this.unsubTarget = p;
     },
     async doUnsubscribe() {
@@ -404,20 +596,74 @@ export default {
 <style lang="scss" scoped>
 .podcast-library {
   color: var(--color-text);
+  padding-top: 28px; // [bug 修复] 与 podcastDetail 一致，避开顶栏过紧
 }
 .header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end; // [UI 改] 排序按钮和标题底部对齐
   margin-bottom: 24px;
   h1 {
     font-size: 32px;
     font-weight: 700;
+    line-height: 1;
+    margin: 0;
   }
 }
 .actions {
   display: flex;
   gap: 10px;
+}
+
+// [A-28 改进] 排序按钮：默认 1 个，点击展开右侧 2 个；与标题底部对齐
+.sort-group {
+  display: flex;
+  gap: 2px;
+  margin-left: 14px;
+  margin-right: auto;
+  align-items: center;
+  padding-bottom: 4px; // 微调底部对齐
+}
+.sort-extra {
+  display: flex;
+  gap: 2px;
+}
+.sort-btn {
+  background: transparent;
+  color: var(--color-text);
+  opacity: 0.45;
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: 0.15s;
+  .svg-icon {
+    width: 15px;
+    height: 15px;
+  }
+  &:hover {
+    opacity: 0.85;
+    background: var(--color-secondary-bg-for-transparent);
+  }
+  &.current {
+    opacity: 0.85;
+    color: var(--color-primary);
+  }
+  &.current.active {
+    background: var(--color-primary-bg-for-transparent);
+  }
+}
+// 展开动画
+.sort-fade-enter-active,
+.sort-fade-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.sort-fade-enter,
+.sort-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-8px);
 }
 
 // [播客改造 A-22] + 号按钮 + 弹窗
@@ -488,41 +734,6 @@ export default {
 .fade-pop-leave-to {
   opacity: 0;
   transform: scale(0.96) translateY(-4px);
-}
-
-// [B-25] 卡片右键菜单
-.ctx-menu {
-  position: fixed;
-  z-index: 220;
-  background: var(--color-body-bg);
-  border-radius: 10px;
-  padding: 4px;
-  width: 180px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22),
-    0 0 0 1px var(--color-secondary-bg-for-transparent);
-}
-.ctx-item {
-  padding: 10px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text);
-  transition: 0.15s;
-  .svg-icon {
-    width: 16px;
-    height: 16px;
-  }
-  &:hover {
-    background: var(--color-secondary-bg-for-transparent);
-  }
-  &.danger:hover {
-    background: rgba(231, 76, 60, 0.12);
-    color: #e74c3c;
-  }
 }
 
 // [B-25] 取消订阅确认弹窗
@@ -675,12 +886,31 @@ export default {
   &:hover {
     transform: translateY(-2px);
   }
-  .cover {
+  .cover-wrap {
+    position: relative;
     width: 100%;
     aspect-ratio: 1 / 1;
     border-radius: 12px;
-    object-fit: cover;
+    overflow: hidden;
     background: var(--color-secondary-bg);
+  }
+  .cover {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.25s ease-out;
+  }
+  // [bug-3 / UI 改] unsub mode：封面更暗 + 微微放大
+  &.unsub-mode {
+    .cover {
+      transform: scale(1.06);
+      filter: brightness(0.3);
+    }
+    .title,
+    .author {
+      opacity: 0.4;
+    }
   }
   .title {
     margin-top: 10px;
@@ -691,11 +921,38 @@ export default {
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
+    transition: opacity 0.2s;
   }
   .author {
     margin-top: 4px;
     font-size: 12px;
     opacity: 0.6;
+    transition: opacity 0.2s;
+  }
+}
+// [bug-3] 取消订阅 overlay：贴在封面上的居中"取消订阅"按钮
+.unsub-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  color: #fff;
+  transition: 0.2s;
+  .svg-icon {
+    width: 38px;
+    height: 38px;
+  }
+  .label {
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+  }
+  &:hover {
+    color: #ff7a6b;
   }
 }
 

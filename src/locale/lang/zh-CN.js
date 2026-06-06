@@ -6,7 +6,7 @@ export default {
   nav: {
     home: '首页',
     explore: '发现',
-    library: '播客库',
+    library: '我的订阅',
     search: '搜索',
     github: 'GitHub 仓库',
   },

@@ -134,6 +134,13 @@ const routes = [
       requireLogin: false,
     },
   },
+  // [播客改造 A-26] 我的收藏
+  {
+    path: '/me/favorites',
+    name: 'favorites',
+    component: () => import('@/views/favoritesList.vue'),
+    meta: { requireLogin: false },
+  },
   {
     path: '/settings',
     name: 'settings',

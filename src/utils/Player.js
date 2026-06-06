@@ -71,6 +71,7 @@ export default class {
     this._volume = 1; // 0 to 1
     this._volumeBeforeMuted = 1; // 用于保存静音前的音量
     this._playbackRate = 1; // [播客改造] 播放倍速，0.5–3.0
+    this._playSourceToken = 0; // [S1 修复] 切源并发竞争令牌
     this._personalFMLoading = false; // 是否正在私人FM中加载新的track
     this._personalFMNextLoading = false; // 是否正在缓存私人FM的下一首歌曲
 
@@ -214,9 +215,27 @@ export default class {
   }
   set progress(value) {
     if (this._howler) {
-      this._howler.seek(value);
+      // [bug 修复] howler 未 loaded 时 seek 不会生效，要等 'load' 再做
+      const applySeek = () => {
+        try {
+          this._howler?.seek(value);
+        } catch (e) {
+          /* ignore */
+        }
+      };
+      if (this._howler.state() === 'loaded') {
+        applySeek();
+      } else {
+        this._howler.once('load', applySeek);
+      }
+      this._progress = value;
+      // [播客改造 bug] 拖动进度条时立即保存到 episodeProgress
+      const t = this._currentTrack;
+      if (t && t.podcastEpisodeId && value > 0) {
+        saveEpisodeProgress(t.podcastEpisodeId, Math.floor(value));
+      }
       if (isCreateMpris) {
-        ipcRenderer?.send('seeked', this._howler.seek());
+        ipcRenderer?.send('seeked', value);
       }
     }
   }
@@ -271,7 +290,13 @@ export default class {
     // 这个定时器会覆盖之前改变的值，是bug
     setInterval(() => {
       if (this._howler === null) return;
-      this._progress = this._howler.seek();
+      // [bug 修复] howler 没 loaded 时 seek() 返回 0，会覆盖 _progress 让 UI 跳到 0。
+      // 同时 seek() 期间瞬态读到 0/NaN 也会污染 UI；只在 loaded 才更新。
+      if (this._howler.state() !== 'loaded') return;
+      const cur = this._howler.seek();
+      if (typeof cur === 'number' && cur >= 0) {
+        this._progress = cur;
+      }
       localStorage.setItem('playerCurrentTrackTime', this._progress);
       // [播客改造 S-1] 播客单集进度按集保存（Dexie put 是非阻塞 async）
       const t = this._currentTrack;
@@ -361,7 +386,13 @@ export default class {
       });
     }
   }
-  async _playAudioSource(source, autoplay = true) {
+  async _playAudioSource(source, autoplay = true, seekToOnLoad = 0) {
+    // [S1 修复 bug-A] 并发令牌：每次调用 +1。如果在 await 期间被新的调用接替，
+    // 旧的就此返回，避免两个 howler 同时创建/播放（用户报告"两条音频在响"的根因）
+    const myToken = ++this._playSourceToken;
+
+    // [播客改造 C-14] 标记进入加载态，让 UI 显示缓冲条
+    store.commit('setAudioBuffering', true);
     // [播客改造 A-7.10] 切集淡入淡出：若旧 howler 还在播，先做 ~180ms 淡出再 unload，
     // 避免硬切的"啪嗒"感。淡入由 play() 内已有的 fade(0, volume, PLAY_PAUSE_FADE_DURATION) 完成。
     const old = this._howler;
@@ -383,8 +414,11 @@ export default class {
         // 兜底：极少情况下 'fade' 事件可能不触发
         setTimeout(finish, 220);
       });
+      // [S1 修复 bug-A] await 期间可能已经被新的调用接替，旧的不再继续
+      if (myToken !== this._playSourceToken) return;
     }
     Howler.unload();
+    if (myToken !== this._playSourceToken) return;
     // [播客改造] 播客音频常见格式为 m4a/aac/mp4，加入 format 嗅探列表。
     this._howler = new Howl({
       src: [source],
@@ -398,6 +432,23 @@ export default class {
     // [播客改造] 新建 howler 实例后立即应用当前倍速，避免换曲后被重置为 1.0
     if (this._playbackRate && this._playbackRate !== 1) {
       this._howler.rate(this._playbackRate);
+    }
+    // [S1 修复] seek 在 'load' 时触发，与 play 互不干扰；先注册（once 按注册顺序）
+    if (seekToOnLoad > 1) {
+      const doSeek = () => {
+        try {
+          this._howler?.seek(seekToOnLoad);
+          this._progress = seekToOnLoad;
+          if (this._currentTrack?.name) setTitle(this._currentTrack);
+        } catch (e) {
+          /* ignore */
+        }
+      };
+      if (this._howler.state() === 'loaded') {
+        doSeek();
+      } else {
+        this._howler.once('load', doSeek);
+      }
     }
     this._howler.on('loaderror', (_, errCode) => {
       // https://developer.mozilla.org/en-US/docs/Web/API/MediaError/code
@@ -595,13 +646,15 @@ export default class {
     track,
     autoplay,
     isCacheNextTrack,
-    ifUnplayableThen = UNPLAYABLE_CONDITION.PLAY_NEXT_TRACK
+    ifUnplayableThen = UNPLAYABLE_CONDITION.PLAY_NEXT_TRACK,
+    seekToOnLoad = 0
   ) {
-    return this._getAudioSource(track).then(source => {
+    return this._getAudioSource(track).then(async source => {
       if (source) {
         let replaced = false;
         if (track.id === this.currentTrackID) {
-          this._playAudioSource(source, autoplay);
+          // [S1 修复 bug-B] 必须 await，否则后续代码会注册到**旧** howler 上
+          await this._playAudioSource(source, autoplay, seekToOnLoad);
           replaced = true;
         }
         if (isCacheNextTrack) {
@@ -906,6 +959,23 @@ export default class {
     this._howler?.play();
 
     this._howler?.once('play', () => {
+      // [播客改造 C-14] 真的开始出声 → 清除缓冲态
+      store.commit('setAudioBuffering', false);
+      // [bug 修复] 监听 audio 元素的 waiting/playing 事件，
+      // 用户拖到未缓冲位置时会触发 waiting，缓冲完成后触发 playing
+      const node = this._howler?._sounds?.[0]?._node;
+      if (node && !node.__podBufferHooked) {
+        node.__podBufferHooked = true;
+        node.addEventListener('waiting', () => {
+          store.commit('setAudioBuffering', true);
+        });
+        node.addEventListener('playing', () => {
+          store.commit('setAudioBuffering', false);
+        });
+        node.addEventListener('canplay', () => {
+          store.commit('setAudioBuffering', false);
+        });
+      }
       this._howler?.fade(0, this.volume, PLAY_PAUSE_FADE_DURATION);
 
       // 播放时确保开启player.
@@ -1091,6 +1161,15 @@ export default class {
       store.dispatch('showToast', '该单集没有音频地址');
       return;
     }
+    // [播客改造 bug] 切换前强制把旧曲的当前进度存到 episodeProgress，
+    // 避免用户拖动后立刻切，1s setInterval 窗口内丢失。
+    const oldTrack = this._currentTrack;
+    if (oldTrack && oldTrack.podcastEpisodeId && this._howler) {
+      const curPos = Math.floor(this._howler.seek() || 0);
+      if (curPos > 0) {
+        saveEpisodeProgress(oldTrack.podcastEpisodeId, curPos);
+      }
+    }
     const track = {
       // 用一个不会与网易云 id 冲突的字符串 id
       id: `pod:${episode.id}`,
@@ -1117,6 +1196,11 @@ export default class {
     this._currentTrack = track;
     this._updateMediaSessionMetaData(track);
 
+    // [S1] 用户一点就立即显示加载（不要等异步链）
+    store.commit('setAudioBuffering', true);
+    // [S1] 触发 Vue 重渲染让 UI 立即看到新封面/标题
+    if (track.name) setTitle(track);
+
     // 走统一恢复路径（autoplay=true），含进度续播
     return this._loadCurrentPodcastEpisode(true);
   }
@@ -1133,7 +1217,8 @@ export default class {
     // 之前用 commit('updateTitle', document.title) 不工作的原因：重启时 title 没变化
     if (track.name) setTitle(track);
 
-    // 读上次进度
+    // 读上次进度（只用按集存的 episodeProgress，不用全局 fallback——
+    // 之前的 fallback 在切到新集时会读到上一集还在写入的全局进度，造成"继承上一集进度" bug）
     let savedPos = 0;
     try {
       const saved = await getEpisodeProgress(track.podcastEpisodeId);
@@ -1143,39 +1228,15 @@ export default class {
     } catch (e) {
       console.warn('[播客 S-1] 读取单集进度失败：', e);
     }
-    // Fallback：episodeProgress 还没有这一集的数据时，用原项目的全局进度兜底
-    if (savedPos < 1) {
-      const legacy = parseFloat(
-        localStorage.getItem('playerCurrentTrackTime') || '0'
-      );
-      if (legacy > 1) savedPos = legacy;
-    }
 
-    const replaced = await this._replaceCurrentTrackAudio(
+    // [S1 修复 bug-B] seek 逻辑下沉到 _playAudioSource 内部，
+    // 保证注册在**新** howler 上（之前因为竞争注册到旧 howler，永远不触发）
+    return await this._replaceCurrentTrackAudio(
       track,
       autoplay,
-      false
+      false,
+      undefined,
+      savedPos
     );
-    if (replaced && savedPos > 1 && this._howler) {
-      // howler HTML5 模式下，立即 seek 可能尚未生效；统一在 'load' 时再 seek 一次最稳。
-      const seekTo = () => {
-        try {
-          this._howler?.seek(savedPos);
-          // [播客改造] 同步 _progress 让 UI 立即知道当前位置（vue-slider 的 :value 重读）
-          this._progress = savedPos;
-          // [播客改造 progress-bug] 再调一次 setTitle 触发 Vue 重渲染读到 savedPos
-          if (track.name) setTitle(track);
-        } catch (e) {
-          /* ignore */
-        }
-      };
-      // 已加载就立刻 seek；否则等 load。
-      if (this._howler.state() === 'loaded') {
-        seekTo();
-      } else {
-        this._howler.once('load', seekTo);
-      }
-    }
-    return replaced;
   }
 }
