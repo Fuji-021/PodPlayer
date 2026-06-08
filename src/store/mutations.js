@@ -55,6 +55,12 @@ export default {
     state.podcastBlocked.items = items;
     localStorage.setItem('podcastBlocked', JSON.stringify(items));
   },
+  // [B-48 第5点] 设置/清除自定义头像（dataURL）
+  setPodcastAvatar(state, dataUrl) {
+    state.podcastAvatar = dataUrl || '';
+    if (dataUrl) localStorage.setItem('podcastAvatar', dataUrl);
+    else localStorage.removeItem('podcastAvatar');
+  },
   // [播客改造 C-14] 切换音频缓冲状态
   setAudioBuffering(state, val) {
     state.audioBuffering = !!val;

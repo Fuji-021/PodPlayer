@@ -29,7 +29,7 @@ async function ipcFetch(channel, url) {
  * @param {string} feedUrl  RSS 链接
  * @returns {Promise<{ podcast: object, episodes: object[] }>}
  */
-export async function subscribeByRssUrl(feedUrl) {
+export async function subscribeByRssUrl(feedUrl, source = 'manual') {
   // [播客改造] cleanUrl 去尾巴杂字符（如复制时多带的 "！@ 等），
   // 让用户粘贴时不必"洁癖"地修整。
   const url = cleanUrl(feedUrl);
@@ -38,9 +38,10 @@ export async function subscribeByRssUrl(feedUrl) {
   }
   const xml = await ipcFetch('podcast:fetchRss', url);
   const { podcast, episodes } = parseRss(xml, url);
-  await upsertPodcast(podcast);
+  // [B-48 第1点] 记录来源：'manual'(粘贴RSS/OPML/文件) / 'discover'(首页发现页)
+  await upsertPodcast({ ...podcast, source });
   await upsertEpisodes(episodes);
-  return { podcast, episodes };
+  return { podcast: { ...podcast, source }, episodes };
 }
 
 /**
@@ -95,7 +96,8 @@ export async function importRssText(rssText, fallbackId = '') {
     throw new Error('RSS 文件未声明自身 URL，且未提供回退 id');
   }
   const { podcast, episodes } = parseRss(rssText, feedUrl);
-  await upsertPodcast(podcast);
+  // [B-48 第1点] 本地文件导入 = 手动来源
+  await upsertPodcast({ ...podcast, source: 'manual' });
   await upsertEpisodes(episodes);
   return { podcast, episodes };
 }

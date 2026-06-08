@@ -82,6 +82,16 @@
         已屏蔽节目
       </div>
       <hr />
+      <!-- [B-48 第5点] 自定义头像 -->
+      <div class="item" @click="onPickAvatar">
+        <svg-icon icon-class="square-plus" />
+        更换头像
+      </div>
+      <div v-if="hasCustomAvatar" class="item" @click="resetAvatar">
+        <svg-icon icon-class="refresh" />
+        恢复默认头像
+      </div>
+      <hr />
       <div class="item" @click="toSettings">
         <svg-icon icon-class="settings" />
         {{ $t('library.userProfileMenu.settings') }}
@@ -96,6 +106,21 @@
         {{ $t('library.userProfileMenu.logout') }}
       </div>
     </ContextMenu>
+
+    <!-- [B-48 第5点] 头像上传 + 裁切弹窗 -->
+    <input
+      ref="avatarInput"
+      type="file"
+      accept="image/png,image/jpeg,image/jpg,image/webp,image/*"
+      style="display: none"
+      @change="onAvatarFile"
+    />
+    <AvatarCropper
+      v-if="cropperSrc"
+      :src="cropperSrc"
+      @done="onCropDone"
+      @cancel="cropperSrc = ''"
+    />
   </div>
 </template>
 
@@ -111,6 +136,7 @@ import Win32Titlebar from '@/components/Win32Titlebar.vue';
 import LinuxTitlebar from '@/components/LinuxTitlebar.vue';
 import ContextMenu from '@/components/ContextMenu.vue';
 import ButtonIcon from '@/components/ButtonIcon.vue';
+import AvatarCropper from '@/components/AvatarCropper.vue';
 
 export default {
   name: 'Navbar',
@@ -119,6 +145,7 @@ export default {
     LinuxTitlebar,
     ButtonIcon,
     ContextMenu,
+    AvatarCropper,
   },
   data() {
     return {
@@ -127,6 +154,8 @@ export default {
       keywords: '',
       enableWin32Titlebar: false,
       enableLinuxTitlebar: false,
+      // [B-48 第5点] 头像裁切弹窗源图 dataURL（非空=显示弹窗）
+      cropperSrc: '',
     };
   },
   computed: {
@@ -135,12 +164,20 @@ export default {
       return isLooseLoggedIn();
     },
     avatarUrl() {
+      // [B-48 第5点] 自定义头像优先（裁切后的 dataURL）
+      if (this.$store.state.podcastAvatar) {
+        return this.$store.state.podcastAvatar;
+      }
       return this.data?.user?.avatarUrl && this.isLooseLoggedIn
         ? `${this.data?.user?.avatarUrl}?param=512y512`
         : 'http://s4.music.126.net/style/web2/img/default/default_avatar.jpg?param=60y60';
     },
     hasCustomTitlebar() {
       return this.enableWin32Titlebar || this.enableLinuxTitlebar;
+    },
+    // [B-48 第5点] 是否已设自定义头像（决定是否显示"恢复默认"项）
+    hasCustomAvatar() {
+      return !!this.$store.state.podcastAvatar;
     },
   },
   created() {
@@ -198,6 +235,33 @@ export default {
     // [B-47 第5点] 已屏蔽节目
     toBlocked() {
       this.$router.push({ name: 'blocked' });
+    },
+    // [B-48 第5点] 自定义头像：选图 → 裁切弹窗 → 存 dataURL
+    onPickAvatar() {
+      this.$refs.avatarInput.click();
+    },
+    onAvatarFile(e) {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      if (!/^image\//.test(f.type)) {
+        this.$store.dispatch('showToast', '请选择图片文件（jpg/png/webp 等）');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        this.cropperSrc = reader.result;
+      };
+      reader.readAsDataURL(f);
+    },
+    onCropDone(dataUrl) {
+      this.$store.commit('setPodcastAvatar', dataUrl);
+      this.cropperSrc = '';
+      this.$store.dispatch('showToast', '头像已更新');
+    },
+    resetAvatar() {
+      this.$store.commit('setPodcastAvatar', '');
+      this.$store.dispatch('showToast', '已恢复默认头像');
     },
     toGitHub() {
       window.open('https://github.com/qier222/YesPlayMusic');

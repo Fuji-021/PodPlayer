@@ -249,13 +249,13 @@ export default {
 <style lang="scss" scoped>
 .disc-card {
   cursor: pointer;
-  &:hover .cover {
+  // [B-48 第2/3点] hover 放大放到 cover-box（整框上浮放大），配合 cover-wrap overflow:hidden →
+  //   遮罩(loading/ctx-overlay) inset:0 始终盖满封面，不再"小一圈"（与我的订阅同逻辑）
+  &:hover .cover-box {
     transform: translateY(-4px) scale(1.02);
   }
   &:hover .cover-shadow {
     filter: blur(20px) opacity(0.6);
-    transform: scale(0.95);
-    top: 16px;
   }
   &:hover .act-btn {
     opacity: 1;
@@ -265,27 +265,30 @@ export default {
   position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
+  transition: transform 0.25s;
 }
-// 封面虚化光晕（在 cover-wrap 之外，可超出不被裁切）
+// 封面虚化光晕（在 cover-wrap 之外，可超出不被裁切）。随 cover-box 一起 hover 放大。
 .cover-shadow {
   position: absolute;
   left: 0;
-  top: 10px;
+  top: 12px;
   width: 100%;
   height: 100%;
   border-radius: 12px;
   background-size: cover;
   background-position: center;
   filter: blur(16px) opacity(0.45);
-  transform: scale(0.9);
+  transform: scale(0.92);
   z-index: 0;
-  transition: filter 0.25s, transform 0.25s, top 0.25s;
+  transition: filter 0.25s;
 }
 .cover-wrap {
   position: relative;
   z-index: 1;
   width: 100%;
   height: 100%;
+  border-radius: 12px;
+  overflow: hidden; // 裁切封面 → 加载/右键遮罩 inset:0 盖满，不留一圈
 }
 .cover {
   position: relative;
@@ -294,7 +297,7 @@ export default {
   border-radius: 12px;
   object-fit: cover;
   background: var(--color-secondary-bg);
-  transition: transform 0.25s;
+  transition: filter 0.25s;
   z-index: 1;
 }
 .act-btn {
@@ -363,10 +366,9 @@ export default {
     color: var(--color-primary);
   }
 }
-// [B-47 第2点] 复用「我的订阅」unsub-mode：封面变暗 + 微放大（覆盖 hover 的 transform）
+// [B-47/B-48 第2点] 复用「我的订阅」unsub-mode：封面变暗（放大由 cover-box hover 提供）
 .disc-card.overlay-mode .cover {
   filter: brightness(0.3);
-  transform: scale(1.06);
 }
 .cover-loading {
   position: absolute;

@@ -145,7 +145,14 @@
           <!-- [B-46 / D-3] 有更新角标：刷新发现新单集即显示，进详情后清零 -->
           <div v-if="p.newCount > 0" class="new-badge">有更新</div>
         </div>
-        <div class="title">{{ p.title || '(无标题)' }}</div>
+        <div class="title">
+          {{ p.title || '(无标题)'
+          }}<span
+            class="src-dot"
+            :class="sourceClass(p)"
+            :title="p.source === 'discover' ? '来自首页发现' : '手动链接导入'"
+          ></span>
+        </div>
         <div class="author">{{ p.author || '' }}</div>
         <!-- [B-31] 按用户要求：累计听过时长不在卡片下显示，留待将来"统计"入口页 -->
       </div>
@@ -356,6 +363,10 @@ export default {
     this.loadPodcasts();
   },
   methods: {
+    // [B-48 第1点] 来源点：discover=黄(首页云端) / 其它含旧数据=绿(手动链接导入)
+    sourceClass(p) {
+      return p && p.source === 'discover' ? 'dot-discover' : 'dot-manual';
+    },
     // [B-35] 该节目下载进度（0-100），无下载任务返 -1。
     //   episodeId 形如 `${feedUrl}::${guid}`，p.id = feedUrl，按前缀聚合属于该节目的下载中单集。
     podcastDlProgress(p) {
@@ -1180,6 +1191,21 @@ export default {
     font-size: 12px;
     opacity: 0.6;
     transition: opacity 0.2s;
+  }
+  // [B-48 第1点] 来源溯源点：紧挨节目名的实心小圆点（句号大小）
+  .src-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-left: 5px;
+    vertical-align: middle;
+  }
+  .dot-manual {
+    background: #27ae60; // 绿 = 手动链接/文件导入
+  }
+  .dot-discover {
+    background: #f1c40f; // 黄 = 首页发现页添加
   }
 }
 // [B-46 / D-3] 新单集角标（红底白字，封面右上角）

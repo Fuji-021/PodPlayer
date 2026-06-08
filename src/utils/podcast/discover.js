@@ -35,7 +35,8 @@ export async function subscribePodcast(podcast) {
   if (!res || !res.ok || !res.feedUrl) {
     throw new Error((res && res.error) || '未能解析出 RSS 订阅源');
   }
-  const result = await subscribeByRssUrl(res.feedUrl);
+  // [B-48 第1点] 来源标记为 'discover'（首页云端添加）
+  const result = await subscribeByRssUrl(res.feedUrl, 'discover');
   // 返回 feedUrl 便于订阅后跳转节目详情页
   return { ...result, feedUrl: res.feedUrl };
 }

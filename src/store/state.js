@@ -42,6 +42,8 @@ export default {
   podcastBlocked: {
     items: JSON.parse(localStorage.getItem('podcastBlocked') || '[]'),
   },
+  // [B-48 第5点] 自定义头像（裁切后的 1:1 dataURL，持久化 localStorage）；空=用默认头像
+  podcastAvatar: localStorage.getItem('podcastAvatar') || '',
   // [播客改造 C-14] 当前是否在加载音频（点单集到出声的等待）
   audioBuffering: false,
   // [播客改造 A-24] 播放队列。每项 = 单集精简对象（id/guid/title/audioUrl/coverUrl/duration/podcastId/podcastTitle）
