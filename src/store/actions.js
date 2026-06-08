@@ -212,6 +212,28 @@ export default {
       }
     });
   },
+  // [播客改造 A-24] 加入播放列表（默认加在头部，下一首播这个）
+  enqueueEpisode({ commit, dispatch }, ep) {
+    if (!ep || !ep.id) return;
+    commit('enqueueEpisodeAtFront', {
+      id: ep.id,
+      guid: ep.guid || (ep.id || '').split('::').pop() || '',
+      title: ep.title || '',
+      audioUrl: ep.audioUrl || ep.podcastAudioUrl || '',
+      coverUrl: ep.coverUrl || (ep.al && ep.al.picUrl) || '',
+      duration: ep.duration || (ep.dt ? Math.floor(ep.dt / 1000) : 0),
+      podcastId: ep.podcastId || '',
+      podcastTitle: ep.podcastTitle || (ep.al && ep.al.name) || '',
+    });
+    dispatch('showToast', '已加入播放列表');
+  },
+  // [A-24] 取队列下一首并出队
+  popNextFromQueue({ state, commit }) {
+    if (!state.podcastQueue.length) return null;
+    const next = state.podcastQueue[0];
+    commit('removeFromQueue', next.id);
+    return next;
+  },
   // [播客改造 A-7.1] 启动时把本地收藏 id 列表加载进 vuex，UI 用作快速判定
   async fetchPodcastFavorites({ commit }) {
     try {

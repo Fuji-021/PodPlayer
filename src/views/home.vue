@@ -68,12 +68,42 @@
       />
     </div>
 
-    <!-- [播客改造] 首页占位（推荐板块屏蔽后显示），后续替换为播客首页内容 -->
-    <div v-if="!showLegacyHome" class="podcast-home-placeholder">
-      <p>播客首页建设中</p>
-      <router-link to="/library" class="go-library-btn">
-        前往播客库 →
-      </router-link>
+    <!-- [B-39/B-44] 播客发现页：热门排行 / 播客寻宝 / 为你推荐 -->
+    <div v-if="!showLegacyHome" ref="discRoot" class="podcast-discover">
+      <div v-if="discoverLoading" class="disc-state">正在加载热门播客…</div>
+      <div v-else-if="discoverError" class="disc-state">
+        {{ discoverError }}
+        <button class="retry" @click="loadDiscover(true)">重试</button>
+      </div>
+      <template v-else>
+        <section
+          v-for="sec in discoverSections"
+          :key="sec.key"
+          class="disc-section"
+        >
+          <!-- [B-42] 标题行：左标题 + 右操作（探索更多/再找一找/再推荐一次） -->
+          <div class="disc-head">
+            <div class="disc-title">{{ sec.title }}</div>
+            <div
+              class="disc-action"
+              :title="sec.actionText"
+              @click="onSectionAction(sec)"
+            >
+              <span>{{ sec.actionText }}</span>
+              <svg-icon :icon-class="sec.actionIcon" />
+            </div>
+          </div>
+          <!-- [B-44] 固定两行 + 列数随窗口自适应（去掉横向滚轮）；切到 2*cols 项，多的进二级页 -->
+          <div class="disc-grid" :style="{ '--disc-cols': cols }">
+            <DiscoverCard
+              v-for="p in sec.items.slice(0, cols * 2)"
+              :key="sec.key + '-' + p.id"
+              :podcast="p"
+              @changed="onCardChanged"
+            />
+          </div>
+        </section>
+      </template>
     </div>
   </div>
 </template>
@@ -89,10 +119,19 @@ import { mapState } from 'vuex';
 import CoverRow from '@/components/CoverRow.vue';
 import FMCard from '@/components/FMCard.vue';
 import DailyTracksCard from '@/components/DailyTracksCard.vue';
+import SvgIcon from '@/components/SvgIcon.vue';
+import DiscoverCard from '@/components/DiscoverCard.vue';
+import {
+  fetchHotPodcasts,
+  splitSections,
+  reshuffleSection,
+  preferredGenresFrom,
+} from '@/utils/podcast/discover';
+import { getAllPodcasts } from '@/utils/podcast/db';
 
 export default {
   name: 'Home',
-  components: { CoverRow, FMCard, DailyTracksCard },
+  components: { CoverRow, FMCard, DailyTracksCard, SvgIcon, DiscoverCard },
   data() {
     return {
       show: false,
@@ -108,19 +147,137 @@ export default {
         items: [],
         indexs: [],
       },
+      // [B-39] 发现页状态
+      discoverLoading: false,
+      discoverError: '',
+      sections: { hot: [], treasure: [], forYou: [] },
+      allItems: [], // [B-42] 全量榜单，供二级页 / 再推荐复用
+      // [B-44] 每行列数（随窗口自适应），每板块固定显示 2*cols 项
+      cols: 2,
+      // [B-43] 订阅偏好分类（用于"为你推荐" + reroll；不进模板，无需响应式）
+      preferredGenres: new Set(),
     };
   },
   computed: {
     ...mapState(['settings']),
+    // [B-43] 已订阅映射（节目名 → feedUrl）。store 变化时卡片绿勾自动回显。
+    subscribedMap() {
+      return this.$store.state.podcastDiscover.subscribedMap;
+    },
     byAppleMusic() {
       return byAppleMusic;
+    },
+    discoverSections() {
+      return [
+        {
+          key: 'hot',
+          title: '热门排行',
+          items: this.sections.hot,
+          actionText: '探索更多',
+          actionIcon: 'arrow-right',
+          actionType: 'page',
+        },
+        {
+          key: 'treasure',
+          title: '播客寻宝',
+          items: this.sections.treasure,
+          actionText: '再找一找',
+          actionIcon: 'compass-alt',
+          actionType: 'page',
+        },
+        {
+          key: 'forYou',
+          title: '为你推荐',
+          items: this.sections.forYou,
+          actionText: '再推荐一次',
+          actionIcon: 'cardinal-compass',
+          actionType: 'reroll',
+        },
+      ];
     },
   },
   activated() {
     this.loadData();
+    this.loadDiscover();
+    this.$nextTick(this.computeCols);
     this.$parent.$refs.scrollbar.restorePosition();
   },
+  mounted() {
+    // [B-44] 窗口缩放时重算列数（固定两行，列数自适应）
+    window.addEventListener('resize', this.computeCols);
+    this.$nextTick(this.computeCols);
+  },
+  beforeDestroy() {
+    window.removeEventListener('resize', this.computeCols);
+  },
   methods: {
+    // [B-44] 按容器宽度算每行列数：card 最小 168px + gap 18px
+    computeCols() {
+      const el = this.$refs.discRoot;
+      if (!el) return;
+      const w = el.clientWidth;
+      if (!w) return;
+      const card = 168;
+      const gap = 18;
+      this.cols = Math.max(1, Math.floor((w + gap) / (card + gap)));
+    },
+    // [B-44] 卡片订阅状态变化（订阅/取消订阅）后，重算偏好分类等可选刷新；
+    //   subscribedMap 已由卡片直接更新 store，回显是响应式的，这里无需重拉。
+    onCardChanged() {},
+    // [B-39] 发现页：加载榜单 + 分板块
+    async loadDiscover(force = false) {
+      if (this.showLegacyHome) return;
+      if (!force && this.sections.hot.length) return; // 已加载过
+      this.discoverError = '';
+      this.discoverLoading = true;
+      try {
+        const items = await fetchHotPodcasts(force);
+        this.allItems = items;
+        // [B-43] 从 Dexie 灌入已订阅映射（卡片绿勾回显 + 寻宝/推荐去重）
+        const subMap = await this.loadSubscribedMap();
+        this.$store.commit('setSubscribedPodcastMap', subMap);
+        const subbedNames = new Set(Object.keys(subMap));
+        // [B-43] 反推偏好分类，"为你推荐"按分类加权
+        this.preferredGenres = preferredGenresFrom(items, subbedNames);
+        this.sections = splitSections(items, subbedNames, this.preferredGenres);
+      } catch (e) {
+        this.discoverError = String((e && e.message) || e) || '加载失败';
+      } finally {
+        this.discoverLoading = false;
+      }
+    },
+    // [B-43] 从 Dexie 读已订阅 → {节目名: feedUrl}。节目名是榜单(name)与订阅库(title)唯一关联键。
+    async loadSubscribedMap() {
+      try {
+        const pods = await getAllPodcasts();
+        const map = {};
+        pods.forEach(p => {
+          const t = (p.title || '').trim();
+          if (t) map[t] = p.id; // db.podcasts 的 id 即 feedUrl
+        });
+        return map;
+      } catch (e) {
+        return {};
+      }
+    },
+    // [B-42] 行尾操作：page=进二级页；reroll=重新随机推荐
+    async onSectionAction(sec) {
+      if (sec.actionType === 'page') {
+        this.$router.push({ name: 'discover', params: { type: sec.key } });
+      } else if (sec.actionType === 'reroll') {
+        // [B-43] 排除当前已订阅 + 按偏好分类加权重推
+        const excludeNames = new Set(Object.keys(this.subscribedMap));
+        this.sections = {
+          ...this.sections,
+          forYou: reshuffleSection(
+            this.allItems,
+            'forYou',
+            excludeNames,
+            this.preferredGenres
+          ),
+        };
+      }
+    },
     loadData() {
       // [播客改造] 推荐板块已屏蔽：直接显示首页占位，不再请求网易云数据
       if (!this.showLegacyHome) {
@@ -246,6 +403,66 @@ footer {
     &:hover {
       transform: scale(1.04);
     }
+  }
+}
+
+// [B-39] 播客发现页
+.podcast-discover {
+  color: var(--color-text);
+  // [B-44] 顶部留白加大，避免第一个板块标题/「探索更多」被 navbar 切到
+  padding-top: 36px;
+  .disc-state {
+    text-align: center;
+    padding: 80px 0;
+    opacity: 0.55;
+    font-size: 14px;
+    .retry {
+      margin-left: 10px;
+      color: var(--color-primary);
+      cursor: pointer;
+      background: transparent;
+      font-weight: 600;
+    }
+  }
+  .disc-section {
+    margin-bottom: 30px;
+  }
+  .disc-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .disc-title {
+    font-size: 22px;
+    font-weight: 700;
+  }
+  .disc-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    font-weight: 600;
+    opacity: 0.55;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 8px;
+    transition: 0.15s;
+    .svg-icon {
+      width: 13px;
+      height: 13px;
+    }
+    &:hover {
+      opacity: 1;
+      color: var(--color-primary);
+      background: var(--color-secondary-bg-for-transparent);
+    }
+  }
+  // [B-44] 固定两行 + 列数随窗口自适应（去掉横向滚轮）。卡片本体样式见 DiscoverCard.vue
+  .disc-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--disc-cols, 4), minmax(0, 1fr));
+    gap: 24px 18px;
   }
 }
 </style>

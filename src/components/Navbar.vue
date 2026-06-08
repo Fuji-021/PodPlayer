@@ -7,8 +7,10 @@
         <button-icon @click.native="go('back')"
           ><svg-icon icon-class="arrow-left"
         /></button-icon>
+        <!-- [B-44] 前进键还原：复用 arrow-left 水平翻转，确保与返回键样式严格对应。
+             （arrow-right.svg 已被改成发现页"探索更多"长箭头，不能再用于此处） -->
         <button-icon @click.native="go('forward')"
-          ><svg-icon icon-class="arrow-right"
+          ><svg-icon icon-class="arrow-left" class="flip-x"
         /></button-icon>
       </div>
       <div class="navigation-links">
@@ -49,8 +51,8 @@
         <img
           class="avatar"
           :src="avatarUrl"
-          @click="showUserProfileMenu"
           loading="lazy"
+          @click="showUserProfileMenu"
         />
       </div>
     </nav>
@@ -66,8 +68,13 @@
         我的下载
       </div>
       <div class="item" @click="toHistory">
-        <svg-icon icon-class="queue" />
+        <svg-icon icon-class="time-past" />
         收听历史
+      </div>
+      <!-- [B-38] 收听数据图标：duration -->
+      <div class="item" @click="toStats">
+        <svg-icon icon-class="duration" />
+        收听数据
       </div>
       <hr />
       <div class="item" @click="toSettings">
@@ -175,10 +182,13 @@ export default {
       this.$router.push({ name: 'favorites' });
     },
     toDownloads() {
-      this.$store.dispatch('showToast', '下载功能即将上线');
+      this.$router.push({ name: 'downloads' });
     },
     toHistory() {
-      this.$store.dispatch('showToast', '收听历史即将上线');
+      this.$router.push({ name: 'history' });
+    },
+    toStats() {
+      this.$router.push({ name: 'stats' });
     },
     toGitHub() {
       window.open('https://github.com/qier222/YesPlayMusic');
@@ -204,21 +214,13 @@ nav {
   justify-content: space-between;
   align-items: center;
   height: 64px;
-  padding: {
-    right: 10vw;
-    left: 10vw;
-  }
+  // [B-33] 与 main 内容区 padding 完全一致（clamp 48~72px），让 <> / 头像与内容左右缘对齐。
+  padding: 0 clamp(48px, 4vw, 72px);
   backdrop-filter: saturate(180%) blur(20px);
 
   background-color: var(--color-navbar-bg);
   z-index: 100;
   -webkit-app-region: drag;
-}
-
-@media (max-width: 1336px) {
-  nav {
-    padding: 0 max(5vw, 90px);
-  }
 }
 
 @supports (-moz-appearance: none) {
@@ -236,9 +238,16 @@ nav.has-custom-titlebar {
   flex: 1;
   display: flex;
   align-items: center;
+  // [B-32] 抵消第一个 button-icon 的 margin(4px)+padding(8px)=12px，
+  // 让 < 箭头图标左缘与下方"我的订阅"标题左缘平齐（共用内容区左缘锚点）。
+  margin-left: -12px;
   .svg-icon {
     height: 24px;
     width: 24px;
+  }
+  // [B-44] 前进键 = 返回键水平镜像
+  .flip-x {
+    transform: scaleX(-1);
   }
   button {
     -webkit-app-region: no-drag;

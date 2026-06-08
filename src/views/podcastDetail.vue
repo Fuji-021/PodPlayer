@@ -1,49 +1,136 @@
 <template>
   <div v-show="podcast" class="podcast-detail-page">
     <div v-if="podcast" class="podcast-detail">
-      <img class="cover-lg" :src="podcast.coverUrl" @error="onCoverError" />
+      <!-- [B-34] 右键封面弹菜单浮层：批量下载（左）/ 取消订阅（右）。点外部关闭。 -->
+      <div
+        class="cover-wrap"
+        :class="{ 'menu-active': coverMenuMode }"
+        @contextmenu.prevent="toggleCoverMenu"
+      >
+        <img class="cover-lg" :src="podcast.coverUrl" @error="onCoverError" />
+        <div v-if="coverMenuMode" class="cover-menu-overlay" @click.stop>
+          <button
+            class="cover-menu-btn"
+            title="批量下载"
+            @click="enterMultiDownload"
+          >
+            <svg-icon icon-class="download" />
+          </button>
+          <button
+            class="cover-menu-btn danger"
+            title="取消订阅"
+            @click="confirmUnsubscribe"
+          >
+            <svg-icon icon-class="heart-crack" />
+          </button>
+        </div>
+      </div>
       <div class="meta">
         <div class="t">{{ podcast.title }}</div>
         <div class="a">{{ podcast.author }}</div>
-        <div class="d">{{ podcast.description }}</div>
-      </div>
-      <!-- [B-25] 取消订阅按钮挪到节目信息行最右边 -->
-      <div class="actions">
-        <button class="unsubscribe-btn" @click="confirmUnsubscribe">
-          <svg-icon icon-class="heart-crack" />
-          <span>取消订阅</span>
-        </button>
+        <div class="d">{{ cleanDescription }}</div>
       </div>
     </div>
 
-    <div class="episode-list">
+    <div class="episode-list" :class="{ 'select-mode': selectMode }">
       <div
         v-for="ep in episodes"
         :key="ep.id"
         class="episode-row"
-        @click="goEpisodeDetail(ep)"
+        :class="{
+          selected: isSelected(ep),
+          'is-downloaded': selectMode && isDownloaded(ep),
+        }"
+        @click="onRowClick(ep)"
         @contextmenu.prevent="openEpisodeMenu($event, ep)"
       >
+        <!-- [B-34] 多选框：已下载的显示绿勾禁用；未下载可勾选 -->
+        <div
+          v-if="selectMode"
+          class="ep-checkbox"
+          :class="{ checked: isSelected(ep), disabled: isDownloaded(ep) }"
+        >
+          <svg-icon
+            v-if="isSelected(ep) || isDownloaded(ep)"
+            icon-class="check"
+          />
+        </div>
+        <!-- [B-31] 下载中：整行背景灰色进度条（弱视觉，不影响文字可读性） -->
+        <div
+          v-if="downloadPercent(ep) >= 0"
+          class="ep-dl-bar"
+          :style="{ width: Math.max(2, downloadPercent(ep)) + '%' }"
+        ></div>
         <div class="ep-main">
           <div class="ep-title">{{ ep.title }}</div>
           <div class="ep-sub">
             <span>{{ formatDate(ep.pubDate) }}</span>
-            <!-- [C-4] 时长 / 剩余 / 已听完 -->
+            <!-- [C-4 改] 时长 / 剩余 / 听过X%(黄) / 已听完(绿) -->
             <span
               v-if="ep.duration"
               class="ep-prog"
-              :class="{ done: isFinished(ep) }"
+              :class="progressLabelClass(ep)"
             >
               · {{ formatProgressLabel(ep) }}
             </span>
           </div>
         </div>
-        <!-- [S-3] 三点冒号入口（替代 ⓘ）：弹"加入播放列表/收藏/下载"菜单 -->
-        <button class="ep-menu-btn" @click.stop="openEpisodeMenu($event, ep)">
+        <!-- [B-33] 状态按钮排序原则：从右到左变动频率递减。
+             更多(最右,常驻) ← 播放(常驻) ← 收藏 ← 已下载。DOM 左到右即：已下载 收藏 播放 更多 -->
+        <!-- [B-34] 多选模式下隐藏右侧操作按钮，只留多选框 + 内容 -->
+        <!-- 已下载（点击 → 中央确认删除弹窗） -->
+        <button
+          v-if="!selectMode && isDownloaded(ep)"
+          class="ep-downloaded-btn"
+          title="已下载（点击删除）"
+          @click.stop="askDeleteDownload(ep)"
+        >
+          <svg-icon icon-class="check-circle" />
+        </button>
+        <!-- 已收藏（点击 → 取消收藏） -->
+        <button
+          v-if="!selectMode && isFavorited(ep)"
+          class="ep-fav-btn"
+          title="已收藏（点击取消）"
+          @click.stop="toggleFav(ep)"
+        >
+          <svg-icon icon-class="heart-solid" />
+        </button>
+        <!-- 播放 + 更多 -->
+        <button
+          v-if="!selectMode"
+          class="ep-play-btn"
+          @click.stop="playEpisode(ep)"
+        >
+          <svg-icon icon-class="play-circle" />
+        </button>
+        <button
+          v-if="!selectMode"
+          class="ep-menu-btn"
+          @click.stop="openEpisodeMenu($event, ep)"
+        >
           <svg-icon icon-class="menu-dots-vertical" />
         </button>
       </div>
     </div>
+
+    <!-- [B-34] 多选模式固定下载栏（滚动时固定在播放栏上方） -->
+    <transition name="mdl-slide">
+      <div v-if="selectMode" class="multi-dl-bar">
+        <button class="mdl-cancel" @click="cancelMultiSelect">取消</button>
+        <div class="mdl-info">
+          已选 <b>{{ selectedEpIds.length }}</b> 项
+        </div>
+        <button
+          class="mdl-go"
+          :disabled="!selectedEpIds.length"
+          @click="downloadSelected"
+        >
+          <svg-icon icon-class="download" />
+          <span>下载</span>
+        </button>
+      </div>
+    </transition>
 
     <!-- [S-3] 单集操作菜单（贴触发点） -->
     <div
@@ -69,9 +156,37 @@
         />
         <span>{{ isFavorited(episodeMenu.target) ? '取消收藏' : '收藏' }}</span>
       </div>
-      <div class="ctx-item" @click="onMenuDownload">
-        <svg-icon icon-class="download" />
-        <span>下载</span>
+      <div
+        class="ctx-item"
+        :class="{ danger: isDownloaded(episodeMenu.target) }"
+        @click="onMenuDownload"
+      >
+        <svg-icon :icon-class="downloadMenuIcon(episodeMenu.target)" />
+        <span>{{ downloadMenuLabel(episodeMenu.target) }}</span>
+      </div>
+    </div>
+
+    <!-- [B-31] 删除下载确认弹窗 -->
+    <div
+      v-if="dlDeleteTarget"
+      class="dialog-mask"
+      @click.self="dlDeleteTarget = null"
+    >
+      <div class="confirm-dialog">
+        <div class="title">删除下载</div>
+        <div class="msg">
+          确定要删除已下载的
+          <b>"{{ dlDeleteTarget.title }}"</b>
+          吗？<br />本地音频文件会被删除，单集听过的进度不会被删除。
+        </div>
+        <div class="actions">
+          <button class="btn-secondary" @click="dlDeleteTarget = null">
+            取消
+          </button>
+          <button class="btn-danger" @click="confirmDeleteDownload">
+            确定删除
+          </button>
+        </div>
       </div>
     </div>
 
@@ -106,7 +221,18 @@ import {
   getEpisodesByPodcast,
   deletePodcast,
 } from '@/utils/podcast/service';
-import { getEpisodeProgress } from '@/utils/podcast/db';
+import { getEpisodeProgressBulk } from '@/utils/podcast/db';
+import {
+  getListenStats,
+  getListenStatsBulk,
+  listenedPercentStepped,
+} from '@/utils/podcast/listening';
+import {
+  startDownload,
+  cancelDownload,
+  removeDownload,
+} from '@/utils/podcast/downloads';
+import { stripHtmlToText } from '@/utils/podcast/sanitizeHtml';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 export default {
@@ -120,11 +246,23 @@ export default {
       // [S-3] 单集菜单
       episodeMenu: { open: false, x: 0, y: 0, target: null },
       episodeMenuOutsideListener: null,
+      // [B-31] 下载删除确认弹窗的目标
+      dlDeleteTarget: null,
+      // [B-34] 右键封面菜单（批量下载 / 取消订阅）+ 点外部关闭监听
+      coverMenuMode: false,
+      coverMenuListener: null,
+      // [B-34] 多选下载模式
+      selectMode: false,
+      selectedEpIds: [],
     };
   },
   computed: {
     feedUrl() {
       return decodeURIComponent(this.$route.params.feedUrlEncoded || '');
+    },
+    // [B-33] 节目简介去 HTML 标签 → 纯文本（避免 RSS 描述里的 <p style> 源码当文字显示）
+    cleanDescription() {
+      return stripHtmlToText((this.podcast && this.podcast.description) || '');
     },
   },
   watch: {
@@ -135,6 +273,25 @@ export default {
         if (v) this.load();
       },
     },
+    // [B-31] 监听播放器广播：若广播的 episodeId 在自己列表里 → 重读那一集 listenStats
+    '$store.state.podcastListening.listenTick'() {
+      const pl = this.$store.state.podcastListening;
+      if (!pl || !pl.episodeId) return;
+      const idx = this.episodes.findIndex(e => e.id === pl.episodeId);
+      if (idx < 0) return;
+      getListenStats(pl.episodeId)
+        .then(s => {
+          // Vue 2：用 splice 触发响应式
+          const ep = this.episodes[idx];
+          this.$set(this.episodes, idx, { ...ep, listenStats: s });
+        })
+        .catch(() => {});
+    },
+  },
+  beforeDestroy() {
+    // [B-34] 离开页面时清理浮层/菜单的 document 监听，避免泄漏
+    this.closeCoverMenu();
+    this.closeEpisodeMenu();
   },
   methods: {
     async load() {
@@ -145,13 +302,16 @@ export default {
         return;
       }
       const eps = await getEpisodesByPodcast(this.feedUrl);
-      // [C-4] 并行读取每集播放进度
-      const progresses = await Promise.all(
-        eps.map(ep => getEpisodeProgress(ep.id).catch(() => null))
-      );
+      // [B-36] 批量 bulkGet 读进度 + listenStats（原来每集各一次 get，百集列表很卡）
+      const ids = eps.map(e => e.id);
+      const [progresses, stats] = await Promise.all([
+        getEpisodeProgressBulk(ids).catch(() => []),
+        getListenStatsBulk(ids).catch(() => []),
+      ]);
       this.episodes = eps.map((ep, i) => ({
         ...ep,
         listenedSec: (progresses[i] && progresses[i].position) || 0,
+        listenStats: stats[i] || null,
       }));
     },
     playEpisode(ep) {
@@ -160,27 +320,33 @@ export default {
     },
     // [S-3] 单集菜单
     openEpisodeMenu(e, ep) {
+      // [B-33] toggle：先清理旧菜单/监听；若是同一行再次触发则仅关闭（不重开）。
+      const isSame =
+        this.episodeMenu.open &&
+        this.episodeMenu.target &&
+        this.episodeMenu.target.id === ep.id;
+      this.closeEpisodeMenu();
+      if (isSame) return;
       const w = 200;
-      const h = 184;
+      const h = 200;
       const x = Math.min(e.clientX, window.innerWidth - w - 10);
       const y = Math.min(e.clientY, window.innerHeight - h - 10);
       this.episodeMenu = { open: true, x, y, target: ep };
       this.$nextTick(() => {
+        // 用 click（左键）关闭：菜单容器和触发按钮都 @click.stop，
+        // 所以只有点击菜单外空白才冒泡到这里 → 关闭。右键不产生 click，不会自关。
         this.episodeMenuOutsideListener = ev => {
           const root = this.$refs.episodeMenu;
           if (root && !root.contains(ev.target)) this.closeEpisodeMenu();
         };
-        document.addEventListener('mousedown', this.episodeMenuOutsideListener);
+        document.addEventListener('click', this.episodeMenuOutsideListener);
       });
     },
     closeEpisodeMenu() {
       this.episodeMenu.open = false;
       this.episodeMenu.target = null;
       if (this.episodeMenuOutsideListener) {
-        document.removeEventListener(
-          'mousedown',
-          this.episodeMenuOutsideListener
-        );
+        document.removeEventListener('click', this.episodeMenuOutsideListener);
         this.episodeMenuOutsideListener = null;
       }
     },
@@ -190,8 +356,13 @@ export default {
       if (ep) this.playEpisode(ep);
     },
     onMenuQueue() {
+      const ep = this.episodeMenu.target;
       this.closeEpisodeMenu();
-      this.$store.dispatch('showToast', '播放列表功能即将上线');
+      if (!ep) return;
+      this.$store.dispatch('enqueueEpisode', {
+        ...ep,
+        podcastTitle: this.podcast ? this.podcast.title : '',
+      });
     },
     onMenuFavorite() {
       const ep = this.episodeMenu.target;
@@ -214,8 +385,49 @@ export default {
       this.$store.dispatch('togglePodcastFavorite', track);
     },
     onMenuDownload() {
+      const ep = this.episodeMenu.target;
       this.closeEpisodeMenu();
-      this.$store.dispatch('showToast', '下载功能即将上线');
+      if (!ep) return;
+      if (this.isDownloaded(ep)) {
+        this.askDeleteDownload(ep);
+        return;
+      }
+      if (this.downloadPercent(ep) >= 0) {
+        // 已经在下载，二次点 → 取消
+        cancelDownload(ep.id);
+        return;
+      }
+      startDownload(ep);
+    },
+    // [B-31] 下载状态判定 + 进度（-1 = 没在下载）
+    isDownloaded(ep) {
+      if (!ep) return false;
+      const ids =
+        (this.$store.state.podcastDownloads &&
+          this.$store.state.podcastDownloads.doneIds) ||
+        [];
+      return ids.includes(ep.id);
+    },
+    downloadPercent(ep) {
+      if (!ep) return -1;
+      const map =
+        (this.$store.state.podcastDownloads &&
+          this.$store.state.podcastDownloads.progressMap) ||
+        {};
+      const p = map[ep.id];
+      if (!p || p.status !== 'downloading') return -1;
+      if (!p.bytesTotal) return 1; // 仍未拿到 content-length，先显示 1%
+      return Math.min(99, (p.bytesDone / p.bytesTotal) * 100);
+    },
+    askDeleteDownload(ep) {
+      this.dlDeleteTarget = ep;
+    },
+    async confirmDeleteDownload() {
+      const ep = this.dlDeleteTarget;
+      this.dlDeleteTarget = null;
+      if (!ep) return;
+      await removeDownload(ep.id);
+      this.$store.dispatch('showToast', '已删除下载');
     },
     // [S-3] 当前 episode 是否已收藏
     isFavorited(ep) {
@@ -225,6 +437,95 @@ export default {
           this.$store.state.podcastFavorites.episodeIds) ||
         [];
       return ids.includes(ep.id);
+    },
+    // [B-33] 单集行收藏按钮：toggle 收藏（点击已收藏的红心 = 取消收藏）
+    toggleFav(ep) {
+      if (!ep) return;
+      const title = (this.podcast && this.podcast.title) || '';
+      const track = {
+        id: `pod:${ep.id}`,
+        name: ep.title,
+        al: { id: 0, name: title, picUrl: ep.coverUrl || '' },
+        dt: (ep.duration || 0) * 1000,
+        podcastAudioUrl: ep.audioUrl,
+        podcastEpisodeId: ep.id,
+      };
+      this.$store.dispatch('togglePodcastFavorite', track);
+    },
+    // [B-33] 右键菜单"下载"项的动态图标/文案（已下载→删除下载，下载中→取消下载）
+    downloadMenuIcon(ep) {
+      if (this.isDownloaded(ep)) return 'trash';
+      return 'download';
+    },
+    downloadMenuLabel(ep) {
+      if (this.isDownloaded(ep)) return '删除下载';
+      if (this.downloadPercent(ep) >= 0) return '取消下载';
+      return '下载';
+    },
+    // [B-34] 右键封面菜单 toggle（批量下载 / 取消订阅）+ 点外部关闭
+    toggleCoverMenu() {
+      if (this.coverMenuMode) {
+        this.closeCoverMenu();
+        return;
+      }
+      this.coverMenuMode = true;
+      this.$nextTick(() => {
+        this.coverMenuListener = ev => {
+          if (!ev.target.closest('.cover-wrap')) this.closeCoverMenu();
+        };
+        document.addEventListener('click', this.coverMenuListener);
+      });
+    },
+    closeCoverMenu() {
+      this.coverMenuMode = false;
+      if (this.coverMenuListener) {
+        document.removeEventListener('click', this.coverMenuListener);
+        this.coverMenuListener = null;
+      }
+    },
+    // [B-34] 进入多选下载模式
+    enterMultiDownload() {
+      this.closeCoverMenu();
+      this.selectMode = true;
+      this.selectedEpIds = [];
+    },
+    cancelMultiSelect() {
+      this.selectMode = false;
+      this.selectedEpIds = [];
+    },
+    isSelected(ep) {
+      return this.selectedEpIds.includes(ep.id);
+    },
+    toggleSelect(ep) {
+      if (this.isDownloaded(ep)) return; // 已下载不可选
+      const i = this.selectedEpIds.indexOf(ep.id);
+      if (i >= 0) this.selectedEpIds.splice(i, 1);
+      else this.selectedEpIds.push(ep.id);
+    },
+    // [B-34] 单集行点击：多选模式 → 勾选；否则进单集详情
+    onRowClick(ep) {
+      if (this.selectMode) {
+        this.toggleSelect(ep);
+        return;
+      }
+      this.goEpisodeDetail(ep);
+    },
+    // [B-34] 批量下载选中项（并发，每个独立 IPC 任务）
+    downloadSelected() {
+      if (!this.selectedEpIds.length) return;
+      const eps = this.episodes.filter(e => this.selectedEpIds.includes(e.id));
+      let n = 0;
+      eps.forEach(ep => {
+        if (this.isDownloaded(ep)) return; // 已下载，跳过
+        if (this.downloadPercent(ep) >= 0) return; // 已在下载中，跳过
+        startDownload(ep);
+        n += 1;
+      });
+      this.$store.dispatch(
+        'showToast',
+        n > 0 ? `已加入下载队列：${n} 项` : '所选单集都已下载'
+      );
+      this.cancelMultiSelect();
     },
     // [C-5] 进单集详情页
     goEpisodeDetail(ep) {
@@ -236,20 +537,32 @@ export default {
         },
       });
     },
-    // [C-4] 单集状态
+    // [C-4 改] 单集状态：优先用真实收听统计 listenStats，回退到 episodeProgress
     isFinished(ep) {
-      const total = ep.duration || 0;
-      const listened = ep.listenedSec || 0;
-      return total > 0 && listened >= total - 30;
+      return !!(ep.listenStats && ep.listenStats.completed);
     },
+    listenPct(ep) {
+      return listenedPercentStepped(ep.listenStats);
+    },
+    // 进度标签：已听完(绿) / 听过X%(黄) / 剩余/总时长（默认灰）
     formatProgressLabel(ep) {
+      if (this.isFinished(ep)) return '已听完';
+      const pct = this.listenPct(ep);
+      if (pct >= 5) return `听过 ${pct}%`;
       const total = ep.duration || 0;
       const listened = ep.listenedSec || 0;
-      if (this.isFinished(ep)) return '已听完';
-      if (listened > 30) return `剩余 ${this.formatDuration(total - listened)}`;
+      if (listened > 30 && total > 0) {
+        return `剩余 ${this.formatDuration(total - listened)}`;
+      }
       return this.formatDuration(total);
     },
+    progressLabelClass(ep) {
+      if (this.isFinished(ep)) return 'done';
+      if (this.listenPct(ep) >= 5) return 'partial';
+      return '';
+    },
     confirmUnsubscribe() {
+      this.closeCoverMenu();
       this.showConfirmUnsub = true;
     },
     async doUnsubscribe() {
@@ -298,13 +611,61 @@ export default {
   gap: 24px;
   margin-bottom: 32px;
   align-items: flex-start;
-  .cover-lg {
+  // [B-33] 封面 wrap：承载右键"取消订阅"浮层
+  .cover-wrap {
+    position: relative;
     width: 180px;
     height: 180px;
+    flex-shrink: 0;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .cover-lg {
+    width: 100%;
+    height: 100%;
     border-radius: 16px;
     object-fit: cover;
-    flex-shrink: 0;
     background: var(--color-secondary-bg);
+    display: block;
+    transition: transform 0.25s ease-out, filter 0.25s ease-out;
+  }
+  // [B-35] 右键菜单：封面微微放大 + 压暗（同订阅页效果），上面浮两个图标按钮居中。
+  // 注意 menu-active 在 .cover-wrap 上，不能用 &（&=.podcast-detail）。
+  .cover-wrap.menu-active .cover-lg {
+    transform: scale(1.06);
+    filter: brightness(0.4);
+  }
+  .cover-menu-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+  }
+  .cover-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    cursor: pointer;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.14);
+    transition: transform 0.15s, background 0.15s, color 0.15s;
+    .svg-icon {
+      width: 22px;
+      height: 22px;
+    }
+    &:hover {
+      transform: scale(1.12);
+      background: rgba(255, 255, 255, 0.24);
+    }
+    &.danger:hover {
+      color: #ff7a6b;
+      background: rgba(231, 76, 60, 0.28);
+    }
   }
   .meta {
     flex: 1;
@@ -358,17 +719,135 @@ export default {
 .episode-list {
   border-top: 1px solid var(--color-secondary-bg);
 }
+// [B-35] 多选右移改为「容器一次性 padding」：只 1 个元素做 padding 动画，
+// 不再让几十行各自 transition padding（reflow ×N → 卡顿）。
+.episode-list.select-mode {
+  padding-left: 40px;
+  transition: padding-left 0.22s ease;
+}
+.episode-list {
+  transition: padding-left 0.22s ease;
+}
 .episode-row {
   padding: 14px 4px;
   cursor: pointer;
   border-bottom: 1px solid var(--color-secondary-bg);
-  transition: 0.15s;
+  // [B-35] 只过渡 GPU 友好的 transform/opacity + background，去掉 padding 过渡
+  transition: transform 0.15s, opacity 0.15s, background 0.15s;
   display: flex;
   align-items: center;
   gap: 12px;
+  position: relative; // [B-31] 给 ep-dl-bar 提供绝对定位锚点
   &:hover {
     background: var(--color-secondary-bg-for-transparent);
-    padding-left: 12px;
+  }
+  // [B-34] 选中：整体微缩 + 暗一点（transform/opacity，GPU 合成不 reflow）
+  &.selected {
+    transform: scale(0.985);
+    opacity: 0.82;
+    background: var(--color-primary-bg-for-transparent);
+  }
+  // [B-34] 多选模式下已下载的：降低存在感（不可选）
+  &.is-downloaded {
+    opacity: 0.5;
+    cursor: default;
+  }
+  // [B-35] 多选框：绝对定位在容器 padding 腾出的左侧空间（left 负值），缩小圆圈
+  .ep-checkbox {
+    position: absolute;
+    left: -30px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1.5px solid var(--color-text);
+    opacity: 0.4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+    .svg-icon {
+      width: 12px;
+      height: 12px;
+      color: #fff;
+    }
+    &.checked {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      opacity: 1;
+    }
+    &.disabled {
+      background: #27ae60;
+      border-color: #27ae60;
+      opacity: 0.9;
+    }
+  }
+  // [B-31] 整行背景下载进度条：弱视觉灰色，z-index 在文字下方
+  .ep-dl-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0%;
+    background: rgba(128, 128, 128, 0.18);
+    pointer-events: none;
+    transition: width 0.4s ease-out;
+    z-index: 0;
+  }
+  .ep-main,
+  .ep-play-btn,
+  .ep-menu-btn,
+  .ep-downloaded-btn,
+  .ep-fav-btn {
+    position: relative;
+    z-index: 1;
+  }
+  // [B-31] 已下载图标按钮：绿色 check-circle
+  .ep-downloaded-btn {
+    background: transparent;
+    color: #27ae60;
+    opacity: 0.95;
+    padding: 8px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.15s;
+    flex-shrink: 0;
+    .svg-icon {
+      width: 18px;
+      height: 18px;
+    }
+    &:hover {
+      background: var(--color-secondary-bg-for-transparent);
+      // hover 时露出"删除提示"色（红）
+      color: #e74c3c;
+    }
+  }
+  // [B-33] 已收藏图标按钮：红心
+  .ep-fav-btn {
+    background: transparent;
+    color: #e74c3c;
+    opacity: 0.95;
+    padding: 8px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.15s;
+    flex-shrink: 0;
+    .svg-icon {
+      width: 18px;
+      height: 18px;
+    }
+    &:hover {
+      background: var(--color-secondary-bg-for-transparent);
+      opacity: 1;
+    }
   }
   .ep-main {
     flex: 1;
@@ -385,15 +864,21 @@ export default {
     display: flex;
     gap: 4px;
   }
-  // [C-4] 时长/剩余/已听完
+  // [C-4 改] 时长 / 听过X%（黄） / 已听完（绿）
   .ep-prog {
+    &.partial {
+      color: #e0a800; // 黄
+      opacity: 1;
+      font-weight: 600;
+    }
     &.done {
-      color: #27ae60;
+      color: #27ae60; // 绿
       opacity: 1;
       font-weight: 600;
     }
   }
-  // [S-3] 三点冒号按钮
+  // [S-3] play-circle + 三点冒号两按钮共用样式
+  .ep-play-btn,
   .ep-menu-btn {
     background: transparent;
     color: var(--color-text);
@@ -496,6 +981,13 @@ export default {
   &:hover {
     background: var(--color-secondary-bg-for-transparent);
   }
+  // [B-33] 删除下载项：红色警示
+  &.danger {
+    color: #e74c3c;
+    &:hover {
+      background: rgba(231, 76, 60, 0.12);
+    }
+  }
 }
 
 .btn-danger {
@@ -510,5 +1002,79 @@ export default {
   &:hover {
     transform: scale(1.04);
   }
+}
+
+// [B-34] 多选下载固定栏：钉在底部播放栏上方，随滚动固定
+.multi-dl-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 84px;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 14px 10px 18px;
+  border-radius: 14px;
+  background: var(--color-body-bg);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.26),
+    0 0 0 1px var(--color-secondary-bg-for-transparent);
+  .mdl-info {
+    font-size: 13px;
+    opacity: 0.75;
+    b {
+      color: var(--color-primary);
+      font-size: 15px;
+    }
+  }
+  .mdl-cancel {
+    background: transparent;
+    color: var(--color-text);
+    opacity: 0.6;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 8px;
+    &:hover {
+      opacity: 1;
+      background: var(--color-secondary-bg-for-transparent);
+    }
+  }
+  .mdl-go {
+    background: var(--color-primary);
+    color: var(--color-primary-bg);
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 8px 18px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: 0.15s;
+    .svg-icon {
+      width: 15px;
+      height: 15px;
+    }
+    &:hover {
+      transform: scale(1.04);
+    }
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+  }
+}
+// [B-34] 固定栏滑入动画
+.mdl-slide-enter-active,
+.mdl-slide-leave-active {
+  transition: opacity 0.2s, transform 0.2s;
+}
+.mdl-slide-enter,
+.mdl-slide-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(16px);
 }
 </style>

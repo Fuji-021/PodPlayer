@@ -13,6 +13,13 @@ const routes = [
       savePosition: true,
     },
   },
+  // [B-42] 发现页二级页（热门排行 / 播客寻宝）
+  {
+    path: '/discover/:type',
+    name: 'discover',
+    component: () => import('@/views/discoverList.vue'),
+    meta: { requireLogin: false },
+  },
   {
     path: '/login',
     name: 'login',
@@ -139,6 +146,27 @@ const routes = [
     path: '/me/favorites',
     name: 'favorites',
     component: () => import('@/views/favoritesList.vue'),
+    meta: { requireLogin: false },
+  },
+  // [B-33] 我的下载
+  {
+    path: '/me/downloads',
+    name: 'downloads',
+    component: () => import('@/views/downloadsList.vue'),
+    meta: { requireLogin: false },
+  },
+  // [B-37] 收听历史
+  {
+    path: '/me/history',
+    name: 'history',
+    component: () => import('@/views/historyList.vue'),
+    meta: { requireLogin: false },
+  },
+  // [B-37] 收听数据统计
+  {
+    path: '/me/stats',
+    name: 'stats',
+    component: () => import('@/views/statsPage.vue'),
     meta: { requireLogin: false },
   },
   {

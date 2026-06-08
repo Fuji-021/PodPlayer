@@ -2,15 +2,44 @@
   <div class="favorites-page">
     <h1>我的收藏</h1>
     <div v-if="!list.length" class="empty">还没有收藏的单集</div>
-    <div v-for="item in list" :key="item.id" class="row" @click="play(item)">
+    <div
+      v-for="item in list"
+      :key="item.id"
+      class="row"
+      @click="play(item)"
+      @contextmenu.prevent="openMenu($event, item)"
+    >
       <img class="cover" :src="item.coverUrl" @error="onCoverError" />
       <div class="meta">
         <div class="t">{{ item.title }}</div>
         <div class="s">{{ item.podcastTitle }}</div>
       </div>
-      <button class="unfav" @click.stop="unfav(item)">
+      <!-- [B-33] 专属页：单集右边只显示「已收藏」状态按钮（点击取消收藏） -->
+      <button class="unfav" title="取消收藏" @click.stop="unfav(item)">
         <svg-icon icon-class="heart-solid" />
       </button>
+    </div>
+
+    <!-- [B-33] 右键菜单（toggle：再次右键关闭） -->
+    <div
+      v-if="menu.open"
+      ref="menu"
+      class="ctx-menu"
+      :style="{ left: menu.x + 'px', top: menu.y + 'px' }"
+      @click.stop
+    >
+      <div class="ctx-item" @click="onMenuPlay">
+        <svg-icon icon-class="play-circle" />
+        <span>立即播放</span>
+      </div>
+      <div class="ctx-item" @click="onMenuQueue">
+        <svg-icon icon-class="layer-plus" />
+        <span>加入播放列表</span>
+      </div>
+      <div class="ctx-item danger" @click="onMenuUnfav">
+        <svg-icon icon-class="heart-crack" />
+        <span>取消收藏</span>
+      </div>
     </div>
   </div>
 </template>
@@ -23,7 +52,11 @@ export default {
   name: 'FavoritesList',
   components: { SvgIcon },
   data() {
-    return { list: [] };
+    return {
+      list: [],
+      menu: { open: false, x: 0, y: 0, target: null },
+      menuListener: null,
+    };
   },
   async created() {
     await this.reload();
@@ -31,9 +64,64 @@ export default {
   async activated() {
     await this.reload();
   },
+  beforeDestroy() {
+    this.closeMenu();
+  },
   methods: {
     async reload() {
       this.list = await getAllFavorites();
+    },
+    // [B-33] 右键菜单 toggle
+    openMenu(e, item) {
+      const isSame =
+        this.menu.open && this.menu.target && this.menu.target.id === item.id;
+      this.closeMenu();
+      if (isSame) return;
+      const w = 200;
+      const h = 160;
+      const x = Math.min(e.clientX, window.innerWidth - w - 10);
+      const y = Math.min(e.clientY, window.innerHeight - h - 10);
+      this.menu = { open: true, x, y, target: item };
+      this.$nextTick(() => {
+        this.menuListener = ev => {
+          const root = this.$refs.menu;
+          if (root && !root.contains(ev.target)) this.closeMenu();
+        };
+        document.addEventListener('click', this.menuListener);
+      });
+    },
+    closeMenu() {
+      this.menu.open = false;
+      this.menu.target = null;
+      if (this.menuListener) {
+        document.removeEventListener('click', this.menuListener);
+        this.menuListener = null;
+      }
+    },
+    onMenuPlay() {
+      const it = this.menu.target;
+      this.closeMenu();
+      if (it) this.play(it);
+    },
+    onMenuQueue() {
+      const it = this.menu.target;
+      this.closeMenu();
+      if (!it) return;
+      this.$store.dispatch('enqueueEpisode', {
+        id: it.id,
+        guid: it.id.split('::').pop(),
+        title: it.title,
+        audioUrl: it.audioUrl,
+        coverUrl: it.coverUrl,
+        duration: it.duration,
+        podcastId: it.podcastId,
+        podcastTitle: it.podcastTitle || '',
+      });
+    },
+    async onMenuUnfav() {
+      const it = this.menu.target;
+      this.closeMenu();
+      if (it) await this.unfav(it);
     },
     play(item) {
       const ep = {
@@ -135,6 +223,43 @@ h1 {
       width: 18px;
       height: 18px;
     }
+    &:hover {
+      background: rgba(231, 76, 60, 0.12);
+    }
+  }
+}
+
+// [B-33] 右键菜单
+.ctx-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 168px;
+  background: var(--color-body-bg);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2),
+    0 0 0 1px var(--color-secondary-bg-for-transparent);
+}
+.ctx-item {
+  padding: 9px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: 0.15s;
+  .svg-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+  &:hover {
+    background: var(--color-secondary-bg-for-transparent);
+  }
+  &.danger {
+    color: #e74c3c;
     &:hover {
       background: rgba(231, 76, 60, 0.12);
     }

@@ -44,20 +44,26 @@
       <div class="playing">
         <div class="container" @click.stop>
           <img
-            :src="currentTrack.al && currentTrack.al.picUrl | resizeImage(224)"
-            loading="lazy"
-            @click="goToAlbum"
+            class="cover-img"
+            :class="{ 'cover-loaded': coverLoaded }"
+            :src="coverSrc"
+            @load="coverLoaded = true"
+            @click="goToAlbumOrPodcast"
           />
           <div class="track-info" :title="audioSource">
             <!-- [播客改造] 单集名：超出容器宽度时 hover 跑马灯滚动；
                  内层 span 用 transform 平移实现，需配合 JS 检测溢出 -->
+            <!-- [B-31] 点击单集名：网易云 → 跳列表；播客 → 跳单集详情 -->
             <div
               ref="nameWrap"
               :class="[
                 'name',
-                { 'has-list': hasList(), marquee: nameOverflow },
+                {
+                  'has-list': hasList() || isPodcastTrack,
+                  marquee: nameOverflow,
+                },
               ]"
-              @click="hasList() && goToList()"
+              @click="onClickName"
               @mouseenter="checkNameOverflow"
             >
               <span ref="nameText" class="name-text">{{
@@ -65,14 +71,19 @@
               }}</span>
             </div>
             <!-- [播客改造] artist 行同时展示节目名和"已播/总时长"，时间字号与节目名一致 -->
+            <!-- [B-31] 点击节目名（播客）→ 跳节目详情 -->
             <div class="artist">
-              <span
-                v-for="(ar, index) in currentTrack.ar"
-                :key="ar.id"
-                @click="ar.id && goToArtist(ar.id)"
-              >
-                <span :class="{ ar: ar.id }"> {{ ar.name }} </span
-                ><span v-if="index !== currentTrack.ar.length - 1">, </span>
+              <!-- [B-34] 节目名可省略，时间进度 flex-shrink:0 永不截断 → 保证时间看全 -->
+              <span class="ar-names">
+                <span
+                  v-for="(ar, index) in currentTrack.ar"
+                  :key="ar.id"
+                  @click="onClickArtist(ar)"
+                >
+                  <span :class="{ ar: ar.id || isPodcastTrack }">
+                    {{ ar.name }} </span
+                  ><span v-if="index !== currentTrack.ar.length - 1">, </span>
+                </span>
               </span>
               <span v-if="currentTrack.name" class="time">
                 · {{ playedTimeText }} / {{ totalTimeText }}
@@ -93,7 +104,9 @@
             </button-icon>
           </div>
         </div>
-        <div class="blank"></div>
+        <!-- [B-36] 删掉 .playing 里的 blank：它和 container 都 flex-grow:1 平分左列，
+             导致 container 只占一半、右侧一大块空白。删后 container 撑满左列，
+             节目名+时间获得全部宽度，离三大金刚更近。 -->
       </div>
       <div class="middle-control-buttons">
         <div class="blank"></div>
@@ -163,16 +176,64 @@
               </div>
             </transition>
           </div>
-          <!-- [播客改造 A-7.9] 播放队列图标换成纯净 queue（去掉音乐符号，去音乐感） -->
-          <button-icon
-            :title="$t('player.nextUp')"
-            :class="{
-              active: $route.name === 'next',
-              disabled: player.isPersonalFM,
-            }"
-            @click.native="goToNextTracksPage"
-            ><svg-icon icon-class="queue"
-          /></button-icon>
+          <!-- [A-24] 播放队列按钮：弹原位小弹窗显示队列（非全屏） -->
+          <div ref="queueControl" class="queue-control" @click.stop>
+            <button-icon
+              :class="{ active: queuePanelOpen }"
+              @click.native="toggleQueuePanel"
+              ><svg-icon icon-class="queue"
+            /></button-icon>
+            <transition name="queue-pop">
+              <div v-if="queuePanelOpen" class="queue-panel" @click.stop>
+                <div class="qp-head">
+                  <span>播放列表 ({{ podcastQueue.length }})</span>
+                  <button
+                    v-if="podcastQueue.length"
+                    class="qp-clear"
+                    @click="clearQueue"
+                  >
+                    清空
+                  </button>
+                </div>
+                <div v-if="!podcastQueue.length" class="qp-empty">
+                  队列空空。在节目里加入单集后会出现在这里。
+                </div>
+                <div v-else class="qp-list">
+                  <div
+                    v-for="(item, idx) in podcastQueue.slice(0, 10)"
+                    :key="item.id"
+                    class="qp-item"
+                    :class="{ 'drag-over': dragOverIdx === idx }"
+                    draggable="true"
+                    @click="playFromQueue(item)"
+                    @dragstart="onQueueDragStart($event, idx)"
+                    @dragover.prevent="onQueueDragOver(idx)"
+                    @dragleave="onQueueDragLeave(idx)"
+                    @drop="onQueueDrop(idx)"
+                    @dragend="onQueueDragEnd"
+                  >
+                    <!-- [A-24 拖动] 左侧拖动点 -->
+                    <div class="qp-handle">⋮⋮</div>
+                    <img
+                      v-if="item.coverUrl"
+                      class="qp-cover"
+                      :src="item.coverUrl"
+                    />
+                    <div class="qp-meta">
+                      <div class="qp-title">{{ item.title }}</div>
+                      <div class="qp-sub">{{ item.podcastTitle }}</div>
+                    </div>
+                    <button class="qp-del" @click.stop="removeFromQueue(item)">
+                      ×
+                    </button>
+                  </div>
+                  <div v-if="podcastQueue.length > 10" class="qp-more">
+                    还有 {{ podcastQueue.length - 10 }} 项 …
+                  </div>
+                </div>
+              </div>
+            </transition>
+          </div>
           <button-icon
             :class="{
               active: player.repeatMode !== 'off',
@@ -275,10 +336,24 @@ export default {
       hoverX: 0,
       // [播客改造] 单集名是否溢出（决定是否启用跑马灯）
       nameOverflow: false,
+      // [B-36] 封面加载淡入：切歌时置 false，图片 @load 后 true → opacity 过渡
+      coverLoaded: false,
+      // [A-24] 播放队列弹窗
+      queuePanelOpen: false,
+      queueOutsideListener: null,
+      // [A-24 拖动] 排序状态
+      dragIdx: -1,
+      dragOverIdx: -1,
     };
   },
   computed: {
-    ...mapState(['player', 'settings', 'data', 'audioBuffering']),
+    ...mapState([
+      'player',
+      'settings',
+      'data',
+      'audioBuffering',
+      'podcastQueue',
+    ]),
     currentTrack() {
       return this.player.currentTrack;
     },
@@ -306,6 +381,24 @@ export default {
       return this.formatTrackTime(this.player.currentTrackDuration || 0);
     },
     // [bug 修复] 加载条起点 = 当前进度百分比
+    // [B-31] 当前 track 是否为播客单集（用于点击 name/artist/封面跳转）
+    isPodcastTrack() {
+      const t = this.player.currentTrack;
+      return !!(t && t.podcastEpisodeId);
+    },
+    // [B-36] 播放栏封面：播客用原 url（复用订阅页/节目页已下过的缓存，秒显；
+    // 第三方 CDN 不支持 ?param 缩放，加了反而 cache miss 重下大图），网易云走 resizeImage。
+    coverSrc() {
+      const url =
+        (this.currentTrack &&
+          this.currentTrack.al &&
+          this.currentTrack.al.picUrl) ||
+        '';
+      if (!url) return '';
+      if (this.isPodcastTrack) return url;
+      const https = url.slice(0, 5) !== 'https' ? 'https' + url.slice(4) : url;
+      return `${https}?param=224y224`;
+    },
     bufferingLeftPercent() {
       const dur = this.player.currentTrackDuration || 0;
       const p = this.player.progress || 0;
@@ -336,6 +429,21 @@ export default {
   mounted() {
     this.setupMediaControls();
     window.addEventListener('keydown', this.handleKeydown);
+    // [B-32] 单集名溢出检测：初次挂载 + 切歌 + 窗口缩放 都重新判断，
+    // 溢出则 nameOverflow=true → .marquee 自动跑马灯（不再依赖 hover）。
+    window.addEventListener('resize', this.checkNameOverflow);
+    this.$watch(
+      () => this.currentTrack && this.currentTrack.name,
+      () => this.checkNameOverflow()
+    );
+    // [B-36] 封面 url 变化时先置 loading 态，等新图 @load 再淡入
+    this.$watch(
+      () => this.coverSrc,
+      () => {
+        this.coverLoaded = false;
+      }
+    );
+    this.$nextTick(() => this.checkNameOverflow());
     // [播客改造 A-6] 从 player 状态恢复倍速（持久化由 store 的 Proxy 自动完成）
     if (this.player && typeof this.player.playbackRate === 'number') {
       this.playbackRate = this.player.playbackRate;
@@ -343,6 +451,7 @@ export default {
   },
   beforeDestroy() {
     window.removeEventListener('keydown', this.handleKeydown);
+    window.removeEventListener('resize', this.checkNameOverflow);
     // [播客改造 A-6] 卸载倍速面板的"点击外部关闭"监听
     this.closeRateMenu();
   },
@@ -469,6 +578,85 @@ export default {
         ? this.$router.go(-1)
         : this.$router.push({ name: 'next' });
     },
+    // [A-24] 队列弹窗控制
+    toggleQueuePanel() {
+      if (this.queuePanelOpen) {
+        this.closeQueuePanel();
+      } else {
+        this.openQueuePanel();
+      }
+    },
+    openQueuePanel() {
+      this.queuePanelOpen = true;
+      this.$nextTick(() => {
+        this.queueOutsideListener = ev => {
+          const root = this.$refs.queueControl;
+          if (root && !root.contains(ev.target)) this.closeQueuePanel();
+        };
+        document.addEventListener('mousedown', this.queueOutsideListener);
+      });
+    },
+    closeQueuePanel() {
+      this.queuePanelOpen = false;
+      if (this.queueOutsideListener) {
+        document.removeEventListener('mousedown', this.queueOutsideListener);
+        this.queueOutsideListener = null;
+      }
+    },
+    playFromQueue(item) {
+      // 点击就立即播放该集；从队列里删它（避免重复）
+      this.$store.commit('removeFromQueue', item.id);
+      this.player.playPodcastEpisode(
+        {
+          id: item.id,
+          guid: item.guid,
+          title: item.title,
+          audioUrl: item.audioUrl,
+          coverUrl: item.coverUrl,
+          duration: item.duration,
+          podcastId: item.podcastId,
+        },
+        item.podcastTitle || ''
+      );
+      this.closeQueuePanel();
+    },
+    removeFromQueue(item) {
+      this.$store.commit('removeFromQueue', item.id);
+    },
+    clearQueue() {
+      this.$store.commit('clearQueue');
+    },
+    // [A-24 拖动排序]
+    onQueueDragStart(e, idx) {
+      this.dragIdx = idx;
+      e.dataTransfer.effectAllowed = 'move';
+      try {
+        e.dataTransfer.setData('text/plain', String(idx));
+      } catch (_) {
+        /* ignore */
+      }
+    },
+    onQueueDragOver(idx) {
+      this.dragOverIdx = idx;
+    },
+    onQueueDragLeave(idx) {
+      if (this.dragOverIdx === idx) this.dragOverIdx = -1;
+    },
+    onQueueDrop(idx) {
+      if (this.dragIdx < 0 || this.dragIdx === idx) {
+        this.onQueueDragEnd();
+        return;
+      }
+      const list = [...this.podcastQueue];
+      const [moved] = list.splice(this.dragIdx, 1);
+      list.splice(idx, 0, moved);
+      this.$store.commit('setQueue', list);
+      this.onQueueDragEnd();
+    },
+    onQueueDragEnd() {
+      this.dragIdx = -1;
+      this.dragOverIdx = -1;
+    },
     formatTrackTime(value) {
       return formatTrackTime(value);
     },
@@ -484,6 +672,56 @@ export default {
     },
     goToArtist(id) {
       this.$router.push({ path: '/artist/' + id });
+    },
+    // [B-31] 点击播放栏：单集名 / 节目名 / 封面 — 播客优先
+    onClickName() {
+      if (this.isPodcastTrack) {
+        this.goToEpisodeDetail();
+        return;
+      }
+      if (this.hasList()) this.goToList();
+    },
+    onClickArtist(ar) {
+      if (this.isPodcastTrack) {
+        this.goToPodcastDetail();
+        return;
+      }
+      if (ar.id) this.goToArtist(ar.id);
+    },
+    goToAlbumOrPodcast() {
+      if (this.isPodcastTrack) {
+        this.goToPodcastDetail();
+        return;
+      }
+      this.goToAlbum();
+    },
+    goToPodcastDetail() {
+      const t = this.player.currentTrack;
+      const epId = t && t.podcastEpisodeId;
+      if (!epId) return;
+      // episodeId 格式：`${feedUrl}::${guid}`
+      const idx = epId.indexOf('::');
+      const feedUrl = idx > 0 ? epId.slice(0, idx) : epId;
+      this.$router.push({
+        name: 'podcastDetail',
+        params: { feedUrlEncoded: encodeURIComponent(feedUrl) },
+      });
+    },
+    goToEpisodeDetail() {
+      const t = this.player.currentTrack;
+      const epId = t && t.podcastEpisodeId;
+      if (!epId) return;
+      const idx = epId.indexOf('::');
+      if (idx <= 0) return;
+      const feedUrl = epId.slice(0, idx);
+      const guid = epId.slice(idx + 2);
+      this.$router.push({
+        name: 'episodeDetail',
+        params: {
+          feedUrlEncoded: encodeURIComponent(feedUrl),
+          guidEncoded: encodeURIComponent(guid),
+        },
+      });
     },
     moveToFMTrash() {
       this.player.moveToFMTrash();
@@ -540,15 +778,19 @@ export default {
 <style lang="scss" scoped>
 .player {
   position: fixed;
+  // [B-30 bar 修] 之前为了底部 Win32 resize 边留 4px 透明，
+  // 但用户反馈"中间能看到背景"——左右上下都有 4px 缝。改成贴底贴左右，
+  // 失去底部 resize 是 OK 的（Spotify / Apple Music 桌面端也都贴底）。
+  // 左右上三边和四角仍可 resize。
   bottom: 0;
   right: 0;
   left: 0;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-around;
   height: 64px;
   backdrop-filter: saturate(180%) blur(30px);
-  // background-color: rgba(255, 255, 255, 0.86);
   background-color: var(--color-navbar-bg);
   z-index: 100;
 }
@@ -573,32 +815,35 @@ export default {
 .progress-bar ::v-deep .vue-slider:active .vue-slider-dot-handle {
   visibility: visible;
 }
-// [C-14 / bug 修复] 缓冲条：从 :style="left=当前进度%" 起点开始，
-// 向右一段距离循环移动，营造"正在加载"感
+// [C-14 / bug 修复] 缓冲条：从当前进度位置一直延伸到最右，
+// 内部用 gradient + background-position 流动，看起来像"水流向右"
 .buffering-bar {
   position: absolute;
   top: 50%;
+  right: 0;
+  transform: translateY(-50%);
   height: 2px;
-  width: 80px;
-  background: var(--color-primary);
-  border-radius: 2px;
   pointer-events: none;
   z-index: 5;
-  animation: bufferingMove 1.2s ease-in-out infinite;
-  transform-origin: left center;
+  // [B-35] 高光条占 50% 宽，从右外(150%)平移到左外(-50%)，两端都在视野外
+  // → 跳变不可见，看起来是「一直循环」的单向流动（修掉原来来回不衔接的观感）。
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--color-primary) 50%,
+    transparent 100%
+  );
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: bufferingFlow 1.2s linear infinite;
+  opacity: 0.85;
 }
-@keyframes bufferingMove {
+@keyframes bufferingFlow {
   0% {
-    transform: translate(0, -50%) scaleX(0.3);
-    opacity: 0.45;
-  }
-  50% {
-    transform: translate(40px, -50%) scaleX(1);
-    opacity: 0.9;
+    background-position: 150% 0;
   }
   100% {
-    transform: translate(90px, -50%) scaleX(0.3);
-    opacity: 0.45;
+    background-position: -50% 0;
   }
 }
 
@@ -623,7 +868,10 @@ export default {
 
 .controls {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  // [B-32] 中间列 auto = 三大金刚自然宽度，左右 minmax(0,1fr) 等分剩余空间。
+  // 因左右 fr 相等 → 中间块恒居容器正中 = 窗口正中（锚点，不随缩放漂移）。
+  // minmax(0,...) 的 min=0 让左右内容超长时收缩/省略，而不是撑大列把中间挤偏。
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   height: 100%;
   // [播客改造] 收紧两边内边距，全屏时不再"显得太空"；
   // 自适应 clamp：小屏 16px，大屏 32px，中等屏在两者之间
@@ -636,19 +884,32 @@ export default {
 
 .playing {
   display: flex;
+  min-width: 0; // [B-32] 允许左列收缩 → 长名字触发省略/跑马灯而非撑破布局
 }
 
 .playing .container {
   display: flex;
   align-items: center;
+  min-width: 0;
+  flex: 1;
   img {
     height: 46px;
+    width: 46px;
+    object-fit: cover;
     border-radius: 5px;
     box-shadow: 0 6px 8px -2px rgba(0, 0, 0, 0.16);
     cursor: pointer;
     user-select: none;
+    // [B-36] 封面淡入：默认半透明，加载完 .cover-loaded → opacity 1，避免"生硬蹦出"
+    opacity: 0.35;
+    transition: opacity 0.28s ease;
+    &.cover-loaded {
+      opacity: 1;
+    }
   }
   .track-info {
+    flex: 1;
+    min-width: 0; // [B-32] 配合 name 的 overflow:hidden 让长名字省略 + 跑马灯
     height: 46px;
     margin-left: 12px;
     display: flex;
@@ -669,33 +930,32 @@ export default {
         max-width: 100%;
         vertical-align: middle;
       }
-      // [播客改造] 跑马灯：仅在 hover 且文本溢出时启用
+      // [B-33] 跑马灯：仅 hover 且溢出时启用；单向 linear 循环（非来回往返）。
+      // 平时（非 hover）溢出名字显示省略号；能完整显示的根本不会有 .marquee class。
       &.marquee:hover .name-text {
-        animation: marquee 12s linear infinite;
+        animation: marquee 9s linear infinite;
         max-width: none;
         overflow: visible;
-        padding-right: 40px;
+        padding-right: 48px; // 一轮结束与下一轮开始之间的空隙
       }
     }
     @keyframes marquee {
-      0% {
+      0%,
+      8% {
         transform: translateX(0);
-      }
-      15% {
-        transform: translateX(0);
-      }
-      90% {
-        transform: translateX(calc(-100% + 100px));
       }
       100% {
-        transform: translateX(calc(-100% + 100px));
+        transform: translateX(-100%);
       }
     }
     // [播客改造] artist 行里时间显示样式（字号与节目名/作者一致 = 12px）
+    // [B-34] flex-shrink:0 + nowrap → 时间进度永远完整显示，不被节目名挤掉
     .time {
       font-variant-numeric: tabular-nums;
       opacity: 0.8;
       margin-left: 4px;
+      flex-shrink: 0;
+      white-space: nowrap;
     }
     .has-list {
       cursor: pointer;
@@ -703,15 +963,20 @@ export default {
         text-decoration: underline;
       }
     }
+    // [B-34] artist 改 flex：节目名可省略号，时间不缩。原来 line-clamp 整行截断会把时间也切掉。
     .artist {
       font-size: 12px;
       opacity: 0.58;
       color: var(--color-text);
-      display: -webkit-box;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 1;
+      display: flex;
+      align-items: center;
       overflow: hidden;
-      word-break: break-all;
+      .ar-names {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
       span.ar {
         cursor: pointer;
         &:hover {
@@ -789,6 +1054,151 @@ export default {
   }
   &:active {
     transform: unset;
+  }
+}
+
+// [A-24] 播放队列：原位小弹窗（贴底部播放条上方）
+.queue-control {
+  position: relative;
+}
+// [A-24 改] 从下方往上展开 + 以图标为视觉锚点（origin: 78% 100%）
+.queue-pop-enter-active,
+.queue-pop-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.queue-pop-enter,
+.queue-pop-leave-to {
+  opacity: 0;
+  transform: translateX(-78%) translateY(14px) scale(0.92);
+}
+.queue-panel {
+  position: absolute;
+  // [B-37] 修：面板用 body-bg 深底，但没显式设字色 → 文字继承默认黑，深色模式下看不清。
+  color: var(--color-text);
+  bottom: calc(100% + 14px);
+  // [A-24 改] 大致以图标为中心展开（图标在 panel 右下角偏 22% 位置）
+  left: 50%;
+  transform: translateX(-78%);
+  transform-origin: 78% 100%;
+  width: 360px;
+  max-height: 460px;
+  background: var(--color-body-bg);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22),
+    0 0 0 1px var(--color-secondary-bg-for-transparent);
+  z-index: 110;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  .qp-head {
+    padding: 12px 16px;
+    font-weight: 700;
+    font-size: 14px;
+    border-bottom: 1px solid var(--color-secondary-bg-for-transparent);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .qp-clear {
+    background: transparent;
+    color: var(--color-text);
+    opacity: 0.5;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    &:hover {
+      opacity: 1;
+      color: #e74c3c;
+    }
+  }
+  .qp-empty {
+    padding: 32px 16px;
+    text-align: center;
+    font-size: 12px;
+    opacity: 0.5;
+  }
+  .qp-list {
+    overflow-y: auto;
+    max-height: 380px;
+  }
+  .qp-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--color-secondary-bg-for-transparent);
+    transition: 0.12s;
+    &:hover {
+      background: var(--color-secondary-bg-for-transparent);
+    }
+    &.drag-over {
+      background: var(--color-primary-bg-for-transparent);
+      box-shadow: inset 0 2px 0 var(--color-primary);
+    }
+    .qp-handle {
+      cursor: grab;
+      opacity: 0.35;
+      font-size: 14px;
+      line-height: 1;
+      letter-spacing: -2px;
+      user-select: none;
+      padding: 2px 4px;
+      &:hover {
+        opacity: 0.85;
+      }
+      &:active {
+        cursor: grabbing;
+      }
+    }
+    .qp-cover {
+      width: 38px;
+      height: 38px;
+      border-radius: 6px;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+    .qp-meta {
+      flex: 1;
+      min-width: 0;
+    }
+    .qp-title {
+      font-size: 13px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .qp-sub {
+      font-size: 11px;
+      opacity: 0.55;
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .qp-del {
+      background: transparent;
+      color: var(--color-text);
+      opacity: 0.4;
+      font-size: 16px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      cursor: pointer;
+      flex-shrink: 0;
+      &:hover {
+        opacity: 1;
+        color: #e74c3c;
+      }
+    }
+  }
+  .qp-more {
+    padding: 8px 16px;
+    text-align: center;
+    font-size: 11px;
+    opacity: 0.45;
   }
 }
 

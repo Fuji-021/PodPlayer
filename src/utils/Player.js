@@ -9,6 +9,8 @@ import { isAccountLoggedIn } from '@/utils/auth';
 import { cacheTrackSource, getTrackSource } from '@/utils/db';
 // [播客改造 S-1] 单集进度按集保存：用 Dexie 的 episodeProgress 表
 import { saveEpisodeProgress, getEpisodeProgress } from '@/utils/podcast/db';
+// [播客改造] 真实收听统计
+import { tickListen, resetEpisodeListening } from '@/utils/podcast/listening';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
 import { Howl, Howler } from 'howler';
 import shuffle from 'lodash/shuffle';
@@ -44,9 +46,15 @@ const excludeSaveKeys = [
 ];
 
 function setTitle(track) {
-  document.title = track
-    ? `${track.name} · ${track.ar[0].name} - YesPlayMusic`
-    : 'YesPlayMusic';
+  // [B-32] 播客单集：标题栏只显示单集名（不带节目名/app 后缀，
+  // 标题栏左侧已有 PodPlayer 品牌区，无需重复）。网易云保持原格式。
+  if (!track) {
+    document.title = 'YesPlayMusic';
+  } else if (track.podcastEpisodeId) {
+    document.title = track.name;
+  } else {
+    document.title = `${track.name} · ${track.ar[0].name} - YesPlayMusic`;
+  }
   if (isCreateTray) {
     ipcRenderer?.send('updateTrayTooltip', document.title);
   }
@@ -290,15 +298,12 @@ export default class {
     // 这个定时器会覆盖之前改变的值，是bug
     setInterval(() => {
       if (this._howler === null) return;
-      // [bug 修复] howler 没 loaded 时 seek() 返回 0，会覆盖 _progress 让 UI 跳到 0。
-      // 同时 seek() 期间瞬态读到 0/NaN 也会污染 UI；只在 loaded 才更新。
       if (this._howler.state() !== 'loaded') return;
       const cur = this._howler.seek();
       if (typeof cur === 'number' && cur >= 0) {
         this._progress = cur;
       }
       localStorage.setItem('playerCurrentTrackTime', this._progress);
-      // [播客改造 S-1] 播客单集进度按集保存（Dexie put 是非阻塞 async）
       const t = this._currentTrack;
       if (
         t &&
@@ -307,6 +312,46 @@ export default class {
         this._progress > 0
       ) {
         saveEpisodeProgress(t.podcastEpisodeId, Math.floor(this._progress));
+
+        // [播客改造] 真实收听统计：每秒 tick
+        if (this._playing) {
+          const sec = Math.floor(this._progress);
+          const totalSec = Math.floor((t.dt || 0) / 1000);
+          if (totalSec > 0) {
+            const lastSec = this._lastListenSec;
+            const jump = lastSec >= 0 ? Math.abs(sec - lastSec) : 0;
+            // 阈值 = max(45, totalSec * 30%)。前进 30 / 后退 15 总在阈值内。
+            const bigJumpTh = Math.max(45, Math.floor(totalSec * 0.3));
+            const isBigJump = lastSec >= 0 && jump > bigJumpTh;
+            const rate = this._playbackRate || 1;
+            // [B-31] tickListen 返回 row 后，按"5% 步进 或 completed 变化"广播给 UI
+            tickListen(t.podcastEpisodeId, sec, totalSec, {
+              recordBit: !isBigJump,
+              wallDeltaSec: 1, // 真实流逝 1 秒
+              contentDeltaSec: isBigJump ? 0 : rate, // 节目时长域：按倍速
+            })
+              .then(row => {
+                if (!row) return;
+                const stepNow = Math.floor(
+                  ((row.listenedSec || 0) / Math.max(1, row.totalSec)) * 20
+                ); // 5% = 1/20
+                const lastStep = this._lastListenStep ?? -1;
+                const lastCompleted = this._lastListenCompleted || false;
+                if (stepNow !== lastStep || row.completed !== lastCompleted) {
+                  this._lastListenStep = stepNow;
+                  this._lastListenCompleted = row.completed;
+                  store.commit('bumpListenTick', {
+                    episodeId: t.podcastEpisodeId,
+                    listenedSec: row.listenedSec || 0,
+                    totalSec: row.totalSec || 0,
+                    completed: !!row.completed,
+                  });
+                }
+              })
+              .catch(() => {});
+            this._lastListenSec = sec;
+          }
+        }
       }
       if (isCreateMpris) {
         ipcRenderer?.send('playerCurrentTrackTime', this._progress);
@@ -593,7 +638,22 @@ export default class {
   }
   _getAudioSource(track) {
     // [播客改造] 播客单集自带音频直链，跳过网易云查询链。
+    // [B-35] 已下载 → 同步从 store.podcastDownloads.pathMap 取本地路径返 file://。
+    //   原来用动态 import('@/utils/db') 异步查，不可靠（顶部 Dexie get 报错时回退在线，
+    //   而在线 url 在渲染进程走 Chromium 代理被 ERR_CONNECTION_CLOSED 拦 → 卡死）。
+    //   file:// 经实测可正常播放本地文件，pathMap 在启动/下载完成时已就绪。
     if (track && track.podcastAudioUrl) {
+      if (track.podcastEpisodeId) {
+        const pathMap =
+          (store.state.podcastDownloads &&
+            store.state.podcastDownloads.pathMap) ||
+          {};
+        const fp = pathMap[track.podcastEpisodeId];
+        if (fp) {
+          const norm = String(fp).replace(/\\/g, '/').replace(/^\/+/, '');
+          return Promise.resolve('file:///' + norm);
+        }
+      }
       return Promise.resolve(track.podcastAudioUrl);
     }
     return this._getAudioSourceFromCache(String(track.id))
@@ -803,9 +863,22 @@ export default class {
         saveEpisodeProgress(t.podcastEpisodeId, 0).catch(() => {});
       }
       this._replaceCurrentTrack(this.currentTrackID);
-    } else {
-      this._playNextTrack(this.isPersonalFM);
+      return;
     }
+    // [播客改造 A-24] 播客播放结束 → 优先从队列取下一首
+    const cur = this._currentTrack;
+    if (cur && cur.podcastEpisodeId) {
+      const queue = store.state.podcastQueue;
+      if (queue && queue.length > 0) {
+        const next = queue[0];
+        store.commit('removeFromQueue', next.id);
+        // [A-24 改] 标记自然播完，让 playPodcastEpisode 不再把旧曲入队
+        this._justEnded = true;
+        this.playPodcastEpisode(next, next.podcastTitle || '');
+        return;
+      }
+    }
+    this._playNextTrack(this.isPersonalFM);
   }
   _loadPersonalFMNextTrack() {
     if (this._personalFMNextLoading) {
@@ -998,6 +1071,14 @@ export default class {
     });
   }
   playOrPause() {
+    // [B-31 bug 修] 应用刚启动时 _currentTrack 来自 localStorage，但 _howler 尚未实例化
+    //（_loadCurrentPodcastEpisode 是 autoplay=false 时只 setup 不 load）。
+    // 用户点 bar 上的 play 按钮 → this._howler?.play() 静默失败，看起来"没反应"。
+    // 这里检测：若是播客 track 且 howler 缺失 → 主动 load + autoplay。
+    if (!this._howler && this._currentTrack?.podcastEpisodeId) {
+      this._loadCurrentPodcastEpisode(true).catch(() => {});
+      return;
+    }
     if (this._howler?.playing()) {
       this.pause();
     } else {
@@ -1161,14 +1242,40 @@ export default class {
       store.dispatch('showToast', '该单集没有音频地址');
       return;
     }
-    // [播客改造 bug] 切换前强制把旧曲的当前进度存到 episodeProgress，
-    // 避免用户拖动后立刻切，1s setInterval 窗口内丢失。
+    // [A-24 改] 切换前：旧曲（如果未播完）放回队列头部，下次还能播
+    // _justEnded=true 表示当前是 onend 自动续播，旧曲已播完，不入队
+    const justEnded = this._justEnded;
+    this._justEnded = false;
     const oldTrack = this._currentTrack;
     if (oldTrack && oldTrack.podcastEpisodeId && this._howler) {
       const curPos = Math.floor(this._howler.seek() || 0);
       if (curPos > 0) {
         saveEpisodeProgress(oldTrack.podcastEpisodeId, curPos);
       }
+      const dur = (oldTrack.dt || 0) / 1000;
+      // 切换到不同 episode 且旧曲没播完 → 入队保留
+      if (
+        !justEnded &&
+        oldTrack.podcastEpisodeId !== episode.id &&
+        dur > 0 &&
+        curPos > 0 &&
+        curPos < dur - 30
+      ) {
+        store.commit('enqueueEpisodeAtFront', {
+          id: oldTrack.podcastEpisodeId,
+          guid: (oldTrack.podcastEpisodeId || '').split('::').pop() || '',
+          title: oldTrack.name || '',
+          audioUrl: oldTrack.podcastAudioUrl || '',
+          coverUrl: (oldTrack.al && oldTrack.al.picUrl) || '',
+          duration: Math.floor(dur),
+          podcastId: (oldTrack.al && oldTrack.al.id) || '',
+          podcastTitle: (oldTrack.al && oldTrack.al.name) || '',
+        });
+      }
+    }
+    // 如果新曲已在队列里，先移除（避免重复）
+    if (episode.id) {
+      store.commit('removeFromQueue', episode.id);
     }
     const track = {
       // 用一个不会与网易云 id 冲突的字符串 id
@@ -1228,6 +1335,20 @@ export default class {
     } catch (e) {
       console.warn('[播客 S-1] 读取单集进度失败：', e);
     }
+    // [S 级 bug 修] 已听完的单集再点播放会 seek 到尾立刻 onend → 跳下一首。
+    // 检查进度是否接近结尾，若是清零让它从 0 开始；同时清掉 listenStats 的 bits
+    // （totalPlayWallSec 保留，累计总收听时长不清零）。
+    const trackDurSec = Math.floor((track.dt || 0) / 1000);
+    if (trackDurSec > 0 && savedPos > trackDurSec - 30) {
+      savedPos = 0;
+      saveEpisodeProgress(track.podcastEpisodeId, 0).catch(() => {});
+      resetEpisodeListening(track.podcastEpisodeId).catch(() => {});
+    }
+    // 每次切到新单集，重置 listening tick 的 lastSec（让首秒不会被错判为跳跃）
+    this._lastListenSec = -1;
+    // [B-31] 切集时重置广播缓存（让 5% 步进 / completed 在新集第一次 tick 就能触发广播）
+    this._lastListenStep = -1;
+    this._lastListenCompleted = false;
 
     // [S1 修复 bug-B] seek 逻辑下沉到 _playAudioSource 内部，
     // 保证注册在**新** howler 上（之前因为竞争注册到旧 howler，永远不触发）

@@ -136,3 +136,15 @@ export function sanitizeHtml(html) {
   Array.from(body.childNodes).forEach(n => cleanNode(n));
   return body.innerHTML;
 }
+
+/**
+ * [B-33] 把 HTML 转成纯文本：用于节目简介等只需一段预览、不需要富文本的小区域。
+ * 之前节目详情页直接 {{ description }} 文本插值，含 <p style=...> 的 RSS 描述会把
+ * 标签源码当文字显示（看起来像"乱码"）。这里用 DOMParser 取 textContent 彻底去标签，
+ * 同时把 &amp; &lt; 等 HTML 实体正确解码、压缩多余空白。
+ */
+export function stripHtmlToText(html) {
+  if (!html) return '';
+  const doc = new DOMParser().parseFromString(String(html), 'text/html');
+  return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
+}

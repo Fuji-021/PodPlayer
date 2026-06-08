@@ -69,6 +69,24 @@ setTimeout(() => {
   }
 }, 800);
 
+// [B-31] 注册下载 IPC 监听 + 加载已下载列表灌入 store
+import {
+  registerDownloadListeners,
+  loadAllDownloads,
+} from '@/utils/podcast/downloads';
+registerDownloadListeners();
+loadAllDownloads()
+  .then(rows => {
+    // [B-35] 灌入 { id, filePath }，让 pathMap 就绪 → Player 能同步取 file:// 离线播放
+    store.commit(
+      'setDownloadedEpisodes',
+      rows
+        .filter(r => r && r.status === 'done')
+        .map(r => ({ id: r.id, filePath: r.filePath }))
+    );
+  })
+  .catch(() => {});
+
 new Vue({
   i18n,
   store,

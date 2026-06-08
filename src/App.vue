@@ -112,7 +112,9 @@ export default {
 <style lang="scss">
 #app {
   width: 100%;
-  transition: all 0.4s;
+  // [B-33] 只过渡主题色，不用 transition: all——否则窗口 resize 时宽/高也被动画化，
+  // 内容滞后于窗口边缘 → 露出底色"黑边"，非常割裂。这是缩放不丝滑的主因。
+  transition: background-color 0.4s, color 0.4s;
 }
 
 main {
@@ -122,15 +124,13 @@ main {
   right: 0;
   left: 0;
   overflow: auto;
-  padding: 64px 10vw 96px 10vw;
+  // [B-33] 内容区铺满主题底色：resize 时第一时间用 body bg 填充，减轻"黑边"观感。
+  background-color: var(--color-body-bg);
+  // [B-33] 边距单位制：封面 grid gap=24px=1 单位；左右边距 2~3 单位（48~72px）自适应。
+  // clamp 让默认窗口≈2 单位、大屏最大化≈3 单位平滑过渡（替代原 10vw/5vw 太空旷）。
+  padding: 64px clamp(48px, 4vw, 72px) 96px;
   box-sizing: border-box;
   scrollbar-width: none; // firefox
-}
-
-@media (max-width: 1336px) {
-  main {
-    padding: 64px 5vw 96px 5vw;
-  }
 }
 
 main::-webkit-scrollbar {

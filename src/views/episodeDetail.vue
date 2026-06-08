@@ -17,7 +17,9 @@
           <span v-if="episode.duration"
             >· {{ formatDuration(episode.duration) }}</span
           >
-          <span v-if="progressLabel" class="prog">· {{ progressLabel }}</span>
+          <span v-if="progressLabel" class="prog" :class="progressLabelClass"
+            >· {{ progressLabel }}</span
+          >
         </div>
         <div class="actions">
           <!-- [S-3] 主播放 button：play-circle 大按钮 -->
@@ -32,8 +34,17 @@
           <button class="mini-btn" @click="onQueue">
             <svg-icon icon-class="layer-plus" />
           </button>
-          <button class="mini-btn" @click="onDownload">
-            <svg-icon icon-class="download" />
+          <!-- [B-31] 下载按钮：未下载 → download；下载中 → 进度%；已下载 → check-circle（点击删除） -->
+          <button
+            class="mini-btn"
+            :class="{ downloaded: isDownloaded, downloading: isDownloading }"
+            :title="downloadBtnTitle"
+            @click="onDownload"
+          >
+            <svg-icon :icon-class="downloadIcon" />
+            <span v-if="isDownloading" class="dl-pct">{{
+              downloadPercentText
+            }}</span>
           </button>
           <a
             v-if="episode.link"
@@ -44,6 +55,30 @@
           >
             原文链接
           </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- [B-31] 删除下载确认弹窗 -->
+    <div
+      v-if="showDeleteDlConfirm"
+      class="dialog-mask"
+      @click.self="showDeleteDlConfirm = false"
+    >
+      <div class="confirm-dialog">
+        <div class="title">删除下载</div>
+        <div class="msg">
+          确定要删除已下载的
+          <b>"{{ episode && episode.title }}"</b>
+          吗？<br />本地音频文件会被删除，单集听过的进度不会被删除。
+        </div>
+        <div class="actions">
+          <button class="btn-secondary" @click="showDeleteDlConfirm = false">
+            取消
+          </button>
+          <button class="btn-danger" @click="confirmDeleteDownload">
+            确定删除
+          </button>
         </div>
       </div>
     </div>
@@ -59,6 +94,15 @@
 
 <script>
 import { getPodcast, getEpisode, getEpisodeProgress } from '@/utils/podcast/db';
+import {
+  getListenStats,
+  listenedPercentStepped,
+} from '@/utils/podcast/listening';
+import {
+  startDownload,
+  cancelDownload,
+  removeDownload,
+} from '@/utils/podcast/downloads';
 import { sanitizeHtml } from '@/utils/podcast/sanitizeHtml';
 import SvgIcon from '@/components/SvgIcon.vue';
 
@@ -70,6 +114,9 @@ export default {
       podcast: null,
       episode: null,
       progressSec: 0,
+      listenStats: null,
+      // [B-31] 删除下载确认弹窗
+      showDeleteDlConfirm: false,
     };
   },
   computed: {
@@ -87,11 +134,18 @@ export default {
       return sanitizeHtml(raw);
     },
     progressLabel() {
+      if (this.listenStats && this.listenStats.completed) return '已听完';
+      const pct = listenedPercentStepped(this.listenStats);
+      if (pct >= 5) return `听过 ${pct}%`;
       const total = (this.episode && this.episode.duration) || 0;
       const listened = this.progressSec || 0;
       if (total <= 0 || listened <= 30) return '';
-      if (listened >= total - 30) return '已听完';
       return `剩余 ${this.formatDuration(total - listened)}`;
+    },
+    progressLabelClass() {
+      if (this.listenStats && this.listenStats.completed) return 'done';
+      if (listenedPercentStepped(this.listenStats) >= 5) return 'partial';
+      return '';
     },
     resumeAvailable() {
       return (
@@ -99,6 +153,44 @@ export default {
         this.episode &&
         this.progressSec < (this.episode.duration || Infinity) - 30
       );
+    },
+    // [B-31] 下载状态
+    isDownloaded() {
+      if (!this.episode) return false;
+      const ids =
+        (this.$store.state.podcastDownloads &&
+          this.$store.state.podcastDownloads.doneIds) ||
+        [];
+      return ids.includes(this.episode.id);
+    },
+    isDownloading() {
+      return this.downloadProgressRaw !== null;
+    },
+    downloadProgressRaw() {
+      if (!this.episode) return null;
+      const map =
+        (this.$store.state.podcastDownloads &&
+          this.$store.state.podcastDownloads.progressMap) ||
+        {};
+      const p = map[this.episode.id];
+      if (!p || p.status !== 'downloading') return null;
+      return p;
+    },
+    downloadPercentText() {
+      const p = this.downloadProgressRaw;
+      if (!p) return '';
+      if (!p.bytesTotal) return '…';
+      const pct = Math.min(99, (p.bytesDone / p.bytesTotal) * 100);
+      return Math.floor(pct) + '%';
+    },
+    downloadIcon() {
+      if (this.isDownloaded) return 'check-circle';
+      return 'download';
+    },
+    downloadBtnTitle() {
+      if (this.isDownloaded) return '已下载（点击删除）';
+      if (this.isDownloading) return '下载中（点击取消）';
+      return '下载';
     },
     isFav() {
       if (!this.episode) return false;
@@ -116,6 +208,15 @@ export default {
         if (v) this.load();
       },
     },
+    // [B-31] 监听播放器广播：当前显示的这一集发生 5%/completed 变化 → 重读 listenStats
+    '$store.state.podcastListening.listenTick'() {
+      const pl = this.$store.state.podcastListening;
+      if (pl && pl.episodeId && pl.episodeId === this.episodeId) {
+        getListenStats(this.episodeId)
+          .then(s => (this.listenStats = s))
+          .catch(() => {});
+      }
+    },
   },
   methods: {
     async load() {
@@ -127,6 +228,7 @@ export default {
       this.podcast = await getPodcast(this.feedUrl);
       const p = await getEpisodeProgress(this.episodeId).catch(() => null);
       this.progressSec = (p && p.position) || 0;
+      this.listenStats = await getListenStats(this.episodeId).catch(() => null);
     },
     play() {
       const title = (this.podcast && this.podcast.title) || '';
@@ -147,10 +249,30 @@ export default {
       this.$store.dispatch('togglePodcastFavorite', track);
     },
     onQueue() {
-      this.$store.dispatch('showToast', '播放列表功能即将上线');
+      if (!this.episode) return;
+      this.$store.dispatch('enqueueEpisode', {
+        ...this.episode,
+        podcastTitle: this.podcast ? this.podcast.title : '',
+      });
     },
+    // [B-31] 下载按钮三态：未下载 → 启动；下载中 → 取消；已下载 → 弹删除确认
     onDownload() {
-      this.$store.dispatch('showToast', '下载功能即将上线');
+      if (!this.episode) return;
+      if (this.isDownloaded) {
+        this.showDeleteDlConfirm = true;
+        return;
+      }
+      if (this.isDownloading) {
+        cancelDownload(this.episode.id);
+        return;
+      }
+      startDownload(this.episode);
+    },
+    async confirmDeleteDownload() {
+      this.showDeleteDlConfirm = false;
+      if (!this.episode) return;
+      await removeDownload(this.episode.id);
+      this.$store.dispatch('showToast', '已删除下载');
     },
     goPodcast() {
       this.$router.push({
@@ -231,6 +353,12 @@ export default {
       .prog {
         color: var(--color-primary);
         opacity: 1;
+        &.partial {
+          color: #e0a800;
+        }
+        &.done {
+          color: #27ae60;
+        }
       }
     }
     .actions {
@@ -293,6 +421,89 @@ export default {
   &.favorited {
     opacity: 1;
     color: #e74c3c;
+  }
+  // [B-31] 下载三态
+  &.downloaded {
+    opacity: 1;
+    color: #27ae60;
+    border-radius: 14px;
+    &:hover {
+      color: #e74c3c;
+    }
+  }
+  &.downloading {
+    opacity: 1;
+    color: var(--color-primary);
+    border-radius: 14px;
+    padding: 6px 10px;
+    gap: 4px;
+    .dl-pct {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+  }
+}
+
+// [B-31] 与 podcastDetail 共用的中央确认弹窗样式
+.dialog-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.confirm-dialog {
+  background: var(--color-body-bg);
+  color: var(--color-text);
+  border-radius: 14px;
+  padding: 24px 26px;
+  min-width: 360px;
+  max-width: 440px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
+  .title {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+  .msg {
+    font-size: 14px;
+    line-height: 1.6;
+    opacity: 0.85;
+    margin-bottom: 18px;
+  }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+}
+.btn-secondary {
+  background: var(--color-secondary-bg);
+  color: var(--color-text);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: 0.15s;
+  &:hover {
+    background: var(--color-primary-bg-for-transparent);
+  }
+}
+.btn-danger {
+  background: #e74c3c;
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: 0.15s;
+  &:hover {
+    transform: scale(1.04);
   }
 }
 

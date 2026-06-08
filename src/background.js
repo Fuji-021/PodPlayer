@@ -22,6 +22,8 @@ import { startNeteaseMusicApi } from './electron/services';
 import { initIpcMain } from './electron/ipcMain.js';
 // [播客改造] 主进程 RSS/OPML 抓取，绕开渲染进程 CORS 限制。
 import { registerPodcastIpc } from './electron/podcastFetch';
+import { registerPodcastDownloadIpc } from './electron/podcastDownload';
+import { registerPodcastDiscoverIpc } from './electron/podcastDiscover';
 import { createMenu } from './electron/menu';
 import { createTray } from '@/electron/tray';
 import { createTouchBar } from './electron/touchBar';
@@ -413,6 +415,10 @@ class Background {
 
       // [播客改造] 注册 podcast 相关 IPC handler
       registerPodcastIpc();
+      // [B-31] 注册 podcast 下载相关 IPC（流式下载 + 进度推送 + 删除）
+      registerPodcastDownloadIpc(() => this.window);
+      // [B-39] 注册首页发现 IPC（热门榜单 + Apple id→feedUrl）
+      registerPodcastDiscoverIpc();
 
       // set proxy
       const proxyRules = this.store.get('proxy');

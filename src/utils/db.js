@@ -6,6 +6,38 @@ import store from '@/store';
 // [播客改造] 导出 db 实例，供 utils/podcast/db.js 复用，避免多个 Dexie 实例冲突。
 export const db = new Dexie('yesplaymusic');
 
+// [B-37] v9：新增 listenDaily 表（按天×节目聚合收听时长，用于"最近 N 天"统计）
+//   key = `${YYYY-MM-DD}::${podcastId}`；wallSec 墙钟秒、contentSec 倍速换算秒
+db.version(9).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+  episodeListenStats: '&id, completed, updatedAt',
+  episodeDownloads: '&id, podcastId, addedAt',
+  listenDaily: '&key, date',
+});
+
+// [B-31] v8：新增 episodeDownloads 表（本地已下载文件记录）
+//   id = episode.id；filePath = 本地绝对路径；status: 'done'（也保留扩展位）
+db.version(8).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+  episodeListenStats: '&id, completed, updatedAt',
+  episodeDownloads: '&id, podcastId, addedAt',
+});
+
+// [播客改造] v7：新增 episodeListenStats 表（真实收听统计 + 进度标记）
+db.version(7).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+  episodeListenStats: '&id, completed, updatedAt',
+});
+
 // [播客改造] v6：新增本地收藏表（favorites）
 //   favorites: 已收藏的播客单集（id = episode.id；存全量元数据，方便"我的收藏"列表展示）
 // ⚠️ Dexie schema 是增量的，但稳妥起见把 v5 的播客 3 表也声明在 v6，
