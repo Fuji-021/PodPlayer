@@ -169,6 +169,13 @@ const routes = [
     component: () => import('@/views/statsPage.vue'),
     meta: { requireLogin: false },
   },
+  // [B-47 第5点] 已屏蔽节目
+  {
+    path: '/me/blocked',
+    name: 'blocked',
+    component: () => import('@/views/blockedList.vue'),
+    meta: { requireLogin: false },
+  },
   {
     path: '/settings',
     name: 'settings',

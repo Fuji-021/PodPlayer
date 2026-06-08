@@ -220,6 +220,7 @@ import {
   getPodcast,
   getEpisodesByPodcast,
   deletePodcast,
+  updatePodcast,
 } from '@/utils/podcast/service';
 import { getEpisodeProgressBulk } from '@/utils/podcast/db';
 import {
@@ -300,6 +301,10 @@ export default {
         // 节目不存在（被删了或 URL 错），回订阅列表
         this.$router.replace('/library');
         return;
+      }
+      // [B-46 / D-3] 进详情即视为"已看过新单集"，清掉我的订阅页该卡片的新单集角标
+      if (this.podcast.newCount) {
+        updatePodcast(this.feedUrl, { newCount: 0 }).catch(() => {});
       }
       const eps = await getEpisodesByPodcast(this.feedUrl);
       // [B-36] 批量 bulkGet 读进度 + listenStats（原来每集各一次 get，百集列表很卡）

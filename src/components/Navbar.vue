@@ -76,6 +76,11 @@
         <svg-icon icon-class="duration" />
         收听数据
       </div>
+      <!-- [B-47 第5点] 已屏蔽节目 -->
+      <div class="item" @click="toBlocked">
+        <svg-icon icon-class="ban" />
+        已屏蔽节目
+      </div>
       <hr />
       <div class="item" @click="toSettings">
         <svg-icon icon-class="settings" />
@@ -189,6 +194,10 @@ export default {
     },
     toStats() {
       this.$router.push({ name: 'stats' });
+    },
+    // [B-47 第5点] 已屏蔽节目
+    toBlocked() {
+      this.$router.push({ name: 'blocked' });
     },
     toGitHub() {
       window.open('https://github.com/qier222/YesPlayMusic');

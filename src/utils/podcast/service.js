@@ -3,6 +3,7 @@
 import { parseRss, parseOpml, cleanUrl } from './rssParser';
 import {
   upsertPodcast,
+  updatePodcast,
   upsertEpisodes,
   getAllPodcasts,
   getPodcast,
@@ -99,4 +100,70 @@ export async function importRssText(rssText, fallbackId = '') {
   return { podcast, episodes };
 }
 
-export { getAllPodcasts, getPodcast, getEpisodesByPodcast, deletePodcast };
+// [B-46 / D-3] 限并发跑任务（默认 5）。RSS 站点对突发并发敏感，限流更稳。
+async function runLimited(items, limit, worker) {
+  const queue = items.slice();
+  const runners = [];
+  for (let i = 0; i < Math.min(limit, queue.length); i++) {
+    runners.push(
+      (async () => {
+        // 每个 runner 不断从队列取任务，直到取空
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const item = queue.shift();
+          if (item === undefined) break;
+          await worker(item);
+        }
+      })()
+    );
+  }
+  await Promise.all(runners);
+}
+
+/**
+ * [B-46 / D-3] 订阅自动更新：并发(≤5)重抓所有已订阅 feedUrl，diff 出新单集 upsert 入库，
+ * 并把每档新增数累加到 podcasts.newCount（卡片角标）。
+ * - 旧单集进度不受影响（进度在 episodeProgress 独立表，bulkPut 只覆盖元数据）。
+ * - 单档失败不阻塞其它（network/解析错误捕获后记入 results）。
+ * @param {(done:number,total:number,title?:string)=>void} [onProgress]
+ * @returns {Promise<{ totalNew:number, results:{id,title,newCount,error}[] }>}
+ */
+export async function refreshAllSubscriptions(onProgress) {
+  const pods = await getAllPodcasts();
+  const total = pods.length;
+  let done = 0;
+  const results = [];
+  await runLimited(pods, 5, async p => {
+    let newCount = 0;
+    let error = null;
+    try {
+      const xml = await ipcFetch('podcast:fetchRss', p.id);
+      const { episodes } = parseRss(xml, p.id);
+      const existing = await getEpisodesByPodcast(p.id);
+      const existingIds = new Set(existing.map(e => e.id));
+      const fresh = episodes.filter(e => !existingIds.has(e.id));
+      newCount = fresh.length;
+      if (episodes.length) await upsertEpisodes(episodes);
+      if (newCount > 0) {
+        await updatePodcast(p.id, {
+          newCount: (p.newCount || 0) + newCount,
+        });
+      }
+    } catch (e) {
+      error = String((e && e.message) || e);
+    }
+    done++;
+    if (typeof onProgress === 'function') onProgress(done, total, p.title);
+    results.push({ id: p.id, title: p.title, newCount, error });
+  });
+  const totalNew = results.reduce((s, r) => s + r.newCount, 0);
+  return { totalNew, results };
+}
+
+export {
+  getAllPodcasts,
+  getPodcast,
+  getEpisodesByPodcast,
+  deletePodcast,
+  updatePodcast,
+};

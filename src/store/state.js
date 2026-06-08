@@ -37,6 +37,11 @@ export default {
   podcastDiscover: {
     subscribedMap: {},
   },
+  // [B-47 第5点] 已屏蔽节目（首页发现页右键"屏蔽"）。items: [{name, coverUrl}]，按节目名为键。
+  //   屏蔽后：发现页不再显示、统计页不显示；取消屏蔽可恢复。持久化到 localStorage。
+  podcastBlocked: {
+    items: JSON.parse(localStorage.getItem('podcastBlocked') || '[]'),
+  },
   // [播客改造 C-14] 当前是否在加载音频（点单集到出声的等待）
   audioBuffering: false,
   // [播客改造 A-24] 播放队列。每项 = 单集精简对象（id/guid/title/audioUrl/coverUrl/duration/podcastId/podcastTitle）

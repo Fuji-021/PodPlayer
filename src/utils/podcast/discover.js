@@ -105,10 +105,17 @@ export function splitSections(items, excludeNames, preferredGenres) {
     return { hot: [], treasure: [], forYou: [] };
   }
   // [B-44] 取够 2 行所需量（宽屏列数多）：热门 20 / 寻宝 16 / 推荐 16
+  // [B-47 第1点] 除热门外三栏互不重复：热门固定(榜单序)，寻宝排除热门+已订阅，推荐再排除寻宝
   const hot = items.slice(0, 20);
-  const fresh = excludeSubbed(items, excludeNames);
-  const treasure = shuffle(fresh.slice(10)).slice(0, 16);
-  const forYou = buildForYou(items, excludeNames, preferredGenres);
+  const used = new Set(excludeNames || []);
+  hot.forEach(p => used.add((p.name || '').trim()));
+  const treasurePool = items
+    .slice(10)
+    .filter(p => !used.has((p.name || '').trim()));
+  const treasure = shuffle(treasurePool).slice(0, 16);
+  treasure.forEach(p => used.add((p.name || '').trim()));
+  // 推荐排除 热门+寻宝+已订阅，按订阅分类加权
+  const forYou = buildForYou(items, used, preferredGenres);
   return { hot, treasure, forYou };
 }
 

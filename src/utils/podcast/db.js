@@ -8,6 +8,13 @@ export function upsertPodcast(podcast) {
   return db.podcasts.put({ ...podcast, updatedAt: Date.now() });
 }
 
+// [B-46 / D-3] 局部更新节目记录（不动 updatedAt 等其它字段）。
+//   用途：订阅刷新写"新单集数 newCount"角标；进节目详情时清零。
+//   newCount 不是索引字段，Dexie 可直接存，无需升 schema 版本。
+export function updatePodcast(id, patch) {
+  return db.podcasts.update(id, patch || {});
+}
+
 export function getAllPodcasts() {
   return db.podcasts.toArray();
 }
@@ -39,6 +46,21 @@ export function getEpisodesByPodcast(podcastId) {
 
 export function getEpisode(id) {
   return db.episodes.get(id);
+}
+
+// [B-47 / 第6点] 每档节目"最近一次收听时间"映射 {podcastId(feedUrl): maxUpdatedAt}。
+//   episodeProgress.id = `${feedUrl}::${guid}`，feedUrl 内不含 '::'，故 split('::')[0] 即 podcastId。
+//   一次全表扫描聚合，避免每档单查。用于"按最近收听"排序。
+export async function getLastListenedByPodcast() {
+  const rows = await db.episodeProgress.toArray();
+  const map = {};
+  rows.forEach(r => {
+    const pid = String((r && r.id) || '').split('::')[0];
+    if (!pid) return;
+    const t = (r && r.updatedAt) || 0;
+    if (!map[pid] || t > map[pid]) map[pid] = t;
+  });
+  return map;
 }
 
 // === 播放进度（第 3 步会用上，先把接口预留好） ===

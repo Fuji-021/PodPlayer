@@ -35,12 +35,12 @@
         <div
           v-if="overlayMode"
           class="ctx-overlay"
-          @click.stop="onOverlayAction"
+          @click.stop="onBlock"
           @mouseenter="cancelAutoClose"
           @mouseleave="scheduleAutoClose"
         >
-          <svg-icon :icon-class="subbed ? 'heart-crack' : 'square-plus'" />
-          <div class="label">{{ subbed ? '取消订阅' : '订阅' }}</div>
+          <svg-icon icon-class="ban" />
+          <div class="label">屏蔽</div>
         </div>
       </div>
     </div>
@@ -198,10 +198,15 @@ export default {
         this.scheduleAutoClose();
       });
     },
-    onOverlayAction() {
+    // [B-47 第5点] 右键 = 屏蔽该节目（取代原订阅/取消订阅；订阅靠右下角按钮）
+    onBlock() {
       this.closeOverlay();
-      if (this.subbed) this.unsubscribe();
-      else this.subscribe();
+      this.$store.commit('addBlockedPodcast', {
+        name: this.name,
+        coverUrl: this.cover,
+      });
+      this.toast(`已屏蔽：${this.podcast.name}`);
+      this.$emit('changed');
     },
     scheduleAutoClose() {
       if (this.autoTimer) clearTimeout(this.autoTimer);
@@ -330,13 +335,13 @@ export default {
     cursor: default;
   }
 }
-// 右键 overlay：封面变暗 + 居中图标/文字（对齐「我的订阅」）
+// [B-47 第2点] 右键 overlay：去掉半透明黑底，改为靠封面 filter 变暗（复用「我的订阅」处理）
 .ctx-overlay {
   position: absolute;
   inset: 0;
   z-index: 3;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.62);
+  background: transparent;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -358,8 +363,10 @@ export default {
     color: var(--color-primary);
   }
 }
-.overlay-mode .cover {
-  filter: brightness(0.4);
+// [B-47 第2点] 复用「我的订阅」unsub-mode：封面变暗 + 微放大（覆盖 hover 的 transform）
+.disc-card.overlay-mode .cover {
+  filter: brightness(0.3);
+  transform: scale(1.06);
 }
 .cover-loading {
   position: absolute;

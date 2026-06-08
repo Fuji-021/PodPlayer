@@ -94,7 +94,12 @@
             </div>
           </div>
           <!-- [B-44] 固定两行 + 列数随窗口自适应（去掉横向滚轮）；切到 2*cols 项，多的进二级页 -->
-          <div class="disc-grid" :style="{ '--disc-cols': cols }">
+          <!-- [B-47] forYou 的 key 随"再推荐一次"变化 → 网格重挂触发淡入过渡(非硬切) -->
+          <div
+            :key="sec.key === 'forYou' ? 'forYou' + forYouSeq : sec.key"
+            class="disc-grid"
+            :style="{ '--disc-cols': cols }"
+          >
             <DiscoverCard
               v-for="p in sec.items.slice(0, cols * 2)"
               :key="sec.key + '-' + p.id"
@@ -154,6 +159,8 @@ export default {
       allItems: [], // [B-42] 全量榜单，供二级页 / 再推荐复用
       // [B-44] 每行列数（随窗口自适应），每板块固定显示 2*cols 项
       cols: 2,
+      // [B-47] "再推荐一次"自增序号：变化触发 forYou 网格淡入过渡
+      forYouSeq: 0,
       // [B-43] 订阅偏好分类（用于"为你推荐" + reroll；不进模板，无需响应式）
       preferredGenres: new Set(),
     };
@@ -167,12 +174,20 @@ export default {
     byAppleMusic() {
       return byAppleMusic;
     },
+    // [B-47 第5点] 已屏蔽节目名集合（响应式：屏蔽后发现页立即过滤掉）
+    blockedNames() {
+      return new Set(
+        (this.$store.state.podcastBlocked.items || []).map(b =>
+          (b.name || '').trim()
+        )
+      );
+    },
     discoverSections() {
       return [
         {
           key: 'hot',
           title: '热门排行',
-          items: this.sections.hot,
+          items: this.noBlocked(this.sections.hot),
           actionText: '探索更多',
           actionIcon: 'arrow-right',
           actionType: 'page',
@@ -180,7 +195,7 @@ export default {
         {
           key: 'treasure',
           title: '播客寻宝',
-          items: this.sections.treasure,
+          items: this.noBlocked(this.sections.treasure),
           actionText: '再找一找',
           actionIcon: 'compass-alt',
           actionType: 'page',
@@ -188,7 +203,7 @@ export default {
         {
           key: 'forYou',
           title: '为你推荐',
-          items: this.sections.forYou,
+          items: this.noBlocked(this.sections.forYou),
           actionText: '再推荐一次',
           actionIcon: 'cardinal-compass',
           actionType: 'reroll',
@@ -224,6 +239,12 @@ export default {
     // [B-44] 卡片订阅状态变化（订阅/取消订阅）后，重算偏好分类等可选刷新；
     //   subscribedMap 已由卡片直接更新 store，回显是响应式的，这里无需重拉。
     onCardChanged() {},
+    // [B-47 第5点] 过滤掉已屏蔽节目（发现页三栏都用）
+    noBlocked(arr) {
+      return (arr || []).filter(
+        p => !this.blockedNames.has((p.name || '').trim())
+      );
+    },
     // [B-39] 发现页：加载榜单 + 分板块
     async loadDiscover(force = false) {
       if (this.showLegacyHome) return;
@@ -265,14 +286,21 @@ export default {
       if (sec.actionType === 'page') {
         this.$router.push({ name: 'discover', params: { type: sec.key } });
       } else if (sec.actionType === 'reroll') {
-        // [B-43] 排除当前已订阅 + 按偏好分类加权重推
-        const excludeNames = new Set(Object.keys(this.subscribedMap));
+        // [B-43] 排除已订阅 + [B-47] 再排除当前热门/寻宝已显示项（三栏不重复）+ 按分类加权
+        const exclude = new Set(Object.keys(this.subscribedMap));
+        (this.sections.hot || []).forEach(p =>
+          exclude.add((p.name || '').trim())
+        );
+        (this.sections.treasure || []).forEach(p =>
+          exclude.add((p.name || '').trim())
+        );
+        this.forYouSeq++; // [B-47] 变 key 触发卡片淡入过渡（不硬切）
         this.sections = {
           ...this.sections,
           forYou: reshuffleSection(
             this.allItems,
             'forYou',
-            excludeNames,
+            exclude,
             this.preferredGenres
           ),
         };
@@ -463,6 +491,18 @@ footer {
     display: grid;
     grid-template-columns: repeat(var(--disc-cols, 4), minmax(0, 1fr));
     gap: 24px 18px;
+    // [B-47] 网格淡入上滑：首屏加载 + "再推荐一次"重挂时都有平滑过渡（不硬切）
+    animation: discGridFade 0.32s ease;
+  }
+}
+@keyframes discGridFade {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 </style>

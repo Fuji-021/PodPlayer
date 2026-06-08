@@ -234,6 +234,54 @@
               </div>
             </transition>
           </div>
+          <!-- [B-46] 睡眠定时器：原位弹窗（X 分钟后 / 本集结束后暂停） -->
+          <div ref="sleepControl" class="sleep-control" @click.stop>
+            <button-icon
+              :class="{ active: sleepMode !== 'off' }"
+              @click.native="toggleSleepMenu"
+              ><svg-icon icon-class="moon"
+            /></button-icon>
+            <transition name="fade">
+              <!-- [B-47] 借鉴倍速弹窗：滑条(分钟，拖动+滚轮)，设置后随倒计时自缩 -->
+              <div
+                v-if="sleepMenuOpen"
+                class="sleep-menu"
+                @click.stop
+                @wheel.prevent="onSleepWheel"
+              >
+                <div class="sleep-slider">
+                  <span class="sl-label">{{ sleepLabel }}</span>
+                  <vue-slider
+                    :value="sleepSliderVal"
+                    :min="0"
+                    :max="120"
+                    :interval="5"
+                    :drag-on-click="true"
+                    :duration="0"
+                    tooltip="none"
+                    :dot-size="12"
+                    @change="onSleepSlide"
+                  ></vue-slider>
+                </div>
+                <div class="sleep-foot">
+                  <button
+                    class="sl-foot-btn"
+                    :class="{ active: sleepMode === 'end' }"
+                    @click="setSleepEnd"
+                  >
+                    本集结束后
+                  </button>
+                  <button
+                    v-if="sleepMode !== 'off'"
+                    class="sl-foot-btn cancel"
+                    @click="cancelSleep"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            </transition>
+          </div>
           <button-icon
             :class="{
               active: player.repeatMode !== 'off',
@@ -344,6 +392,15 @@ export default {
       // [A-24 拖动] 排序状态
       dragIdx: -1,
       dragOverIdx: -1,
+      // [B-46/B-47] 睡眠定时器（滑条式）
+      sleepMenuOpen: false,
+      sleepMode: 'off', // 'off' | 'min'(定时分钟) | 'end'(本集结束后)
+      sleepTimer: null, // setTimeout 句柄（到点暂停）
+      sleepInterval: null, // setInterval 句柄（每秒刷新剩余 + 滑条自缩）
+      sleepEndsAt: 0, // 暂停目标时间戳(ms)
+      sleepRemainText: '', // 剩余 "M:SS"
+      sleepSliderVal: 0, // 滑条显示值(分钟)：未激活=0；激活=剩余分钟(随倒计时自缩)
+      sleepOutsideListener: null,
     };
   },
   computed: {
@@ -412,6 +469,11 @@ export default {
     rateButtonText() {
       return this.rateLabel + 'x';
     },
+    // [B-47] 睡眠弹窗左侧文案：未激活=关闭；定时/本集结束=剩余 M:SS
+    sleepLabel() {
+      if (this.sleepMode === 'off') return '关闭';
+      return '剩余 ' + (this.sleepRemainText || '0:00');
+    },
     // [播客改造 A-7.1] 当前 track 是否已收藏：播客走本地表，网易云走原 store.liked.songs
     isFavorited() {
       const t = this.player && this.player.currentTrack;
@@ -454,6 +516,9 @@ export default {
     window.removeEventListener('resize', this.checkNameOverflow);
     // [播客改造 A-6] 卸载倍速面板的"点击外部关闭"监听
     this.closeRateMenu();
+    // [B-46] 卸载睡眠定时器的监听与计时器
+    this.closeSleepMenu();
+    this.clearSleep();
   },
   methods: {
     ...mapMutations(['toggleLyrics']),
@@ -542,6 +607,97 @@ export default {
       if (this.rateOutsideListener) {
         document.removeEventListener('mousedown', this.rateOutsideListener);
         this.rateOutsideListener = null;
+      }
+    },
+    // [B-46] 睡眠定时器：原位弹窗开关（点外部关闭，与倍速面板同款）
+    toggleSleepMenu() {
+      if (this.sleepMenuOpen) {
+        this.closeSleepMenu();
+        return;
+      }
+      this.sleepMenuOpen = true;
+      this.$nextTick(() => {
+        this.sleepOutsideListener = ev => {
+          const root = this.$refs.sleepControl;
+          if (root && !root.contains(ev.target)) this.closeSleepMenu();
+        };
+        document.addEventListener('mousedown', this.sleepOutsideListener);
+      });
+    },
+    closeSleepMenu() {
+      this.sleepMenuOpen = false;
+      if (this.sleepOutsideListener) {
+        document.removeEventListener('mousedown', this.sleepOutsideListener);
+        this.sleepOutsideListener = null;
+      }
+    },
+    // [B-47] 滑条拖动/点击：val=分钟(0=关闭)。设置后不关弹窗，便于看滑块自缩。
+    onSleepSlide(val) {
+      const min = Number(val) || 0;
+      if (min <= 0) {
+        this.cancelSleep();
+        return;
+      }
+      this.applySleep(min * 60 * 1000, 'min');
+    },
+    // [B-47] 滚轮调节：每格 ±5 分钟（借鉴倍速滚轮）
+    onSleepWheel(e) {
+      const step = e.deltaY < 0 ? 5 : -5;
+      const base = this.sleepMode === 'off' ? 0 : this.sleepSliderVal;
+      this.onSleepSlide(Math.max(0, Math.min(120, base + step)));
+    },
+    // [B-47] 本集结束后暂停
+    setSleepEnd() {
+      const dur = this.player.currentTrackDuration || 0;
+      const pos = this.player.progress || 0;
+      this.applySleep(Math.max(0, (dur - pos) * 1000), 'end');
+    },
+    // [B-47] 应用睡眠：ms 后暂停，每秒刷新剩余 + 滑条自缩
+    applySleep(ms, mode) {
+      this.clearSleep();
+      this.sleepMode = mode;
+      this.sleepEndsAt = Date.now() + ms;
+      this.sleepTimer = setTimeout(() => this.fireSleep(), ms);
+      this.updateSleepRemain();
+      this.sleepInterval = setInterval(() => this.updateSleepRemain(), 1000);
+    },
+    cancelSleep() {
+      this.clearSleep();
+      this.sleepMode = 'off';
+      this.sleepRemainText = '';
+      this.sleepSliderVal = 0;
+    },
+    updateSleepRemain() {
+      const left = Math.max(0, this.sleepEndsAt - Date.now());
+      const totalSec = Math.round(left / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      this.sleepRemainText = `${m}:${String(s).padStart(2, '0')}`;
+      // [B-47] 滑条值随倒计时自缩（向上取整到分钟）
+      this.sleepSliderVal = Math.ceil(left / 60000);
+    },
+    fireSleep() {
+      if (
+        this.player &&
+        this.player.playing &&
+        typeof this.player.pause === 'function'
+      ) {
+        this.player.pause();
+      }
+      this.clearSleep();
+      this.sleepMode = 'off';
+      this.sleepRemainText = '';
+      this.sleepSliderVal = 0;
+      this.showToast('睡眠定时已到，已暂停播放');
+    },
+    clearSleep() {
+      if (this.sleepTimer) {
+        clearTimeout(this.sleepTimer);
+        this.sleepTimer = null;
+      }
+      if (this.sleepInterval) {
+        clearInterval(this.sleepInterval);
+        this.sleepInterval = null;
       }
     },
     handleMouseDown(event) {
@@ -1268,6 +1424,74 @@ export default {
   }
   .vue-slider {
     flex: 1;
+  }
+}
+
+// [B-46] 睡眠定时器弹窗（与倍速面板同款向上锚定）
+.sleep-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.sleep-menu {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-body-bg);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18),
+    0 0 0 1px rgba(127, 127, 127, 0.12);
+  padding: 10px 12px;
+  width: 220px;
+  z-index: 110;
+  color: var(--color-text);
+}
+// [B-47] 睡眠滑条：与倍速面板同款（左 label + 滑条，可拖动/滚轮）
+.sleep-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  .sl-label {
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.7;
+    flex-shrink: 0;
+    white-space: nowrap;
+    min-width: 56px;
+    font-variant-numeric: tabular-nums;
+  }
+  .vue-slider {
+    flex: 1;
+  }
+}
+.sleep-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  .sl-foot-btn {
+    background: transparent;
+    color: var(--color-text);
+    opacity: 0.6;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 3px 6px;
+    border-radius: 6px;
+    transition: 0.15s;
+    &:hover {
+      opacity: 1;
+      background: var(--color-secondary-bg-for-transparent);
+    }
+    &.active {
+      color: var(--color-primary);
+      opacity: 1;
+    }
+    &.cancel:hover {
+      color: #e74c3c;
+      background: transparent;
+    }
   }
 }
 

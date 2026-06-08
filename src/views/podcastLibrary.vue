@@ -41,6 +41,15 @@
       <!-- [播客改造 A-22] 添加订阅 + 导入 OPML 合并为 + 号按钮 + 弹窗。
            A-23 之后 podcast 详情已拆为独立路由，本页只在订阅列表显示。 -->
       <div class="actions">
+        <!-- [B-46 / D-3] 刷新订阅：并发重抓所有 RSS，发现新单集入库 + 卡片角标 -->
+        <button
+          class="refresh-button"
+          :class="{ spinning: refreshing }"
+          :disabled="refreshing"
+          @click="refreshSubs"
+        >
+          <svg-icon icon-class="refresh" />
+        </button>
         <div ref="plusControl" class="plus-control" @click.stop>
           <!-- [播客改造] title 屏蔽（不要原生 tooltip），文案保留供后续恢复 -->
           <button
@@ -76,7 +85,7 @@
     <!-- [A-23] 订阅列表（一级界面）。节目详情已拆为 /library/podcast/:feedUrlEncoded 独立路由，
          < > 自然作为浏览器前进后退使用 -->
     <div class="podcast-grid" :class="{ resizing: isResizing }">
-      <div v-if="!sortedPodcasts.length" class="empty-tip">
+      <div v-if="loaded && !sortedPodcasts.length" class="empty-tip">
         还没有订阅。点击右上角 + 号添加 RSS 链接或导入文件。
       </div>
       <div
@@ -133,6 +142,8 @@
               <div class="label">取消订阅</div>
             </div>
           </div>
+          <!-- [B-46 / D-3] 有更新角标：刷新发现新单集即显示，进详情后清零 -->
+          <div v-if="p.newCount > 0" class="new-badge">有更新</div>
         </div>
         <div class="title">{{ p.title || '(无标题)' }}</div>
         <div class="author">{{ p.author || '' }}</div>
@@ -226,8 +237,10 @@ import {
   getAllPodcasts,
   deletePodcast,
   getEpisodesByPodcast,
+  refreshAllSubscriptions,
 } from '@/utils/podcast/service';
 import { getPodcastListenSummary } from '@/utils/podcast/listening';
+import { getLastListenedByPodcast } from '@/utils/podcast/db';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 // [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
@@ -248,6 +261,10 @@ export default {
       newFeedUrl: '',
       addError: '',
       adding: false,
+      // [B-46 / D-3] 订阅刷新中
+      refreshing: false,
+      // [B-47 / 第3点] 是否已至少加载过一次（避免加载期间闪"还没有订阅"）
+      loaded: false,
       // [播客改造 A-22] + 号弹窗开关
       plusMenuOpen: false,
       plusOutsideListener: null,
@@ -279,6 +296,7 @@ export default {
           label: '按最新更新',
         },
         { key: 'listenWall', icon: 'time-past', label: '按累计听过时长' },
+        { key: 'lastListen', icon: 'pending', label: '按最近收听' },
       ],
       // [S 级 bug 修] 窗口缩放时禁用 transition，避免大量 .podcast-card 动画排队卡顿
       isResizing: false,
@@ -289,6 +307,19 @@ export default {
     // [A-28] 排序后的订阅列表
     sortedPodcasts() {
       const arr = [...this.podcasts];
+      // [B-47 第6点] 按最近收听：听过的按最近时间降序在前；没听过的排后、按累计时长降序
+      if (this.sortBy === 'lastListen') {
+        const wall = p => (p.listenSummary && p.listenSummary.wallSec) || 0;
+        arr.sort((a, b) => {
+          const la = a.lastListenedAt || 0;
+          const lb = b.lastListenedAt || 0;
+          if (la && lb) return lb - la;
+          if (la && !lb) return -1;
+          if (!la && lb) return 1;
+          return wall(b) - wall(a);
+        });
+        return arr;
+      }
       const sign = this.sortDir === 'asc' ? 1 : -1;
       const byKey = {
         updatedAt: p => p.updatedAt || 0,
@@ -349,26 +380,57 @@ export default {
       return Math.max(3, Math.min(99, (done / total) * 100));
     },
     async loadPodcasts() {
-      const list = await getAllPodcasts();
-      // [A-28] 并行查每档"最新一集"时间，用于按更新时间排序
-      // [B-30] 并行查每档"累计收听时长"摘要，用于"我的最爱"排序 + UI 显示
-      const [latest, summaries] = await Promise.all([
+      let list;
+      try {
+        list = await getAllPodcasts();
+        // [B-47 第3点] 偶发拿到空列表(Dexie 偶发)但原本有订阅 → 重试一次，
+        //   避免进页面时订阅列表短暂"全部消失"再恢复。
+        if ((!list || !list.length) && this.podcasts.length) {
+          list = await getAllPodcasts();
+        }
+      } catch (e) {
+        // 读库异常：保留旧列表，不清空 UI
+        console.warn('[播客库] loadPodcasts 失败，保留旧数据', e);
+        this.loaded = true;
+        return;
+      }
+      list = list || [];
+      // [A-28] 每档"最新一集"时间(排序) [B-30] 累计收听摘要 [B-47] 最近收听映射
+      const [latest, summaries, lastMap] = await Promise.all([
         Promise.all(list.map(p => getLatestEpisodeTime(p.id).catch(() => 0))),
         Promise.all(
           list.map(p => getPodcastListenSummary(p.id).catch(() => null))
         ),
+        getLastListenedByPodcast().catch(() => ({})),
       ]);
       this.podcasts = list.map((p, i) => ({
         ...p,
         latestEpisodeTime: latest[i] || 0,
         listenSummary: summaries[i] || null,
+        lastListenedAt: lastMap[p.id] || 0,
       }));
-      console.log(
-        '[播客库] loaded',
-        this.podcasts.length,
-        'podcasts:',
-        this.podcasts.map(p => p.title)
-      );
+      this.loaded = true;
+      console.log('[播客库] loaded', this.podcasts.length, 'podcasts');
+    },
+    // [B-46 / D-3] 刷新订阅：并发(≤5)重抓所有 RSS，diff 新单集入库 + 卡片角标，toast 汇报
+    async refreshSubs() {
+      if (this.refreshing) return;
+      this.refreshing = true;
+      try {
+        const { totalNew } = await refreshAllSubscriptions();
+        await this.loadPodcasts(); // 重新读取（含更新后的 newCount）
+        this.$store.dispatch(
+          'showToast',
+          totalNew > 0 ? `发现 ${totalNew} 集新单集` : '已是最新，没有新单集'
+        );
+      } catch (e) {
+        this.$store.dispatch(
+          'showToast',
+          '刷新失败：' + ((e && e.message) || e)
+        );
+      } finally {
+        this.refreshing = false;
+      }
     },
     // [B-33] 选排序：同 key 再点 → 切方向（菜单保持开，看方向变化）；换 key → 设置并关闭
     setSort(key) {
@@ -669,6 +731,43 @@ export default {
 .actions {
   display: flex;
   gap: 10px;
+}
+
+// [B-46 / D-3] 刷新订阅按钮（点击旋转）
+.refresh-button {
+  align-self: center;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  transition: 0.2s;
+  .svg-icon {
+    width: 20px;
+    height: 20px;
+  }
+  &:hover {
+    opacity: 1;
+    background: var(--color-secondary-bg-for-transparent);
+  }
+  &:disabled {
+    cursor: default;
+  }
+  &.spinning {
+    opacity: 1;
+    .svg-icon {
+      animation: refreshSpin 0.8s linear infinite;
+    }
+  }
+}
+@keyframes refreshSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 // [B-33] "更多"按钮：紧贴"阅"字，点击弹排序下拉
@@ -1082,6 +1181,22 @@ export default {
     opacity: 0.6;
     transition: opacity 0.2s;
   }
+}
+// [B-46 / D-3] 新单集角标（红底白字，封面右上角）
+.new-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  background: #e74c3c;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
 }
 // [bug-3] 取消订阅 overlay：贴在封面上的居中"取消订阅"按钮
 .unsub-overlay {

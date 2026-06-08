@@ -40,7 +40,7 @@
 
     <!-- [B-38] 节目时长矩形条：bar 宽度=时长比例，封面在条右端，节目名紧跟封面（与各自进度条对齐） -->
     <div
-      v-for="item in list"
+      v-for="item in visibleList"
       :key="item.podcastId"
       class="stat-row"
       @click="goPodcast(item)"
@@ -100,7 +100,20 @@ export default {
       return Math.floor((this.totalWall % 3600) / 60);
     },
     maxWall() {
-      return this.list.length ? this.list[0].wallSec : 1;
+      return this.visibleList.length ? this.visibleList[0].wallSec : 1;
+    },
+    // [B-47 第5点] 统计页不显示已屏蔽节目（取消屏蔽后恢复；数据不删，仅不显示）
+    blockedNames() {
+      return new Set(
+        (this.$store.state.podcastBlocked.items || []).map(b =>
+          (b.name || '').trim()
+        )
+      );
+    },
+    visibleList() {
+      return this.list.filter(
+        it => !this.blockedNames.has((it.title || '').trim())
+      );
     },
   },
   async created() {

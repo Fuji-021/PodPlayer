@@ -39,6 +39,22 @@ export default {
     });
     state.podcastDiscover.subscribedMap = next;
   },
+  // [B-47 第5点] 屏蔽节目：新增（按名去重 + 置顶）并持久化到 localStorage
+  addBlockedPodcast(state, item) {
+    const name = item && item.name && String(item.name).trim();
+    if (!name) return;
+    const items = state.podcastBlocked.items.filter(b => b.name !== name);
+    items.unshift({ name, coverUrl: (item && item.coverUrl) || '' });
+    state.podcastBlocked.items = items;
+    localStorage.setItem('podcastBlocked', JSON.stringify(items));
+  },
+  // [B-47 第5点] 取消屏蔽
+  removeBlockedPodcast(state, name) {
+    const n = String(name || '').trim();
+    const items = state.podcastBlocked.items.filter(b => b.name !== n);
+    state.podcastBlocked.items = items;
+    localStorage.setItem('podcastBlocked', JSON.stringify(items));
+  },
   // [播客改造 C-14] 切换音频缓冲状态
   setAudioBuffering(state, val) {
     state.audioBuffering = !!val;

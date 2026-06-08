@@ -15,7 +15,7 @@
 
     <!-- [B-44] 全量 grid，封面大小/缩放与「我的订阅」一致；卡片复用 DiscoverCard（与首页同一交互） -->
     <div v-else class="grid">
-      <DiscoverCard v-for="p in items" :key="p.id" :podcast="p" />
+      <DiscoverCard v-for="p in visibleItems" :key="p.id" :podcast="p" />
     </div>
   </div>
 </template>
@@ -42,6 +42,15 @@ export default {
     },
     title() {
       return this.type === 'treasure' ? '播客寻宝' : '热门排行';
+    },
+    // [B-47 第5点] 过滤掉已屏蔽节目（与首页一致，响应式）
+    visibleItems() {
+      const blocked = new Set(
+        (this.$store.state.podcastBlocked.items || []).map(b =>
+          (b.name || '').trim()
+        )
+      );
+      return this.items.filter(p => !blocked.has((p.name || '').trim()));
     },
   },
   watch: {
@@ -94,6 +103,18 @@ export default {
 .discover-list {
   color: var(--color-text);
   padding-top: 28px;
+  // [B-47] 进二级页过渡：上滑淡入，避免硬切
+  animation: discPageEnter 0.34s ease;
+}
+@keyframes discPageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .head {
   display: flex;
