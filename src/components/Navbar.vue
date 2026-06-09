@@ -33,7 +33,10 @@
       <div class="right-part">
         <!-- [B-52] 播客搜索框：本地(我的订阅/单集) + 在线(iTunes)，回车跳搜索页 -->
         <div class="search-box">
-          <div class="container" :class="{ active: inputFocus }">
+          <div
+            class="container"
+            :class="{ active: inputFocus, dimmed: searchDimmed }"
+          >
             <svg-icon icon-class="search" />
             <div class="input">
               <input
@@ -46,6 +49,13 @@
                 @blur="inputFocus = false"
               />
             </div>
+            <!-- [B-63] 自定义清除 ×（替换难调色的原生按钮，颜色跟随文字；仅有内容时显示） -->
+            <svg-icon
+              v-if="keywords"
+              class="clear-icon"
+              icon-class="x"
+              @click.stop="clearSearch"
+            />
           </div>
         </div>
         <img
@@ -179,6 +189,15 @@ export default {
     hasCustomAvatar() {
       return !!this.$store.state.podcastAvatar;
     },
+    // [B-63] 搜索框文字变暗：有内容 + 不在搜索结果页 + 未聚焦（hover 不算，只 focus 复原）
+    //   场景：用户没手动清除、直接点首页/返回离开搜索页 → 残留关键词暗下去，再次点击复原。
+    searchDimmed() {
+      return (
+        !!this.keywords &&
+        this.$route.name !== 'searchPodcast' &&
+        !this.inputFocus
+      );
+    },
   },
   created() {
     if (process.platform === 'win32') {
@@ -206,6 +225,13 @@ export default {
       }
       // [B-52] 跳播客搜索结果页（本地 + 在线）
       this.$router.push({ name: 'searchPodcast', params: { keywords: kw } });
+    },
+    // [B-63] 自定义清除 ×：清空并重新聚焦输入框
+    clearSearch() {
+      this.keywords = '';
+      this.$nextTick(() => {
+        this.$refs.searchInput && this.$refs.searchInput.focus();
+      });
     },
     showUserProfileMenu(e) {
       this.$refs.userProfileMenu.openMenu(e);
@@ -307,7 +333,8 @@ nav.has-custom-titlebar {
 }
 
 .navigation-buttons {
-  flex: 1;
+  // [B-63] 改内容宽度（原 flex:1）→ 配合搜索框绝对居中，让首页/我的订阅靠左不与搜索框重叠
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   // [B-32] 抵消第一个 button-icon 的 margin(4px)+padding(8px)=12px，
@@ -332,9 +359,11 @@ nav.has-custom-titlebar {
 }
 
 .navigation-links {
-  flex: 1;
+  // [B-63] 改内容宽度（原 flex:1 居中）→ 紧跟返回键靠左，搜索框绝对居中作锚点不重叠
+  flex: 0 0 auto;
+  margin-left: 8px;
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   text-transform: uppercase;
   user-select: none;
   a {
@@ -372,8 +401,12 @@ nav.has-custom-titlebar {
 }
 
 .search-box {
+  // [B-63] 绝对居中作为整个导航栏的锚定点（nav 为 fixed，是定位上下文）
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   -webkit-app-region: no-drag;
 
   .container {
@@ -382,7 +415,7 @@ nav.has-custom-titlebar {
     height: 32px;
     background: var(--color-secondary-bg-for-transparent);
     border-radius: 8px;
-    width: 200px;
+    width: 240px;
     // [B-52] 轻反馈 + 聚焦缩放动画
     transition: transform 0.18s ease, background 0.18s ease;
     transform-origin: right center;
@@ -411,6 +444,33 @@ nav.has-custom-titlebar {
     font-weight: 600;
     margin-top: -1px;
     color: var(--color-text);
+    transition: color 0.18s ease, opacity 0.18s ease;
+    // [B-63] 隐藏原生搜索清除按钮（改用自定义 .clear-icon，颜色可控、无怪异过渡）
+    &::-webkit-search-cancel-button {
+      -webkit-appearance: none;
+      appearance: none;
+    }
+  }
+
+  // [B-63] 自定义清除 ×：跟随文字色（默认稍淡，hover 实）
+  .clear-icon {
+    flex-shrink: 0;
+    width: 13px;
+    height: 13px;
+    margin-right: 8px;
+    color: var(--color-text);
+    opacity: 0.5;
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+    transition: opacity 0.15s ease;
+    &:hover {
+      opacity: 0.95;
+    }
+  }
+
+  // [B-63] 离开搜索页未清除：残留关键词暗下去（hover 不变，focus 才复原）
+  .container.dimmed input {
+    opacity: 0.4;
   }
 
   .active {
