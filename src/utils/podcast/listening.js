@@ -58,6 +58,7 @@ export async function tickListen(
     }
     row.totalSec = totalSec;
   }
+  let newRealSec = false; // [B-55] 本次是否新增了"真实听过的一秒"(bit 首次置位)
   if (recordBit && sec >= 0 && sec < totalSec) {
     const byteIdx = sec >> 3;
     const bitIdx = sec & 7;
@@ -66,6 +67,7 @@ export async function tickListen(
       if (!had) {
         row.bits[byteIdx] |= 1 << bitIdx;
         row.listenedSec += 1;
+        newRealSec = true;
       }
     }
   }
@@ -90,6 +92,8 @@ export async function tickListen(
     };
     drow.wallSec += wallDeltaSec;
     drow.contentSec += contentDeltaSec;
+    // [B-55] 真实听过秒（bit 新置位）的按天增量，供"最近 N 天"用真实时长统计（拖动水的不算）
+    drow.listenedSec = (drow.listenedSec || 0) + (newRealSec ? 1 : 0);
     await db.listenDaily.put(drow);
   } catch (e) {
     // ignore（daily 统计失败不影响主进度）
@@ -174,15 +178,14 @@ export function listenedPercentStepped(row) {
 //   range='all' → 用 episodeListenStats 累计值（含历史）；range=数字 → 用 listenDaily 最近 N 天。
 export async function getListenStatsByPodcast(range = 'all') {
   const byPod = {};
-  let totalWall = 0;
   if (range === 'all') {
     const all = await db.episodeListenStats.toArray();
     all.forEach(s => {
-      const w = s.totalPlayWallSec || 0;
-      if (w <= 0) return;
+      // [B-55] 真实听过秒（bit-array 去重，大跳/拖动"水时长"不计），而非墙钟
+      const sec = s.listenedSec || 0;
+      if (sec <= 0) return;
       const pid = String(s.id).split('::')[0];
-      byPod[pid] = (byPod[pid] || 0) + w;
-      totalWall += w;
+      byPod[pid] = (byPod[pid] || 0) + sec;
     });
   } else {
     const days = Number(range) || 7;
@@ -192,24 +195,27 @@ export async function getListenStatsByPodcast(range = 'all') {
       .aboveOrEqual(cutoff)
       .toArray();
     rows.forEach(r => {
-      const w = r.wallSec || 0;
-      if (w <= 0) return;
-      byPod[r.podcastId] = (byPod[r.podcastId] || 0) + w;
-      totalWall += w;
+      // [B-55] 同样用真实听过秒（B-55 起 listenDaily 记 listenedSec；更早的旧数据无此字段→0）
+      const sec = r.listenedSec || 0;
+      if (sec <= 0) return;
+      byPod[r.podcastId] = (byPod[r.podcastId] || 0) + sec;
     });
   }
   const pids = Object.keys(byPod);
   const pods = await db.podcasts.bulkGet(pids);
-  // [B-54] 过滤掉 podcasts 表已无的节目（取消订阅后残留的收听统计）→ 不再出现"未知节目"。
-  //   统计数据本身保留(不删)，重新订阅该节目时会自动恢复显示；totalWall 仍含历史总时长。
-  const list = pids
-    .map((pid, i) => ({ podcastId: pid, pod: pods[i], wallSec: byPod[pid] }))
-    .filter(x => x.pod)
+  // [B-55] 统计**所有听过的节目**（含已取消订阅——deletePodcast 软删保留 podcasts 记录，可 join 名字/封面）；
+  //   节目累计真实收听 < 180s(3 分钟) 不显示（零碎/试听不计）；totalWall 与列表一致。
+  const MIN_SEC = 180;
+  const filtered = pids
+    .map((pid, i) => ({ podcastId: pid, pod: pods[i], sec: byPod[pid] }))
+    .filter(x => x.pod && x.sec >= MIN_SEC);
+  const totalWall = filtered.reduce((s, x) => s + x.sec, 0);
+  const list = filtered
     .map(x => ({
       podcastId: x.podcastId,
       title: x.pod.title || '',
       coverUrl: x.pod.coverUrl || '',
-      wallSec: x.wallSec,
+      wallSec: x.sec, // 字段名沿用 wallSec（statsPage 用），值=真实听过秒
     }))
     .sort((a, b) => b.wallSec - a.wallSec);
   return { totalWall, list };
