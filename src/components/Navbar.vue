@@ -220,6 +220,15 @@ export default {
     doSearch() {
       const kw = (this.keywords || '').trim();
       if (!kw) return;
+      // [B-63] 记录最近搜索词（供"为你推荐"按搜索词类目相关推荐；去重、最多 10 条）
+      try {
+        const SK = 'podcast.recentSearch';
+        const arr = JSON.parse(localStorage.getItem(SK) || '[]');
+        const next = [kw, ...arr.filter(x => x !== kw)].slice(0, 10);
+        localStorage.setItem(SK, JSON.stringify(next));
+      } catch (e) {
+        /* 忽略 */
+      }
       if (
         this.$route.name === 'searchPodcast' &&
         this.$route.params.keywords === kw

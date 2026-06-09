@@ -63,6 +63,16 @@ export async function searchLocalEpisodes(term, limit = 30) {
   });
 }
 
+// [B-63] 按 id 批量取节目（供"为你推荐"把最近听过的 podcastId → 标题，再反查类型）
+export async function getPodcastsByIds(ids) {
+  if (!ids || !ids.length) return [];
+  try {
+    return (await db.podcasts.bulkGet(ids)).filter(Boolean);
+  } catch (e) {
+    return [];
+  }
+}
+
 export function getPodcast(id) {
   return db.podcasts.get(id);
 }

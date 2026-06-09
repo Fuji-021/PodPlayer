@@ -220,3 +220,21 @@ export async function getListenStatsByPodcast(range = 'all') {
     .sort((a, b) => b.wallSec - a.wallSec);
   return { totalWall, list };
 }
+
+// [B-63] 最近 N 天有真实收听的 podcastId 列表（供"为你推荐"按近期收听类型加权）
+export async function getRecentListenedPodcastIds(days = 7) {
+  try {
+    const cutoff = dayKey(Date.now() - (days - 1) * 86400000);
+    const rows = await db.listenDaily
+      .where('date')
+      .aboveOrEqual(cutoff)
+      .toArray();
+    const ids = new Set();
+    rows.forEach(r => {
+      if (r && (r.listenedSec || 0) > 0) ids.add(r.podcastId);
+    });
+    return [...ids];
+  } catch (e) {
+    return [];
+  }
+}

@@ -133,7 +133,8 @@ import {
   reshuffleSection,
   preferredGenresFrom,
 } from '@/utils/podcast/discover';
-import { getSubscribedPodcasts } from '@/utils/podcast/db';
+import { getSubscribedPodcasts, getPodcastsByIds } from '@/utils/podcast/db';
+import { getRecentListenedPodcastIds } from '@/utils/podcast/listening';
 
 export default {
   name: 'Home',
@@ -273,8 +274,11 @@ export default {
         const subMap = await this.loadSubscribedMap();
         this.$store.commit('setSubscribedPodcastMap', subMap);
         const subbedNames = new Set(Object.keys(subMap));
-        // [B-43] 反推偏好分类，"为你推荐"按分类加权
-        this.preferredGenres = preferredGenresFrom(items, subbedNames);
+        // [B-43/B-63] 综合偏好分类(订阅 + 最近一周听过 + 最近搜索词类目)，"为你推荐"按分类加权
+        this.preferredGenres = await this.buildPreferredGenres(
+          items,
+          subbedNames
+        );
         this.sections = splitSections(items, subbedNames, this.preferredGenres);
         // [B-53] 新上线：排除已订阅，保持新鲜
         this.newItems = (newItems || []).filter(
@@ -299,6 +303,41 @@ export default {
       } catch (e) {
         return {};
       }
+    },
+    // [B-63] 综合偏好分类：订阅节目 + 最近一周听过节目 + 最近搜索词，→ 在热榜里反查 primaryGenreName。
+    //   关键词走"类目"而非只按名字硬匹配 → 推同类节目，不生硬。
+    async buildPreferredGenres(items, subbedNames) {
+      const genres = preferredGenresFrom(items, subbedNames); // 订阅类目
+      try {
+        const recentIds = await getRecentListenedPodcastIds(7);
+        if (recentIds.length) {
+          const pods = await getPodcastsByIds(recentIds);
+          const names = new Set(
+            pods.map(p => (p.title || '').trim()).filter(Boolean)
+          );
+          preferredGenresFrom(items, names).forEach(g => genres.add(g));
+        }
+      } catch (e) {
+        /* 忽略：拿不到近期收听不影响订阅类目推荐 */
+      }
+      try {
+        const kws = JSON.parse(
+          localStorage.getItem('podcast.recentSearch') || '[]'
+        );
+        const lowered = kws.map(k => String(k).toLowerCase()).filter(Boolean);
+        if (lowered.length) {
+          items.forEach(it => {
+            const name = (it.name || '').toLowerCase();
+            if (lowered.some(k => name.includes(k))) {
+              const g = (it.primaryGenreName || '').trim();
+              if (g) genres.add(g);
+            }
+          });
+        }
+      } catch (e) {
+        /* 忽略 */
+      }
+      return genres;
     },
     // [B-42] 行尾操作：page=进二级页；reroll=重新随机推荐
     async onSectionAction(sec) {
