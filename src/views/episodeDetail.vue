@@ -1,7 +1,7 @@
 <template>
   <div v-show="episode" class="episode-detail-page">
     <div v-if="episode" class="ep-header">
-      <img
+      <PodImage
         v-if="episode.coverUrl"
         class="cover"
         :src="episode.coverUrl"

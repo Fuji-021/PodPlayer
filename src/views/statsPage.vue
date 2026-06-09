@@ -51,7 +51,7 @@
           class="bar"
           :style="{ width: item._w + '%', background: barColor(item) }"
         >
-          <img class="thumb" :src="item.coverUrl" @error="onCoverError" />
+          <PodImage class="thumb" :src="item.coverUrl" @error="onCoverError" />
         </div>
         <div class="label">
           <div class="name">{{ item.title }}</div>

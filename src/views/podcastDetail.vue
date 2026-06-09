@@ -7,7 +7,11 @@
         :class="{ 'menu-active': coverMenuMode }"
         @contextmenu.prevent="toggleCoverMenu"
       >
-        <img class="cover-lg" :src="podcast.coverUrl" @error="onCoverError" />
+        <PodImage
+          class="cover-lg"
+          :src="podcast.coverUrl"
+          @error="onCoverError"
+        />
         <div v-if="coverMenuMode" class="cover-menu-overlay" @click.stop>
           <button
             class="cover-menu-btn"

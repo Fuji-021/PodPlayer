@@ -9,7 +9,7 @@
       @click="play(item)"
       @contextmenu.prevent="openMenu($event, item)"
     >
-      <img class="cover" :src="item.coverUrl" @error="onCoverError" />
+      <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
       <div class="meta">
         <div class="t">{{ item.title }}</div>
         <div class="s">{{ item.podcastTitle }}</div>
@@ -36,7 +36,7 @@
           class="dl-progress-bg"
           :style="{ width: dlPercent(item) + '%' }"
         ></div>
-        <img class="cover" :src="item.coverUrl" @error="onCoverError" />
+        <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
         <div class="meta">
           <div class="t">{{ item.title }}</div>
           <div class="s"
