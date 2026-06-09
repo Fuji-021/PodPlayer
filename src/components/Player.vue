@@ -214,7 +214,7 @@
                   >
                     <!-- [A-24 拖动] 左侧拖动点 -->
                     <div class="qp-handle">⋮⋮</div>
-                    <img
+                    <PodImage
                       v-if="item.coverUrl"
                       class="qp-cover"
                       :src="item.coverUrl"

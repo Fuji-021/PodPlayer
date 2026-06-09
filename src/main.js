@@ -11,6 +11,9 @@ import { dailyTask } from '@/utils/common';
 import '@/assets/css/global.scss';
 import NProgress from 'nprogress';
 import '@/assets/css/nprogress.css';
+// [B-62] 全局注册统一淡入封面组件（节目/单集封面零成本替换 <img>）
+import PodImage from '@/components/PodImage.vue';
+Vue.component('PodImage', PodImage);
 
 window.resetApp = () => {
   localStorage.clear();

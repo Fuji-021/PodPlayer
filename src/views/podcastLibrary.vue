@@ -108,12 +108,7 @@
             :style="{ backgroundImage: `url(${p.coverUrl})` }"
           ></div>
           <div class="cover-wrap">
-            <img
-              class="cover"
-              :src="p.coverUrl"
-              loading="lazy"
-              @error="onCoverError"
-            />
+            <PodImage class="cover" :src="p.coverUrl" @error="onCoverError" />
             <!-- [B-35→暂停] 封面下载进度 ring 应用户要求暂时取消。
                逻辑(podcastDlProgress) + 样式(.dl-ring) 保留，恢复时还原这段 svg 即可。 -->
             <!-- eslint-disable-next-line vue/no-unused-vars -->

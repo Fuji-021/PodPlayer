@@ -14,7 +14,7 @@
         :style="{ backgroundImage: `url(${cover})` }"
       ></div>
       <div class="cover-wrap">
-        <img class="cover" :src="cover" loading="lazy" @error="onImgError" />
+        <PodImage class="cover" :src="cover" @error="onImgError" />
         <!-- 订阅中：封面压暗 + 居中转圈（仅订阅过程，转瞬即逝） -->
         <div v-if="busy" class="cover-loading"
           ><span class="spinner"></span
