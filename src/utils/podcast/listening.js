@@ -200,12 +200,16 @@ export async function getListenStatsByPodcast(range = 'all') {
   }
   const pids = Object.keys(byPod);
   const pods = await db.podcasts.bulkGet(pids);
+  // [B-54] 过滤掉 podcasts 表已无的节目（取消订阅后残留的收听统计）→ 不再出现"未知节目"。
+  //   统计数据本身保留(不删)，重新订阅该节目时会自动恢复显示；totalWall 仍含历史总时长。
   const list = pids
-    .map((pid, i) => ({
-      podcastId: pid,
-      title: (pods[i] && pods[i].title) || '(未知节目)',
-      coverUrl: (pods[i] && pods[i].coverUrl) || '',
-      wallSec: byPod[pid],
+    .map((pid, i) => ({ podcastId: pid, pod: pods[i], wallSec: byPod[pid] }))
+    .filter(x => x.pod)
+    .map(x => ({
+      podcastId: x.podcastId,
+      title: x.pod.title || '',
+      coverUrl: x.pod.coverUrl || '',
+      wallSec: x.wallSec,
     }))
     .sort((a, b) => b.wallSec - a.wallSec);
   return { totalWall, list };

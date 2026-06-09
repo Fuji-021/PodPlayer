@@ -36,26 +36,29 @@
 
     <div class="range-total"> 共 {{ fmtDur(rangeTotal) }} </div>
 
-    <div v-if="!list.length" class="empty">这段时间还没有收听记录</div>
+    <div v-if="!visibleList.length" class="empty">这段时间还没有收听记录</div>
 
-    <!-- [B-38] 节目时长矩形条：bar 宽度=时长比例，封面在条右端，节目名紧跟封面（与各自进度条对齐） -->
-    <div
-      v-for="item in visibleList"
-      :key="item.podcastId"
-      class="stat-row"
-      @click="goPodcast(item)"
-    >
+    <!-- [B-54] 时长矩形条：transition-group 实现进入时"重排+加长+整体缩放"的丝滑动画。
+         bar 宽度=相对最长条的比例(天然不超边界，最长条变长则其它整体变细=俯视上升)。 -->
+    <transition-group name="stat" tag="div" class="stat-list">
       <div
-        class="bar"
-        :style="{ width: barWidth(item), background: barColor(item) }"
+        v-for="item in visibleList"
+        :key="item.podcastId"
+        class="stat-row"
+        @click="goPodcast(item)"
       >
-        <img class="thumb" :src="item.coverUrl" @error="onCoverError" />
+        <div
+          class="bar"
+          :style="{ width: barWidth(item), background: barColor(item) }"
+        >
+          <img class="thumb" :src="item.coverUrl" @error="onCoverError" />
+        </div>
+        <div class="label">
+          <div class="name">{{ item.title }}</div>
+          <div class="dur">{{ fmtDur(item.wallSec) }}</div>
+        </div>
       </div>
-      <div class="label">
-        <div class="name">{{ item.title }}</div>
-        <div class="dur">{{ fmtDur(item.wallSec) }}</div>
-      </div>
-    </div>
+    </transition-group>
   </div>
 </template>
 
@@ -117,14 +120,11 @@ export default {
     },
   },
   async created() {
-    this.pickMood();
-    await this.loadTotal();
-    await this.loadRange();
+    await this.enterWithAnimation();
   },
   async activated() {
-    this.pickMood();
-    await this.loadTotal();
-    await this.loadRange();
+    // keep-alive：每次重新进入都跑一次"重排"动画（用上次快照当起点）
+    await this.enterWithAnimation();
   },
   methods: {
     // [B-40] 每次进来随机一条跑步提示词
@@ -141,7 +141,32 @@ export default {
       );
       this.rangeTotal = totalWall;
       this.list = list;
-      // [B-39] 异步提取每个节目封面主色填充矩形条（不阻塞渲染，到了再刷新该行）
+      this.extractColors();
+      this.saveSnapshot(this.range, list);
+    },
+    // [B-54] 进入页面的动画流程：先用上次快照当起点，再切到本次新数据，
+    //   transition-group 自动播"重排(move) + 进度条加长/整体缩放(width)"，只跑一次。
+    async enterWithAnimation() {
+      this.pickMood();
+      // 1) 先显示上次快照（旧排序/旧宽度）作为动画起点
+      const snap = this.loadSnapshot(this.range);
+      if (snap && snap.length) this.list = snap;
+      // 2) 取总时长 + 本次新数据
+      await this.loadTotal();
+      const fresh = await getListenStatsByPodcast(
+        this.range === 'week' ? 7 : 'all'
+      );
+      this.rangeTotal = fresh.totalWall;
+      // 3) 下一帧+短延迟把 list 换成新数据（让旧状态先上屏，动画才有起点 → 重排/加长）
+      await this.$nextTick();
+      setTimeout(() => {
+        this.list = fresh.list;
+        this.extractColors();
+        this.saveSnapshot(this.range, fresh.list);
+      }, 90);
+    },
+    // [B-39] 异步提取每个节目封面主色填充矩形条（不阻塞渲染，到了再刷新该行）
+    extractColors() {
       this.list.forEach((item, i) => {
         getCoverColor(item.coverUrl).then(hsl => {
           if (
@@ -153,6 +178,30 @@ export default {
           }
         });
       });
+    },
+    // [B-54] 上次进入时的排行快照（localStorage，按 range 分键），作为下次动画起点
+    loadSnapshot(range) {
+      try {
+        return JSON.parse(
+          localStorage.getItem('statsPage.snap.' + range) || '[]'
+        );
+      } catch (e) {
+        return [];
+      }
+    },
+    saveSnapshot(range, list) {
+      try {
+        const slim = (list || []).map(x => ({
+          podcastId: x.podcastId,
+          title: x.title,
+          coverUrl: x.coverUrl,
+          wallSec: x.wallSec,
+          colorHsl: x.colorHsl,
+        }));
+        localStorage.setItem('statsPage.snap.' + range, JSON.stringify(slim));
+      } catch (e) {
+        // localStorage 满/异常忽略
+      }
     },
     async setRange(r) {
       if (this.range === r) return;
@@ -301,6 +350,29 @@ export default {
   padding: 60px 0;
   font-size: 14px;
 }
+// [B-54] 排行重排动画：move=FLIP 位移（节目被刷上/刷下），enter=新增补入，leave=移除
+.stat-list {
+  position: relative;
+}
+.stat-move {
+  transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.stat-enter-active {
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+.stat-enter {
+  opacity: 0;
+  transform: translateY(14px);
+}
+.stat-leave-active {
+  transition: opacity 0.4s ease, transform 0.4s ease;
+  position: absolute;
+  width: 100%;
+}
+.stat-leave-to {
+  opacity: 0;
+  transform: translateX(-24px);
+}
 .stat-row {
   display: flex;
   align-items: center;
@@ -319,7 +391,8 @@ export default {
     align-items: center;
     justify-content: flex-end;
     min-width: 48px;
-    transition: width 0.4s ease-out;
+    // [B-54] 进度条加长 / 整体缩放(俯视上升) 的丝滑过渡
+    transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .thumb {
     width: 40px;
