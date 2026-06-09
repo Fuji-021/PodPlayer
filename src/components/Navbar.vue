@@ -428,7 +428,7 @@ nav.has-custom-titlebar {
     background: var(--color-secondary-bg-for-transparent);
     border-radius: 8px;
     // 宽度仅够「🔍 搜索播客」+ 清除×，不再占大块
-    width: 150px;
+    width: 168px;
     // [B-52] 轻反馈 + 聚焦缩放动画
     transition: transform 0.18s ease, background 0.18s ease;
     transform-origin: right center;
@@ -439,13 +439,15 @@ nav.has-custom-titlebar {
   }
 
   .svg-icon {
-    height: 15px;
-    width: 15px;
+    // [B-63改] 放大到≈字体大小(16px)、与右侧×一致；左 margin 加大 → 内容整体右移约两个字身，
+    //   平衡"视觉重心偏左"。
+    height: 16px;
+    width: 16px;
     color: var(--color-text);
-    opacity: 0.28;
+    opacity: 0.4;
     margin: {
-      left: 8px;
-      right: 4px;
+      left: 24px;
+      right: 7px;
     }
   }
 
@@ -481,10 +483,10 @@ nav.has-custom-titlebar {
     -webkit-app-region: no-drag;
     transition: opacity 0.15s ease;
     .svg-icon {
-      width: 13px;
-      height: 13px;
+      width: 15px; // [B-63改] 与放大镜/字体大小一致
+      height: 15px;
       margin: 0; // 覆盖 .search-box .svg-icon 的左右 margin
-      opacity: 1; // 覆盖放大镜的 0.28，避免与 button opacity 叠加过淡
+      opacity: 1; // 覆盖放大镜的 opacity，避免与 button opacity 叠加过淡
     }
     &:hover {
       opacity: 0.95;

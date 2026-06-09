@@ -264,7 +264,10 @@
                     <div
                       v-if="sleepMarkerPct != null"
                       class="sl-end-marker"
-                      :style="{ left: sleepMarkerPct + '%' }"
+                      :style="{
+                        left: sleepMarkerPct + '%',
+                        background: sleepMarkerColor,
+                      }"
                       title="本集结束"
                     ></div>
                     <vue-slider
@@ -366,6 +369,8 @@ import ButtonIcon from '@/components/ButtonIcon.vue';
 import VueSlider from 'vue-slider-component';
 import { goToListSource, hasListSource } from '@/utils/playList';
 import { formatTrackTime } from '@/utils/common';
+// [B-63] 睡眠定时"本集结束"小蓝标改用当前封面主色调（记忆点 + 与定位本集结束呼应）
+import { getCoverColor } from '@/utils/podcast/coverColor';
 
 export default {
   name: 'Player',
@@ -404,8 +409,10 @@ export default {
       sleepOutsideListener: null,
       // [B-63] 单滑条动态量程：开菜单时按单集剩余时间即时计算
       sleepMaxMin: 120, // 滑条最大值(分钟)
-      sleepMarkerPct: null, // "本集结束"蓝标位置(%)；null=无单集时不显示
-      sleepEpisodeRemainMin: 0, // 当前单集剩余分钟(用于贴近蓝标时识别为"本集结束")
+      sleepMarkerPct: null, // "本集结束"标记位置(%)；null=无单集时不显示
+      sleepEpisodeRemainMin: 0, // 当前单集剩余分钟(用于贴近标记时识别为"本集结束")
+      sleepMarkerColor: '#e67e22', // [B-63]"本集结束"标记色=封面主色调(默认暖橙，区别于蓝色进度条)
+      sleepColorSrc: '', // 已取色的封面 url（避免重复取色）
     };
   },
   computed: {
@@ -657,10 +664,22 @@ export default {
           (remainMin / this.sleepMaxMin) * 100
         );
       } else {
-        // 无单集/无时长 → 退化为普通 0-120 滑条，不显示蓝标
+        // 无单集/无时长 → 退化为普通 0-120 滑条，不显示标记
         this.sleepEpisodeRemainMin = 0;
         this.sleepMaxMin = 120;
         this.sleepMarkerPct = null;
+      }
+      // [B-63] "本集结束"标记色 = 当前封面主色调（缓存，避免重复取色）
+      const src = this.coverSrc;
+      if (src && src !== this.sleepColorSrc) {
+        this.sleepColorSrc = src;
+        getCoverColor(src)
+          .then(hsl => {
+            if (hsl && this.sleepColorSrc === src) {
+              this.sleepMarkerColor = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
+            }
+          })
+          .catch(() => {});
       }
     },
     // [B-47/B-63] 滑条拖动/点击：val=分钟。0=关闭；贴近蓝标=本集结束后暂停；其余=定时分钟。
@@ -1540,15 +1559,30 @@ export default {
   .vue-slider {
     width: 100%;
   }
-  // [B-63] 本集结束蓝标：滑条上一根蓝色细条（拖到此=本集结束后暂停）
+  // [B-63改] 睡眠滑条：已填充段用蓝色(深色模式可见，原色发黑看不见)，轨道淡灰，把手蓝色。
+  //   ::v-deep 仅作用于睡眠滑条，不影响播放/音量滑条。
+  ::v-deep .vue-slider-rail {
+    background-color: var(--color-secondary-bg);
+  }
+  ::v-deep .vue-slider-process {
+    background-color: var(--color-primary);
+  }
+  ::v-deep .vue-slider-dot-handle {
+    background-color: var(--color-primary);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+  // [B-63改] "本集结束"标记：用当前封面主色调(inline sleepMarkerColor 绑定)，
+  //   区别于蓝色进度条 → 记忆点，与"定位到本集结束"呼应。
   .sl-end-marker {
     position: absolute;
     top: 50%;
     transform: translate(-50%, -50%);
     width: 3px;
-    height: 13px;
+    height: 14px;
     border-radius: 2px;
-    background: var(--color-primary);
+    background: var(
+      --color-primary
+    ); // 兜底，实际由 inline sleepMarkerColor 覆盖
     box-shadow: 0 0 0 1.5px var(--color-body-bg);
     pointer-events: none;
     z-index: 3;
