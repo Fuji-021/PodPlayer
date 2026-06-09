@@ -981,8 +981,8 @@ export default {
   height: 2px;
   pointer-events: none;
   z-index: 5;
-  // [B-35] 高光条占 50% 宽，从右外(150%)平移到左外(-50%)，两端都在视野外
-  // → 跳变不可见，看起来是「一直循环」的单向流动（修掉原来来回不衔接的观感）。
+  // [B-35/B-59] 高光条占 50% 宽，从左外(-50%)平移到右外(150%) → 高光「一直向右」流动
+  // （B-59 修：之前 150%→-50% 是向左，与本意相反）；两端都在视野外，循环跳变不可见。
   background: linear-gradient(
     90deg,
     transparent 0%,
@@ -996,10 +996,10 @@ export default {
 }
 @keyframes bufferingFlow {
   0% {
-    background-position: 150% 0;
+    background-position: -50% 0;
   }
   100% {
-    background-position: -50% 0;
+    background-position: 150% 0;
   }
 }
 

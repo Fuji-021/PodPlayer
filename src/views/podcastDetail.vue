@@ -88,6 +88,14 @@
         <!-- [B-33] 状态按钮排序原则：从右到左变动频率递减。
              更多(最右,常驻) ← 播放(常驻) ← 收藏 ← 已下载。DOM 左到右即：已下载 收藏 播放 更多 -->
         <!-- [B-34] 多选模式下隐藏右侧操作按钮，只留多选框 + 内容 -->
+        <!-- [B-59] 排队中：显式状态图标，只提示不操作（取消请用更多菜单里的"取消下载"） -->
+        <div
+          v-if="!selectMode && isQueued(ep)"
+          class="ep-queued"
+          title="排队中"
+        >
+          <svg-icon icon-class="queue-alt" />
+        </div>
         <!-- 已下载（点击 → 中央确认删除弹窗） -->
         <button
           v-if="!selectMode && isDownloaded(ep)"
@@ -407,8 +415,8 @@ export default {
         this.askDeleteDownload(ep);
         return;
       }
-      if (this.downloadPercent(ep) >= 0) {
-        // 已经在下载，二次点 → 取消
+      // [B-59] 下载中 或 排队中 → 二次点取消（取消排队也统一按"取消下载"管理）
+      if (this.downloadPercent(ep) >= 0 || this.isQueued(ep)) {
         cancelDownload(ep.id);
         return;
       }
@@ -433,6 +441,16 @@ export default {
       if (!p || p.status !== 'downloading') return -1;
       if (!p.bytesTotal) return 1; // 仍未拿到 content-length，先显示 1%
       return Math.min(99, (p.bytesDone / p.bytesTotal) * 100);
+    },
+    // [B-59] 是否排队中（下载并发达上限时入队，status:'queued'）；只做提示，取消走取消下载
+    isQueued(ep) {
+      if (!ep) return false;
+      const map =
+        (this.$store.state.podcastDownloads &&
+          this.$store.state.podcastDownloads.progressMap) ||
+        {};
+      const p = map[ep.id];
+      return !!(p && p.status === 'queued');
     },
     askDeleteDownload(ep) {
       this.dlDeleteTarget = ep;
@@ -470,11 +488,14 @@ export default {
     // [B-33] 右键菜单"下载"项的动态图标/文案（已下载→删除下载，下载中→取消下载）
     downloadMenuIcon(ep) {
       if (this.isDownloaded(ep)) return 'trash';
+      // [B-59] 下载中 或 排队中 → 取消语义，用 x 图标，避免「显示 download 却执行取消」
+      if (this.downloadPercent(ep) >= 0 || this.isQueued(ep)) return 'x';
       return 'download';
     },
     downloadMenuLabel(ep) {
       if (this.isDownloaded(ep)) return '删除下载';
-      if (this.downloadPercent(ep) >= 0) return '取消下载';
+      // [B-59] 下载中 或 排队中 → 统一「取消下载」（取消排队也走这里）
+      if (this.downloadPercent(ep) >= 0 || this.isQueued(ep)) return '取消下载';
       return '下载';
     },
     // [B-34] 右键封面菜单 toggle（批量下载 / 取消订阅）+ 点外部关闭
@@ -860,9 +881,23 @@ export default {
   .ep-play-btn,
   .ep-menu-btn,
   .ep-downloaded-btn,
-  .ep-fav-btn {
+  .ep-fav-btn,
+  .ep-queued {
     position: relative;
     z-index: 1;
+  }
+  // [B-59] 排队中图标（只提示，弱化显示、不可点）
+  .ep-queued {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text);
+    opacity: 0.45;
+    flex-shrink: 0;
+    .svg-icon {
+      width: 18px;
+      height: 18px;
+    }
   }
   // [B-31] 已下载图标按钮：绿色 check-circle
   .ep-downloaded-btn {
