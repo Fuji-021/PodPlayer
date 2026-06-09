@@ -132,7 +132,7 @@ import {
   reshuffleSection,
   preferredGenresFrom,
 } from '@/utils/podcast/discover';
-import { getAllPodcasts } from '@/utils/podcast/db';
+import { getSubscribedPodcasts } from '@/utils/podcast/db';
 
 export default {
   name: 'Home',
@@ -270,7 +270,7 @@ export default {
     // [B-43] 从 Dexie 读已订阅 → {节目名: feedUrl}。节目名是榜单(name)与订阅库(title)唯一关联键。
     async loadSubscribedMap() {
       try {
-        const pods = await getAllPodcasts();
+        const pods = await getSubscribedPodcasts();
         const map = {};
         pods.forEach(p => {
           const t = (p.title || '').trim();

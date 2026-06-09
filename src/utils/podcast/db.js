@@ -19,6 +19,12 @@ export function getAllPodcasts() {
   return db.podcasts.toArray();
 }
 
+// [B-50] 只取"已订阅"节目（subscribed!==false；旧数据无此字段→视为已订阅，兼容）。
+//   发现页点卡片"预览"的节目入库时 subscribed=false，不出现在我的订阅、不算已订阅状态。
+export function getSubscribedPodcasts() {
+  return db.podcasts.filter(p => p.subscribed !== false).toArray();
+}
+
 export function getPodcast(id) {
   return db.podcasts.get(id);
 }

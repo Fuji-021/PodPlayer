@@ -22,7 +22,7 @@
 
 <script>
 import { fetchHotPodcasts, getSectionFull } from '@/utils/podcast/discover';
-import { getAllPodcasts } from '@/utils/podcast/db';
+import { getSubscribedPodcasts } from '@/utils/podcast/db';
 import SvgIcon from '@/components/SvgIcon.vue';
 import DiscoverCard from '@/components/DiscoverCard.vue';
 
@@ -84,7 +84,7 @@ export default {
     // 从 Dexie 读已订阅 → {节目名: feedUrl}
     async loadSubscribedMap() {
       try {
-        const pods = await getAllPodcasts();
+        const pods = await getSubscribedPodcasts();
         const map = {};
         pods.forEach(p => {
           const t = (p.title || '').trim();

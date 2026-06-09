@@ -16,7 +16,9 @@
           >
             <svg-icon icon-class="download" />
           </button>
+          <!-- [B-50] 只有真订阅的节目才显示"取消订阅"（预览节目不是订阅，不显示） -->
           <button
+            v-if="podcast.subscribed !== false"
             class="cover-menu-btn danger"
             title="取消订阅"
             @click="confirmUnsubscribe"
@@ -28,6 +30,14 @@
       <div class="meta">
         <div class="t">{{ podcast.title }}</div>
         <div class="a">{{ podcast.author }}</div>
+        <!-- [B-50] 预览(未订阅)节目：点卡片进来=试听浏览，未自动订阅 → 显示订阅按钮 -->
+        <button
+          v-if="podcast.subscribed === false"
+          class="sub-this-btn"
+          @click="subscribeThis"
+        >
+          <svg-icon icon-class="square-plus" />订阅到我的
+        </button>
         <div class="d">{{ cleanDescription }}</div>
       </div>
     </div>
@@ -570,6 +580,24 @@ export default {
       this.closeCoverMenu();
       this.showConfirmUnsub = true;
     },
+    // [B-50] 预览节目 → 正式订阅（改 subscribed:true，进我的订阅 + 全局已订阅状态）
+    async subscribeThis() {
+      if (!this.podcast) return;
+      try {
+        await updatePodcast(this.feedUrl, { subscribed: true });
+        this.podcast = { ...this.podcast, subscribed: true };
+        this.$store.commit('addSubscribedPodcast', {
+          name: this.podcast.title,
+          feedUrl: this.feedUrl,
+        });
+        this.$store.dispatch('showToast', '已订阅到我的');
+      } catch (e) {
+        this.$store.dispatch(
+          'showToast',
+          '订阅失败：' + ((e && e.message) || e)
+        );
+      }
+    },
     async doUnsubscribe() {
       if (!this.podcast) return;
       await deletePodcast(this.podcast.id);
@@ -683,6 +711,28 @@ export default {
     .a {
       opacity: 0.7;
       margin-bottom: 12px;
+    }
+    // [B-50] 预览节目的"订阅到我的"按钮
+    .sub-this-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 12px;
+      padding: 8px 18px;
+      border-radius: 8px;
+      background: var(--color-primary);
+      color: var(--color-primary-bg);
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.15s;
+      .svg-icon {
+        width: 15px;
+        height: 15px;
+      }
+      &:hover {
+        transform: scale(1.04);
+      }
     }
     .d {
       font-size: 14px;

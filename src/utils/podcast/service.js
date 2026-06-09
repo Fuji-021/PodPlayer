@@ -6,6 +6,7 @@ import {
   updatePodcast,
   upsertEpisodes,
   getAllPodcasts,
+  getSubscribedPodcasts,
   getPodcast,
   getEpisodesByPodcast,
   deletePodcast,
@@ -39,9 +40,32 @@ export async function subscribeByRssUrl(feedUrl, source = 'manual') {
   const xml = await ipcFetch('podcast:fetchRss', url);
   const { podcast, episodes } = parseRss(xml, url);
   // [B-48 第1点] 记录来源：'manual'(粘贴RSS/OPML/文件) / 'discover'(首页发现页)
-  await upsertPodcast({ ...podcast, source });
+  // [B-50] 显式订阅 → subscribed:true
+  await upsertPodcast({ ...podcast, source, subscribed: true });
   await upsertEpisodes(episodes);
-  return { podcast: { ...podcast, source }, episodes };
+  return { podcast: { ...podcast, source, subscribed: true }, episodes };
+}
+
+/**
+ * [B-50] 预览一档播客（发现页点卡片进详情用）：抓 RSS 入库供详情页/试听，但**不订阅**。
+ * - 节目不存在 → subscribed:false 入库（不进"我的订阅"，不算已订阅状态）。
+ * - 节目已存在 → 保留其原 subscribed（绝不把已订阅的降级）。
+ * @param {string} feedUrl
+ * @returns {Promise<{ podcast: object, episodes: object[] }>}
+ */
+export async function previewByRssUrl(feedUrl) {
+  const url = cleanUrl(feedUrl);
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error('无效的 RSS 链接');
+  }
+  const existing = await getPodcast(url);
+  const xml = await ipcFetch('podcast:fetchRss', url);
+  const { podcast, episodes } = parseRss(xml, url);
+  const subscribed = existing ? existing.subscribed !== false : false;
+  const source = existing && existing.source ? existing.source : 'discover';
+  await upsertPodcast({ ...podcast, source, subscribed });
+  await upsertEpisodes(episodes);
+  return { podcast: { ...podcast, source, subscribed }, episodes };
 }
 
 /**
@@ -131,7 +155,7 @@ async function runLimited(items, limit, worker) {
  * @returns {Promise<{ totalNew:number, results:{id,title,newCount,error}[] }>}
  */
 export async function refreshAllSubscriptions(onProgress) {
-  const pods = await getAllPodcasts();
+  const pods = await getSubscribedPodcasts();
   const total = pods.length;
   let done = 0;
   const results = [];
@@ -164,6 +188,7 @@ export async function refreshAllSubscriptions(onProgress) {
 
 export {
   getAllPodcasts,
+  getSubscribedPodcasts,
   getPodcast,
   getEpisodesByPodcast,
   deletePodcast,

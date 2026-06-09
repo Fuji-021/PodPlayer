@@ -57,7 +57,11 @@
 
 <script>
 import SvgIcon from '@/components/SvgIcon.vue';
-import { subscribePodcast, hiResLogo } from '@/utils/podcast/discover';
+import {
+  subscribePodcast,
+  previewPodcast,
+  hiResLogo,
+} from '@/utils/podcast/discover';
 import { deletePodcast } from '@/utils/podcast/service';
 
 export default {
@@ -99,7 +103,7 @@ export default {
     this.closeOverlay();
   },
   methods: {
-    // 左键：进节目详情（已订阅用本地 feedUrl 秒进；未订阅则订阅+抓取后进）
+    // 左键：进节目详情。已订阅用本地 feedUrl 秒进；未订阅走"预览"(入库不订阅)再进，可试听
     onCardClick() {
       if (this.overlayMode) {
         this.closeOverlay();
@@ -108,6 +112,7 @@ export default {
       this.openPodcast();
     },
     async openPodcast() {
+      // 已订阅：本地 feedUrl 秒进
       if (this.feedUrl) {
         this.$router.push({
           name: 'podcastDetail',
@@ -118,8 +123,8 @@ export default {
       if (this.busy) return;
       this.busy = true;
       try {
-        const { podcast, feedUrl } = await subscribePodcast(this.podcast);
-        this.markSubscribed(podcast, feedUrl);
+        // [B-50] 未订阅：预览（入库但不订阅，不进我的订阅、不算已订阅状态），再进详情
+        const { feedUrl } = await previewPodcast(this.podcast);
         this.$router.push({
           name: 'podcastDetail',
           params: { feedUrlEncoded: encodeURIComponent(feedUrl) },

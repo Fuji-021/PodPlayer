@@ -241,7 +241,7 @@ import {
   subscribeByRssUrl,
   importOpmlText,
   importRssText,
-  getAllPodcasts,
+  getSubscribedPodcasts,
   deletePodcast,
   getEpisodesByPodcast,
   refreshAllSubscriptions,
@@ -389,11 +389,11 @@ export default {
     async loadPodcasts() {
       let list;
       try {
-        list = await getAllPodcasts();
+        list = await getSubscribedPodcasts();
         // [B-47 第3点] 偶发拿到空列表(Dexie 偶发)但原本有订阅 → 重试一次，
         //   避免进页面时订阅列表短暂"全部消失"再恢复。
         if ((!list || !list.length) && this.podcasts.length) {
-          list = await getAllPodcasts();
+          list = await getSubscribedPodcasts();
         }
       } catch (e) {
         // 读库异常：保留旧列表，不清空 UI

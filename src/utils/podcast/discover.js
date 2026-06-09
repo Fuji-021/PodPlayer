@@ -1,5 +1,5 @@
 // [B-39 播客改造] 首页"发现"服务：取热门榜单 + 分板块 + 一键订阅（Apple id → feedUrl → 复用订阅）。
-import { subscribeByRssUrl } from './service';
+import { subscribeByRssUrl, previewByRssUrl } from './service';
 
 const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
@@ -38,6 +38,21 @@ export async function subscribePodcast(podcast) {
   // [B-48 第1点] 来源标记为 'discover'（首页云端添加）
   const result = await subscribeByRssUrl(res.feedUrl, 'discover');
   // 返回 feedUrl 便于订阅后跳转节目详情页
+  return { ...result, feedUrl: res.feedUrl };
+}
+
+// [B-50] 预览：Apple id → feedUrl → previewByRssUrl（入库供详情/试听，但不订阅）
+export async function previewPodcast(podcast) {
+  const appleId = appleIdOf(podcast);
+  if (!appleId) {
+    throw new Error('该节目暂无 Apple 源，无法打开');
+  }
+  if (!ipcRenderer) throw new Error('仅在桌面版可用');
+  const res = await ipcRenderer.invoke('podcast:resolveFeed', appleId);
+  if (!res || !res.ok || !res.feedUrl) {
+    throw new Error((res && res.error) || '未能解析出 RSS 订阅源');
+  }
+  const result = await previewByRssUrl(res.feedUrl);
   return { ...result, feedUrl: res.feedUrl };
 }
 
