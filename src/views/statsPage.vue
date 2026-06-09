@@ -140,28 +140,33 @@ export default {
       this.animateTo(list);
       this.saveSnapshot(this.range, list);
     },
-    // [B-54/B-61] 进入页面的动画流程：先用上次快照当起点(铺满各自宽度)，再平滑过渡到本次新数据。
+    // [B-63] 进入页面的动画：**每次进入都重新计算本范围数据并从 0 长出一遍**
+    //   （不论数据是否变化、不管从首页还是任意页面返回都触发）。所有条 _w 从 0 → 目标宽，
+    //   配合按排名顺序渲染，得到一致、符合直觉的"数据刷新/长出"动画（比快照对比更稳、无残影）。
     async enterWithAnimation() {
       this.pickMood();
       await this.loadTotal();
-      // 1) 起点 = 上次快照（按其自身最长条比例铺满宽度）；无快照则空（首次进入全部从 0 长出）
-      const snap = this.loadSnapshot(this.range);
-      if (snap && snap.length) {
-        const sMax = snap[0].wallSec || 1;
-        this.list = snap.map(it => {
-          const w = this.barTargetPct(it, sMax);
-          return { ...it, _target: w, _w: w };
-        });
-      } else {
-        this.list = [];
-      }
-      await this.$nextTick();
-      // 2) 取本次新数据 → 平滑过渡（留存条伸缩+移动，新增条从左长出，离开条回缩）
       const fresh = await getListenStatsByPodcast(
         this.range === 'week' ? 7 : 'all'
       );
       this.rangeTotal = fresh.totalWall;
-      this.animateTo(fresh.list);
+      const maxWall = fresh.list.length ? fresh.list[0].wallSec : 1;
+      // 起点：全部条 _w=0（收起）；下一帧统一长到目标宽 → CSS width 过渡逐条长出
+      this.list = fresh.list.map(it => ({
+        ...it,
+        _target: this.barTargetPct(it, maxWall),
+        _w: 0,
+      }));
+      this.extractColors();
+      this.$nextTick(() => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            this.list.forEach(it => {
+              it._w = it._target;
+            });
+          });
+        });
+      });
       this.saveSnapshot(this.range, fresh.list);
     },
     // [B-39] 异步提取每个节目封面主色填充矩形条（不阻塞渲染，到了再刷新该行）
@@ -219,13 +224,16 @@ export default {
     // [B-61] 离开动画：时间条回缩到 0 + 整行淡出（与"从左长出"镜像；position:absolute 让留存条 FLIP 补位）
     onLeave(el, done) {
       const bar = el.querySelector('.bar');
-      el.style.transition = 'opacity 0.45s ease';
+      // [B-63] 离开项压到底层(z-index)，让 FLIP 上移进来的留存项盖住它 → 消除第一行"残影"重叠；
+      //   同时回缩+淡出比留存项移动略快，离开项尽早消失，进一步减少视觉叠影。
+      el.style.zIndex = '0';
+      el.style.transition = 'opacity 0.32s ease';
       el.style.opacity = '0';
       if (bar) {
-        bar.style.transition = 'width 0.45s cubic-bezier(0.22, 1, 0.36, 1)';
+        bar.style.transition = 'width 0.34s cubic-bezier(0.4, 0, 0.2, 1)';
         bar.style.width = '0%';
       }
-      setTimeout(done, 470);
+      setTimeout(done, 360);
     },
     // [B-54] 上次进入时的排行快照（localStorage，按 range 分键），作为下次动画起点
     loadSnapshot(range) {
@@ -399,6 +407,8 @@ export default {
 // [B-54] 排行重排动画：move=FLIP 位移（节目被刷上/刷下），enter=新增补入，leave=移除
 .stat-list {
   position: relative;
+  // [B-63] 建立层叠上下文，让"离开行(z:0)"被"留存行(z:1)"盖住 → 第一行无残影
+  isolation: isolate;
 }
 .stat-move {
   transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
@@ -421,6 +431,9 @@ export default {
   gap: 12px;
   margin-bottom: 14px;
   cursor: pointer;
+  // [B-63] 留存/移动行在上层(z:1)，离开行 onLeave 里压到 z:0 → 上移补位的行盖住离开行
+  position: relative;
+  z-index: 1;
   &:hover .name {
     color: var(--color-primary);
   }
