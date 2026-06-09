@@ -1,30 +1,31 @@
-// [DEV BUILD ONLY] 作弊数据注入：首次启动写入 ~520 小时收听统计 + 10 档测试节目，
-// 供「收听数据统计」页 / 进度条重排动画在无需真实收听的情况下验证。
+// [DEV BUILD ONLY] 作弊数据注入（动画测试床版 v2）：
+//   首次启动写入 5 档测试节目，构造「最近 1 周 3 条 / 全部时间 5 条、时长各异」的场景，
+//   用于验证收听统计排行的统一动画（新增条从左长出 / 留存条伸缩+移动 / 离开条回缩）。
 //
 // 安全约束：
-//  - 仅在 process.env.VUE_APP_DEV_SEED === 'true' 的构建中被 main.js 调用（dev-serve
-//    调试实例启动时不带该变量 → 永不在调试数据里注入，互不污染）。
-//  - run-once：localStorage 标记防重复注入；若库里已有真实统计数据则跳过（绝不覆盖）。
+//  - 仅在 process.env.VUE_APP_DEV_SEED === 'true' 的构建中被 main.js 调用
+//    （dev-serve 调试实例启动时不带该变量 → 永不在调试数据里注入，互不污染）。
+//  - 版本化 run-once：localStorage 标记防重复；升级版本时只清理 devseed- 前缀的旧数据再重灌
+//    （绝不动用户真实订阅/收听）。
 //  - 本文件只存在于 devbuild 分支，master 主线不含它。
 import { db } from '@/utils/db';
 
-const SEED_FLAG = 'devSeed.v1.done';
+const SEED_FLAG = 'devSeed.v2.done'; // 版本号：改造数据结构时 +1 → 自动清旧重灌
 
-// 10 档测试节目，时长合计 = 520 小时（降序，便于看排行条长短差异）
+// 5 档测试节目。allHours = 全部时间累计(episodeListenStats)；weekHours = 最近 7 天(listenDaily)，
+//   weekHours=0 表示「只在 7 天前听过」→ 只出现在「全部」、不出现在「最近 1 周」。
+// 设计：全部时长 120/88/60/38/22（降序、各异）；最近一周只有 3 档且顺序故意错位，
+//   切到全部时：电影夜话(周#1)→全部#5 一路缩短下移、科技早知道(周#3)→全部#2 上移、
+//   深度对话+商业内参 从左长出。
 const PODCASTS = [
-  { name: '深度对话', hours: 100, color: '#e74c3c' },
-  { name: '科技早知道', hours: 80, color: '#3498db' },
-  { name: '历史的温度', hours: 70, color: '#e67e22' },
-  { name: '商业内参', hours: 60, color: '#16a085' },
-  { name: '电影夜话', hours: 50, color: '#8e44ad' },
-  { name: '宇宙漫游指南', hours: 45, color: '#34495e' },
-  { name: '声音手账', hours: 38, color: '#d35400' },
-  { name: '城市漫步', hours: 30, color: '#27ae60' },
-  { name: '午夜书房', hours: 25, color: '#c0392b' },
-  { name: '生活实验室', hours: 22, color: '#2980b9' },
+  { name: '深度对话', color: '#e74c3c', allHours: 120, weekHours: 0 }, // 全部#1，不在周
+  { name: '科技早知道', color: '#3498db', allHours: 88, weekHours: 3 }, // 周#3
+  { name: '历史的温度', color: '#e67e22', allHours: 60, weekHours: 5 }, // 周#2
+  { name: '商业内参', color: '#16a085', allHours: 38, weekHours: 0 }, // 不在周
+  { name: '电影夜话', color: '#8e44ad', allHours: 22, weekHours: 7 }, // 周#1
 ];
 
-// 纯色方块封面（data-URI，无网络依赖；node-vibrant 取色失败也会落到哈希色兜底）
+// 纯色方块封面（data-URI，无网络依赖）
 function coverDataUri(color, label) {
   const ch = (label || '·').slice(0, 1);
   const svg =
@@ -44,46 +45,49 @@ function dayKey(offsetDays) {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
+// 清理上一版 seed 数据（只删 devseed- 前缀，绝不动真实数据）
+async function clearOldSeed() {
+  try {
+    await db.podcasts.where('id').startsWith('devseed-').delete();
+    await db.episodeListenStats.where('id').startsWith('devseed-').delete();
+    await db.listenDaily
+      .filter(r => String(r && r.podcastId).startsWith('devseed-'))
+      .delete();
+  } catch (e) {
+    // ignore
+  }
+}
+
 export async function seedDevDataIfNeeded() {
   try {
     if (localStorage.getItem(SEED_FLAG)) return;
-    // 双保险：库里已有统计数据（真实使用过）则不注入，仅打标记
-    const existing = await db.episodeListenStats.count();
-    if (existing > 0) {
-      localStorage.setItem(SEED_FLAG, '1');
-      return;
-    }
+    await clearOldSeed(); // 升级/重装时先清旧 seed（v1 的 10 档等）
 
     const now = Date.now();
-    const SPREAD_DAYS = 45; // 把每档时长摊到最近 45 天 → 「最近 1 周」「全部」都有数据
-
     const podcastRows = [];
     const statRows = [];
     const dailyRows = [];
 
     PODCASTS.forEach((p, idx) => {
       const pid = `devseed-podcast-${idx + 1}`; // 不含 '::'，保证 split('::')[0] 取回 podcastId
-      const cover = coverDataUri(p.color, p.name);
-
       podcastRows.push({
         id: pid,
         feedUrl: pid,
         title: p.name,
-        coverUrl: cover,
-        description: '【开发测试数据】用于验证统计功能，非真实节目。',
+        coverUrl: coverDataUri(p.color, p.name),
+        description: '【开发测试数据】用于验证统计动画，非真实节目。',
         author: 'PodPlayer Dev',
         subscribed: true,
         source: 'manual',
         updatedAt: now,
       });
 
-      // episodeListenStats：每集 1 小时(3600s)、听满、completed；条数 = 小时数
-      // 「全部」视图用 listenedSec 求和，故每档累计 = hours * 3600
-      for (let i = 0; i < p.hours; i++) {
+      // 全部时间：episodeListenStats，每集 1 小时听满，条数 = allHours
+      for (let i = 0; i < p.allHours; i++) {
         statRows.push({
           id: `${pid}::ep${i + 1}`,
           totalSec: 3600,
-          bits: new Uint8Array(0), // 统计页不读 bits，留空省空间
+          bits: new Uint8Array(0),
           listenedSec: 3600,
           completed: true,
           totalPlayWallSec: 3600,
@@ -92,18 +96,22 @@ export async function seedDevDataIfNeeded() {
         });
       }
 
-      // listenDaily：总时长平摊到最近 SPREAD_DAYS 天，供「最近 N 天」视图
-      const perDay = Math.round((p.hours * 3600) / SPREAD_DAYS);
-      for (let d = 0; d < SPREAD_DAYS; d++) {
-        const date = dayKey(d);
-        dailyRows.push({
-          key: `${date}::${pid}`,
-          date,
-          podcastId: pid,
-          wallSec: perDay,
-          contentSec: perDay,
-          listenedSec: perDay,
-        });
+      // 最近 1 周：listenDaily 仅落在最近 7 天，周合计 = weekHours
+      //   weekHours=0 的节目不写任何 listenDaily → 不出现在「最近 1 周」
+      if (p.weekHours > 0) {
+        const totalWeekSec = p.weekHours * 3600;
+        const perDay = Math.round(totalWeekSec / 7);
+        for (let d = 0; d < 7; d++) {
+          const date = dayKey(d);
+          dailyRows.push({
+            key: `${date}::${pid}`,
+            date,
+            podcastId: pid,
+            wallSec: perDay,
+            contentSec: perDay,
+            listenedSec: perDay,
+          });
+        }
       }
     });
 
@@ -114,7 +122,7 @@ export async function seedDevDataIfNeeded() {
 
     // eslint-disable-next-line no-console
     console.log(
-      `[devSeed] 注入完成：${podcastRows.length} 档节目 / ${statRows.length} 条单集收听 / ${dailyRows.length} 条按天聚合（约 520 小时）`
+      `[devSeed v2] 注入完成：全部 ${podcastRows.length} 档(120/88/60/38/22h) / 最近1周 3 档(电影夜话7h>历史5h>科技3h) / ${statRows.length} 条单集 / ${dailyRows.length} 条按天`
     );
   } catch (e) {
     // eslint-disable-next-line no-console
