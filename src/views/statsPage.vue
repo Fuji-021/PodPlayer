@@ -183,7 +183,7 @@ export default {
     loadSnapshot(range) {
       try {
         return JSON.parse(
-          localStorage.getItem('statsPage.snap.' + range) || '[]'
+          localStorage.getItem('statsPage.snap.v2.' + range) || '[]'
         );
       } catch (e) {
         return [];
@@ -198,7 +198,10 @@ export default {
           wallSec: x.wallSec,
           colorHsl: x.colorHsl,
         }));
-        localStorage.setItem('statsPage.snap.' + range, JSON.stringify(slim));
+        localStorage.setItem(
+          'statsPage.snap.v2.' + range,
+          JSON.stringify(slim)
+        );
       } catch (e) {
         // localStorage 满/异常忽略
       }

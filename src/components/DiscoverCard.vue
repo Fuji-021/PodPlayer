@@ -90,10 +90,14 @@ export default {
       ).trim();
     },
     subbed() {
-      return !!this.subscribedMap[this.name];
+      return !!this.feedUrl;
     },
     feedUrl() {
-      return this.subscribedMap[this.name] || '';
+      if (this.subscribedMap[this.name]) return this.subscribedMap[this.name];
+      // [B56-4] 搜索结果自带 feedUrl，名字可能与 RSS 标题不一致 → 按 feedUrl 反查是否已订阅
+      const feed = this.podcast && this.podcast.feedUrl;
+      if (feed && Object.values(this.subscribedMap).includes(feed)) return feed;
+      return '';
     },
     cover() {
       return hiResLogo(this.podcast.logoURL);

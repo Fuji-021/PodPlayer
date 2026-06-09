@@ -258,7 +258,8 @@ export default {
     // [B-39] 发现页：加载榜单 + 分板块
     async loadDiscover(force = false) {
       if (this.showLegacyHome) return;
-      if (!force && this.sections.hot.length) return; // 已加载过
+      // [B56-3] 早退要求 hot 与 new 都已拿到；new 上次失败为空时不被 hot 缓存挡住，会重抓
+      if (!force && this.sections.hot.length && this.newItems.length) return;
       this.discoverError = '';
       this.discoverLoading = true;
       try {
