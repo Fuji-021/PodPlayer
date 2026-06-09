@@ -43,13 +43,20 @@
     <div class="controls">
       <div class="playing">
         <div class="container" @click.stop>
-          <img
-            class="cover-img"
-            :class="{ 'cover-loaded': coverLoaded }"
-            :src="coverSrc"
-            @load="coverLoaded = true"
-            @click="goToAlbumOrPodcast"
-          />
+          <!-- [B-63] 播放栏封面：小幅 hover 微动+光晕（力度/光晕比首页小一档） -->
+          <div class="cover-box">
+            <div
+              class="cover-glow"
+              :style="{ backgroundImage: `url(${coverSrc})` }"
+            ></div>
+            <img
+              class="cover-img"
+              :class="{ 'cover-loaded': coverLoaded }"
+              :src="coverSrc"
+              @load="coverLoaded = true"
+              @click="goToAlbumOrPodcast"
+            />
+          </div>
           <div class="track-info" :title="audioSource">
             <!-- [播客改造] 单集名：超出容器宽度时 hover 跑马灯滚动；
                  内层 span 用 transform 平移实现，需配合 JS 检测溢出 -->
@@ -1048,7 +1055,34 @@ export default {
   align-items: center;
   min-width: 0;
   flex: 1;
+  // [B-63] 封面外框：小幅 hover 微动 + 光晕（尺度比首页小一档）
+  .cover-box {
+    position: relative;
+    flex-shrink: 0;
+    width: 46px;
+    height: 46px;
+    transition: transform 0.22s ease-out;
+    &:hover {
+      transform: scale(1.06);
+    }
+    &:hover .cover-glow {
+      filter: blur(12px) opacity(0.5);
+    }
+  }
+  .cover-glow {
+    position: absolute;
+    inset: 0;
+    border-radius: 5px;
+    background-size: cover;
+    background-position: center;
+    filter: blur(7px) opacity(0.32);
+    transform: scale(0.9);
+    z-index: 0;
+    pointer-events: none;
+  }
   img {
+    position: relative;
+    z-index: 1;
     height: 46px;
     width: 46px;
     object-fit: cover;

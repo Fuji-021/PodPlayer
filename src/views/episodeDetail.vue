@@ -1,12 +1,20 @@
 <template>
   <div v-show="episode" class="episode-detail-page">
     <div v-if="episode" class="ep-header">
-      <PodImage
-        v-if="episode.coverUrl"
-        class="cover"
-        :src="episode.coverUrl"
-        @error="onCoverError"
-      />
+      <!-- [B-63] 封面 hover 微动+光晕（复用首页设计） -->
+      <div v-if="episode.coverUrl" class="cover-box">
+        <div
+          class="cover-shadow"
+          :style="{ backgroundImage: `url(${episode.coverUrl})` }"
+        ></div>
+        <div class="cover-wrap">
+          <PodImage
+            class="cover"
+            :src="episode.coverUrl"
+            @error="onCoverError"
+          />
+        </div>
+      </div>
       <div class="meta">
         <div class="podcast-name" @click="goPodcast">
           {{ podcast && podcast.title }}
@@ -31,8 +39,13 @@
           <button class="mini-btn" :class="{ favorited: isFav }" @click="onFav">
             <svg-icon :icon-class="isFav ? 'heart-solid' : 'heart'" />
           </button>
-          <button class="mini-btn" @click="onQueue">
-            <svg-icon icon-class="layer-plus" />
+          <button
+            class="mini-btn"
+            :class="{ queued: justQueued }"
+            :title="justQueued ? '已加入播放列表' : '加入播放列表'"
+            @click="onQueue"
+          >
+            <svg-icon :icon-class="justQueued ? 'check' : 'layer-plus'" />
           </button>
           <!-- [B-31] 下载按钮：未下载 → download；下载中 → 进度%；已下载 → check-circle（点击删除） -->
           <button
@@ -117,6 +130,8 @@ export default {
       listenStats: null,
       // [B-31] 删除下载确认弹窗
       showDeleteDlConfirm: false,
+      // [B-63] 加入播放列表后的短暂高亮反馈
+      justQueued: false,
     };
   },
   computed: {
@@ -254,6 +269,13 @@ export default {
         ...this.episode,
         podcastTitle: this.podcast ? this.podcast.title : '',
       });
+      // [B-63] 加入反馈：toast 提示 + 按钮短暂高亮变色
+      this.$store.dispatch('showToast', '已加入播放列表');
+      this.justQueued = true;
+      clearTimeout(this._queuedTimer);
+      this._queuedTimer = setTimeout(() => {
+        this.justQueued = false;
+      }, 1400);
     },
     // [B-31] 下载按钮三态：未下载 → 启动；下载中 → 取消；已下载 → 弹删除确认
     onDownload() {
@@ -309,19 +331,57 @@ export default {
 <style lang="scss" scoped>
 .episode-detail-page {
   color: var(--color-text);
+  padding-top: 28px; // [B-63] 修顶部被 navbar 裁切一行（与其它页一致）
 }
 .ep-header {
   display: flex;
   gap: 24px;
   margin-bottom: 28px;
   align-items: flex-start;
-  .cover {
+  // [B-63] 封面外框：光晕 + hover 微动放大（不裁切，光晕可溢出）
+  .cover-box {
+    position: relative;
     width: 160px;
     height: 160px;
+    flex-shrink: 0;
+    transition: transform 0.25s ease-out;
+    &:hover {
+      transform: translateY(-3px) scale(1.02);
+    }
+    &:hover .cover-shadow {
+      filter: blur(24px) opacity(0.6);
+    }
+  }
+  .cover-shadow {
+    position: absolute;
+    left: 0;
+    top: 10px;
+    width: 100%;
+    height: 100%;
+    border-radius: 14px;
+    background-size: cover;
+    background-position: center;
+    filter: blur(16px) opacity(0.4);
+    transform: scale(0.92);
+    z-index: 0;
+    transition: filter 0.25s;
+    pointer-events: none;
+  }
+  .cover-wrap {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .cover {
+    width: 100%;
+    height: 100%;
     border-radius: 14px;
     object-fit: cover;
-    flex-shrink: 0;
     background: var(--color-secondary-bg);
+    display: block;
   }
   .meta {
     flex: 1;
@@ -421,6 +481,12 @@ export default {
   &.favorited {
     opacity: 1;
     color: #e74c3c;
+  }
+  // [B-63] 加入播放列表瞬时反馈：绿色高亮（1.4s 后复原）
+  &.queued {
+    opacity: 1;
+    color: #fff;
+    background: #27ae60;
   }
   // [B-31] 下载三态
   &.downloaded {

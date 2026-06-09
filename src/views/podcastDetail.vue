@@ -2,33 +2,40 @@
   <div v-show="podcast" class="podcast-detail-page">
     <div v-if="podcast" class="podcast-detail">
       <!-- [B-34] 右键封面弹菜单浮层：批量下载（左）/ 取消订阅（右）。点外部关闭。 -->
-      <div
-        class="cover-wrap"
-        :class="{ 'menu-active': coverMenuMode }"
-        @contextmenu.prevent="toggleCoverMenu"
-      >
-        <PodImage
-          class="cover-lg"
-          :src="podcast.coverUrl"
-          @error="onCoverError"
-        />
-        <div v-if="coverMenuMode" class="cover-menu-overlay" @click.stop>
-          <button
-            class="cover-menu-btn"
-            title="批量下载"
-            @click="enterMultiDownload"
-          >
-            <svg-icon icon-class="download" />
-          </button>
-          <!-- [B-50] 只有真订阅的节目才显示"取消订阅"（预览节目不是订阅，不显示） -->
-          <button
-            v-if="podcast.subscribed !== false"
-            class="cover-menu-btn danger"
-            title="取消订阅"
-            @click="confirmUnsubscribe"
-          >
-            <svg-icon icon-class="heart-crack" />
-          </button>
+      <!-- [B-63] 封面 hover 微动+光晕（复用首页 cover-box/cover-shadow 设计） -->
+      <div class="cover-box">
+        <div
+          class="cover-shadow"
+          :style="{ backgroundImage: `url(${podcast.coverUrl})` }"
+        ></div>
+        <div
+          class="cover-wrap"
+          :class="{ 'menu-active': coverMenuMode }"
+          @contextmenu.prevent="toggleCoverMenu"
+        >
+          <PodImage
+            class="cover-lg"
+            :src="podcast.coverUrl"
+            @error="onCoverError"
+          />
+          <div v-if="coverMenuMode" class="cover-menu-overlay" @click.stop>
+            <button
+              class="cover-menu-btn"
+              title="批量下载"
+              @click="enterMultiDownload"
+            >
+              <svg-icon icon-class="download" />
+            </button>
+            <!-- [B-50] 只有真订阅的节目才显示"取消订阅"（预览节目不是订阅，不显示） -->
+            <button
+              v-if="podcast.subscribed !== false"
+              class="cover-menu-btn danger"
+              title="取消订阅"
+              @click="confirmUnsubscribe"
+            >
+              <svg-icon icon-class="heart-crack" />
+            </button>
+          </div>
         </div>
       </div>
       <div class="meta">
@@ -675,11 +682,40 @@ export default {
   margin-bottom: 32px;
   align-items: flex-start;
   // [B-33] 封面 wrap：承载右键"取消订阅"浮层
-  .cover-wrap {
+  // [B-63] 封面外框：承载光晕 + hover 微动放大（不裁切，光晕可溢出）
+  .cover-box {
     position: relative;
     width: 180px;
     height: 180px;
     flex-shrink: 0;
+    transition: transform 0.25s ease-out;
+    &:hover {
+      transform: translateY(-3px) scale(1.02);
+    }
+    &:hover .cover-shadow {
+      filter: blur(26px) opacity(0.6);
+    }
+  }
+  .cover-shadow {
+    position: absolute;
+    left: 0;
+    top: 10px;
+    width: 100%;
+    height: 100%;
+    border-radius: 16px;
+    background-size: cover;
+    background-position: center;
+    filter: blur(18px) opacity(0.4);
+    transform: scale(0.92);
+    z-index: 0;
+    transition: filter 0.25s;
+    pointer-events: none;
+  }
+  .cover-wrap {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
     border-radius: 16px;
     overflow: hidden;
   }

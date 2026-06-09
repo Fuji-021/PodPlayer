@@ -323,7 +323,6 @@ export default {
   border-radius: 9px;
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
   justify-content: center;
