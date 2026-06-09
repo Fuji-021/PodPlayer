@@ -258,33 +258,27 @@
               >
                 <div class="sleep-slider">
                   <span class="sl-label">{{ sleepLabel }}</span>
-                  <vue-slider
-                    :value="sleepSliderVal"
-                    :min="0"
-                    :max="120"
-                    :interval="5"
-                    :drag-on-click="true"
-                    :duration="0"
-                    tooltip="none"
-                    :dot-size="12"
-                    @change="onSleepSlide"
-                  ></vue-slider>
-                </div>
-                <div class="sleep-foot">
-                  <button
-                    class="sl-foot-btn"
-                    :class="{ active: sleepMode === 'end' }"
-                    @click="setSleepEnd"
-                  >
-                    本集结束后
-                  </button>
-                  <button
-                    v-if="sleepMode !== 'off'"
-                    class="sl-foot-btn cancel"
-                    @click="cancelSleep"
-                  >
-                    取消
-                  </button>
+                  <!-- [B-63] 单滑条：拖到最左=关闭；蓝色细标=本集结束(拖到此=本集结束后暂停)。
+                       max 按单集剩余时间动态算(开菜单瞬时计算)，蓝标位置随之变化。 -->
+                  <div class="sl-track">
+                    <div
+                      v-if="sleepMarkerPct != null"
+                      class="sl-end-marker"
+                      :style="{ left: sleepMarkerPct + '%' }"
+                      title="本集结束"
+                    ></div>
+                    <vue-slider
+                      :value="sleepSliderVal"
+                      :min="0"
+                      :max="sleepMaxMin"
+                      :interval="1"
+                      :drag-on-click="true"
+                      :duration="0"
+                      tooltip="none"
+                      :dot-size="12"
+                      @change="onSleepSlide"
+                    ></vue-slider>
+                  </div>
                 </div>
               </div>
             </transition>
@@ -408,6 +402,10 @@ export default {
       sleepRemainText: '', // 剩余 "M:SS"
       sleepSliderVal: 0, // 滑条显示值(分钟)：未激活=0；激活=剩余分钟(随倒计时自缩)
       sleepOutsideListener: null,
+      // [B-63] 单滑条动态量程：开菜单时按单集剩余时间即时计算
+      sleepMaxMin: 120, // 滑条最大值(分钟)
+      sleepMarkerPct: null, // "本集结束"蓝标位置(%)；null=无单集时不显示
+      sleepEpisodeRemainMin: 0, // 当前单集剩余分钟(用于贴近蓝标时识别为"本集结束")
     };
   },
   computed: {
@@ -476,9 +474,12 @@ export default {
     rateButtonText() {
       return this.rateLabel + 'x';
     },
-    // [B-47] 睡眠弹窗左侧文案：未激活=关闭；定时/本集结束=剩余 M:SS
+    // [B-47/B-63] 睡眠弹窗左侧文案：关闭 / 本集结束·剩余 / 剩余
     sleepLabel() {
       if (this.sleepMode === 'off') return '关闭';
+      if (this.sleepMode === 'end') {
+        return '本集结束 · ' + (this.sleepRemainText || '0:00');
+      }
       return '剩余 ' + (this.sleepRemainText || '0:00');
     },
     // [播客改造 A-7.1] 当前 track 是否已收藏：播客走本地表，网易云走原 store.liked.songs
@@ -622,6 +623,8 @@ export default {
         this.closeSleepMenu();
         return;
       }
+      // [B-63] 开菜单瞬时按单集剩余时间算出滑条量程 + 本集结束蓝标位置（必须快、无卡顿）
+      this.computeSleepRange();
       this.sleepMenuOpen = true;
       this.$nextTick(() => {
         this.sleepOutsideListener = ev => {
@@ -638,20 +641,52 @@ export default {
         this.sleepOutsideListener = null;
       }
     },
-    // [B-47] 滑条拖动/点击：val=分钟(0=关闭)。设置后不关弹窗，便于看滑块自缩。
+    // [B-63] 开菜单时按单集剩余时间算量程：剩余≤90min→蓝标居中(max=2×剩余)，>90min→蓝标最右(max=剩余)
+    computeSleepRange() {
+      const dur = this.player.currentTrackDuration || 0;
+      const pos = this.player.progress || 0;
+      const remainMin = (dur - pos) / 60;
+      if (dur > 0 && remainMin >= 1) {
+        this.sleepEpisodeRemainMin = remainMin;
+        this.sleepMaxMin =
+          remainMin <= 90
+            ? Math.max(10, Math.round(remainMin * 2))
+            : Math.round(remainMin);
+        this.sleepMarkerPct = Math.min(
+          100,
+          (remainMin / this.sleepMaxMin) * 100
+        );
+      } else {
+        // 无单集/无时长 → 退化为普通 0-120 滑条，不显示蓝标
+        this.sleepEpisodeRemainMin = 0;
+        this.sleepMaxMin = 120;
+        this.sleepMarkerPct = null;
+      }
+    },
+    // [B-47/B-63] 滑条拖动/点击：val=分钟。0=关闭；贴近蓝标=本集结束后暂停；其余=定时分钟。
     onSleepSlide(val) {
       const min = Number(val) || 0;
       if (min <= 0) {
         this.cancelSleep();
         return;
       }
+      // 贴近"本集结束"蓝标 → 按本集结束处理（精确跟随单集真实结束，而非固定分钟）
+      const snap = Math.max(2, this.sleepMaxMin * 0.05);
+      if (
+        this.sleepMarkerPct != null &&
+        this.sleepEpisodeRemainMin > 0 &&
+        Math.abs(min - this.sleepEpisodeRemainMin) <= snap
+      ) {
+        this.setSleepEnd();
+        return;
+      }
       this.applySleep(min * 60 * 1000, 'min');
     },
-    // [B-47] 滚轮调节：每格 ±5 分钟（借鉴倍速滚轮）
+    // [B-47/B-63] 滚轮调节：每格 ±5 分钟（上限随动态量程）
     onSleepWheel(e) {
       const step = e.deltaY < 0 ? 5 : -5;
       const base = this.sleepMode === 'off' ? 0 : this.sleepSliderVal;
-      this.onSleepSlide(Math.max(0, Math.min(120, base + step)));
+      this.onSleepSlide(Math.max(0, Math.min(this.sleepMaxMin, base + step)));
     },
     // [B-47] 本集结束后暂停
     setSleepEnd() {
@@ -1477,7 +1512,7 @@ export default {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18),
     0 0 0 1px rgba(127, 127, 127, 0.12);
   padding: 10px 12px;
-  width: 220px;
+  width: 244px;
   z-index: 110;
   color: var(--color-text);
 }
@@ -1492,40 +1527,31 @@ export default {
     opacity: 0.7;
     flex-shrink: 0;
     white-space: nowrap;
-    min-width: 56px;
+    min-width: 64px;
     font-variant-numeric: tabular-nums;
   }
-  .vue-slider {
+  // [B-63] 滑条 + 本集结束蓝标 的相对定位容器
+  .sl-track {
+    position: relative;
     flex: 1;
+    display: flex;
+    align-items: center;
   }
-}
-.sleep-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 8px;
-  .sl-foot-btn {
-    background: transparent;
-    color: var(--color-text);
-    opacity: 0.6;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    padding: 3px 6px;
-    border-radius: 6px;
-    transition: 0.15s;
-    &:hover {
-      opacity: 1;
-      background: var(--color-secondary-bg-for-transparent);
-    }
-    &.active {
-      color: var(--color-primary);
-      opacity: 1;
-    }
-    &.cancel:hover {
-      color: #e74c3c;
-      background: transparent;
-    }
+  .vue-slider {
+    width: 100%;
+  }
+  // [B-63] 本集结束蓝标：滑条上一根蓝色细条（拖到此=本集结束后暂停）
+  .sl-end-marker {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 3px;
+    height: 13px;
+    border-radius: 2px;
+    background: var(--color-primary);
+    box-shadow: 0 0 0 1.5px var(--color-body-bg);
+    pointer-events: none;
+    z-index: 3;
   }
 }
 
