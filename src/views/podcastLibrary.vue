@@ -69,6 +69,11 @@
                 <div class="t">导入文件</div>
                 <div class="s">OPML 批量 / 单档 RSS / XML</div>
               </div>
+              <!-- [B-51] 导出订阅备份 -->
+              <div class="plus-item" @click="onExportOpml">
+                <div class="t">导出 OPML</div>
+                <div class="s">备份我的订阅为文件</div>
+              </div>
             </div>
           </transition>
         </div>
@@ -245,6 +250,7 @@ import {
   deletePodcast,
   getEpisodesByPodcast,
   refreshAllSubscriptions,
+  exportSubscriptionsOpml,
 } from '@/utils/podcast/service';
 import { getPodcastListenSummary } from '@/utils/podcast/listening';
 import { getLastListenedByPodcast } from '@/utils/podcast/db';
@@ -263,7 +269,16 @@ export default {
   components: { SvgIcon },
   data() {
     return {
-      podcasts: [],
+      // [B-51] 冷启动用 localStorage 缓存秒显，避免"第一次打开程序时订阅短暂全部消失"
+      podcasts: (() => {
+        try {
+          return JSON.parse(
+            localStorage.getItem('podcastLibrary.cache') || '[]'
+          );
+        } catch (e) {
+          return [];
+        }
+      })(),
       showAddDialog: false,
       newFeedUrl: '',
       addError: '',
@@ -390,10 +405,13 @@ export default {
       let list;
       try {
         list = await getSubscribedPodcasts();
-        // [B-47 第3点] 偶发拿到空列表(Dexie 偶发)但原本有订阅 → 重试一次，
-        //   避免进页面时订阅列表短暂"全部消失"再恢复。
-        if ((!list || !list.length) && this.podcasts.length) {
+        // [B-47/B-51] 偶发空(冷启动 Dexie 未 ready / 偶发)但缓存/旧数据非空 → 重试最多 2 次，
+        //   避免订阅列表短暂"全部消失"再恢复（尤其第一次打开程序时）。
+        let tries = 0;
+        while ((!list || !list.length) && this.podcasts.length && tries < 2) {
+          await new Promise(r => setTimeout(r, 150));
           list = await getSubscribedPodcasts();
+          tries++;
         }
       } catch (e) {
         // 读库异常：保留旧列表，不清空 UI
@@ -417,6 +435,15 @@ export default {
         lastListenedAt: lastMap[p.id] || 0,
       }));
       this.loaded = true;
+      // [B-51] 写缓存供下次冷启动秒显（避免第一次打开短暂空白）
+      try {
+        localStorage.setItem(
+          'podcastLibrary.cache',
+          JSON.stringify(this.podcasts)
+        );
+      } catch (e) {
+        // localStorage 满/序列化异常 → 忽略，不影响功能
+      }
       console.log('[播客库] loaded', this.podcasts.length, 'podcasts');
     },
     // [B-46 / D-3] 刷新订阅：并发(≤5)重抓所有 RSS，diff 新单集入库 + 卡片角标，toast 汇报
@@ -508,6 +535,32 @@ export default {
     onClickImportOpml() {
       this.closePlusMenu();
       this.openImportOpml();
+    },
+    // [B-51] 导出订阅为 OPML 文件（备份 / 迁移）
+    async onExportOpml() {
+      this.closePlusMenu();
+      if (!this.podcasts.length) {
+        this.$store.dispatch('showToast', '还没有订阅，无需导出');
+        return;
+      }
+      try {
+        const text = await exportSubscriptionsOpml();
+        const blob = new Blob([text], { type: 'text/xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'podplayer-subscriptions.opml';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        this.$store.dispatch('showToast', '已导出 OPML 订阅备份');
+      } catch (e) {
+        this.$store.dispatch(
+          'showToast',
+          '导出失败：' + ((e && e.message) || e)
+        );
+      }
     },
     openAddDialog() {
       this.newFeedUrl = '';

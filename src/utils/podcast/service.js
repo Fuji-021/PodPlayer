@@ -186,6 +186,39 @@ export async function refreshAllSubscriptions(onProgress) {
   return { totalNew, results };
 }
 
+/**
+ * [B-51] 把"我的订阅"导出为 OPML 文本（备份 / 迁移到其它播客客户端）。
+ * 只导出真订阅（subscribed!==false），每档一行 outline，xmlUrl=feedUrl。
+ * @returns {Promise<string>} OPML XML 文本
+ */
+export async function exportSubscriptionsOpml() {
+  const pods = await getSubscribedPodcasts();
+  const esc = s =>
+    String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  const outlines = pods
+    .map(
+      p =>
+        `    <outline type="rss" text="${esc(p.title)}" title="${esc(
+          p.title
+        )}" xmlUrl="${esc(p.id)}" />`
+    )
+    .join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head>
+    <title>PodPlayer 订阅导出</title>
+  </head>
+  <body>
+${outlines}
+  </body>
+</opml>
+`;
+}
+
 export {
   getAllPodcasts,
   getSubscribedPodcasts,
