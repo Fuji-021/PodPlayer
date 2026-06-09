@@ -92,9 +92,11 @@ module.exports = {
       nodeIntegration: true,
       externals: ['@unblockneteasemusic/rust-napi'],
       builderOptions: {
-        productName: 'PodPlayer',
-        appId: 'com.podplayer.desktop',
-        copyright: 'Copyright © PodPlayer',
+        // [DEV BUILD] 独立身份：与正式版 PodPlayer(com.podplayer.desktop) 分开，
+        // 可与正式版/调试版共存、独立安装与卸载。
+        productName: 'PodPlayer Dev',
+        appId: 'com.podplayer.dev',
+        copyright: 'Copyright © PodPlayer Dev',
         // compression: "maximum", // 机器好的可以打开，配置压缩，开启后会让 .AppImage 格式的客户端启动缓慢
         asar: true,
         publish: [
@@ -121,17 +123,14 @@ module.exports = {
           darkModeSupport: true,
         },
         win: {
+          // [DEV BUILD] 只出 nsis 安装包（省构建时间），不出 portable
           target: [
-            {
-              target: 'portable',
-              arch: ['x64'],
-            },
             {
               target: 'nsis',
               arch: ['x64'],
             },
           ],
-          publisherName: 'PodPlayer',
+          publisherName: 'PodPlayer Dev',
           icon: 'build/icons/icon.ico',
           publish: ['github'],
         },
@@ -169,8 +168,10 @@ module.exports = {
           icon: 'build/icons/icon.icns',
         },
         nsis: {
+          // [DEV BUILD] per-user 安装（perMachine:false）→ 装到 %LOCALAPPDATA%\Programs\PodPlayer Dev，
+          // 免管理员、不碰系统目录（安全位置），自动创建开始菜单/桌面快捷方式并安装后自启。
           oneClick: true,
-          perMachine: true,
+          perMachine: false,
           deleteAppDataOnUninstall: true,
         },
       },

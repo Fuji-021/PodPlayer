@@ -105,13 +105,13 @@ class Background {
   init() {
     log('initializing');
 
-    // [播客改造] 让本 fork 作为独立应用运行：使用独立的应用名与用户数据目录，
-    // 避免与已安装的 YesPlayMusic 正式版共用单实例锁和本地数据，
-    // 从而允许两者同时运行、互不干扰（正式版作为对照组保留）。
-    app.setName('YesPlayMusicPodcast');
+    // [DEV BUILD] 开发版独立身份：使用 PodPlayerDev 应用名 + 独立 userData 目录，
+    // 与 dev-serve 调试实例(YesPlayMusicPodcast)、已装正式版(PodPlayer) 的本地数据
+    // 完全隔离（IndexedDB 在 userData 之下，换目录即独立），且单实例锁不同 → 可同时运行。
+    app.setName('PodPlayerDev');
     app.setPath(
       'userData',
-      require('path').join(app.getPath('appData'), 'YesPlayMusicPodcast')
+      require('path').join(app.getPath('appData'), 'PodPlayerDev')
     );
 
     // Make sure the app is singleton.
@@ -167,7 +167,7 @@ class Background {
 
     const expressApp = express();
     expressApp.use('/', express.static(__dirname + '/'));
-    expressApp.use('/api', expressProxy('http://127.0.0.1:10755'));
+    expressApp.use('/api', expressProxy('http://127.0.0.1:10766'));
     expressApp.use('/player', (req, res) => {
       this.window.webContents
         .executeJavaScript('window.yesplaymusic.player')
@@ -180,7 +180,8 @@ class Background {
           });
         });
     });
-    this.expressApp = expressApp.listen(27233, '127.0.0.1');
+    // [DEV BUILD] 端口 27233→27244，避开 dev-serve / 正式版占用 → 可与它们同时运行
+    this.expressApp = expressApp.listen(27244, '127.0.0.1');
   }
 
   createWindow() {
@@ -273,9 +274,11 @@ class Background {
       createProtocol('app');
       this.window.loadURL(
         showLibraryDefault
-          ? 'http://localhost:27233/#/library'
-          : 'http://localhost:27233'
+          ? 'http://localhost:27244/#/library'
+          : 'http://localhost:27244'
       );
+      // [DEV BUILD] 开发版默认打开开发者控制台（方便调试 / 看 [devSeed] 注入日志）
+      this.window.webContents.openDevTools();
     }
   }
 

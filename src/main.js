@@ -87,6 +87,13 @@ loadAllDownloads()
   })
   .catch(() => {});
 
+// [DEV BUILD ONLY] 作弊数据注入（仅 VUE_APP_DEV_SEED=true 的开发版构建生效；
+// dev-serve 调试实例无此环境变量 → 永不注入，互不污染）。
+import { seedDevDataIfNeeded } from '@/utils/podcast/devSeed';
+if (process.env.VUE_APP_DEV_SEED === 'true') {
+  seedDevDataIfNeeded();
+}
+
 new Vue({
   i18n,
   store,
