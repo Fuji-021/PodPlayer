@@ -275,13 +275,13 @@
                       :value="sleepSliderVal"
                       :min="0"
                       :max="sleepMaxMin"
-                      :interval="1"
+                      :interval="sleepStep"
                       :drag-on-click="true"
                       :duration="0"
-                      :lazy="true"
                       tooltip="none"
                       :dot-size="12"
-                      @change="onSleepSlide"
+                      @change="onSleepChange"
+                      @drag-end="onSleepCommit"
                     ></vue-slider>
                   </div>
                 </div>
@@ -407,10 +407,13 @@ export default {
       sleepInterval: null, // setInterval 句柄（每秒刷新剩余 + 滑条自缩）
       sleepEndsAt: 0, // 暂停目标时间戳(ms)
       sleepRemainText: '', // 剩余 "M:SS"
-      sleepSliderVal: 0, // 滑条显示值(分钟)：未激活=0；激活=剩余分钟(随倒计时自缩)
+      sleepSliderVal: 0, // 滑条值(分钟)=用户设定的档位；未激活=0。[B-65] 不再随倒计时自缩，倒计时只走 label
       sleepOutsideListener: null,
       // [B-63] 单滑条动态量程：开菜单时按单集剩余时间即时计算
       sleepMaxMin: 120, // 滑条最大值(分钟)
+      sleepStep: 5, // [B-65] 步长(分钟)：随单集时长动态变(长单集步长大→好拖、落点是整数)
+      sleepEndStop: 0, // [B-65] "本集结束"对应的刻度档位(=ceil(剩余/步长)*步长)；拖到此档=本集结束
+      sleepDragging: false, // [B-65] 正在拖动：label 实时预览拖到的目标值(松手才落定时器)
       sleepMarkerPct: null, // "本集结束"标记位置(%)；null=无单集时不显示
       sleepEpisodeRemainMin: 0, // 当前单集剩余分钟(用于贴近标记时识别为"本集结束")
       sleepMarkerColor: '#e67e22', // [B-63]"本集结束"标记色=封面主色调(默认暖橙，区别于蓝色进度条)
@@ -485,6 +488,14 @@ export default {
     },
     // [B-47/B-63] 睡眠弹窗左侧文案：关闭 / 本集结束·剩余 / 剩余
     sleepLabel() {
+      // [B-65] 拖动中实时预览拖到的目标值（松手才真正落定时器），给即时反馈
+      if (this.sleepDragging) {
+        const v = this.sleepSliderVal;
+        if (v <= 0) return '关闭';
+        if (this.sleepMarkerPct != null && v === this.sleepEndStop)
+          return '本集结束';
+        return this.fmtSleepMin(v);
+      }
       if (this.sleepMode === 'off') return '关闭';
       if (this.sleepMode === 'end') {
         return '本集结束 · ' + (this.sleepRemainText || '0:00');
@@ -665,17 +676,28 @@ export default {
       const remainMin = (dur - pos) / 60;
       if (dur > 0 && remainMin >= 1) {
         this.sleepEpisodeRemainMin = remainMin;
-        this.sleepMaxMin =
-          remainMin <= 90
-            ? Math.max(10, Math.round(remainMin * 2))
-            : Math.round(remainMin);
-        this.sleepMarkerPct = Math.min(
-          100,
-          (remainMin / this.sleepMaxMin) * 100
-        );
+        // [B-65] 步长随单集时长动态：长单集步长大 → 每档够宽好拖、落点是整数(30/45/60/90)
+        const step = this.sleepStepFor(remainMin);
+        // "本集结束"对应的刻度档位：向上取整到步长整数倍 → 落得到、且量程能被步长整除
+        const endStop = Math.max(step, Math.ceil(remainMin / step) * step);
+        // 剩余≤90min → 量程=2×结束档(蓝标居中、两侧都留定时空间)；否则量程=结束档(蓝标最右)
+        const max = remainMin <= 90 ? endStop * 2 : endStop;
+        this.sleepStep = step;
+        this.sleepEndStop = endStop;
+        this.sleepMaxMin = max;
+        this.sleepMarkerPct = Math.min(100, (endStop / max) * 100);
+        // 已设定时(换集后步长可能变) → 把当前值规整到新步长档位，避免滑块错位
+        if (this.sleepMode !== 'off') {
+          this.sleepSliderVal = Math.min(
+            max,
+            Math.round(this.sleepSliderVal / step) * step
+          );
+        }
       } else {
-        // 无单集/无时长 → 退化为普通 0-120 滑条，不显示标记
+        // 无单集/无时长 → 退化为普通 0-120 滑条(步长5)，不显示标记
         this.sleepEpisodeRemainMin = 0;
+        this.sleepStep = 5;
+        this.sleepEndStop = 0;
         this.sleepMaxMin = 120;
         this.sleepMarkerPct = null;
       }
@@ -692,29 +714,58 @@ export default {
           .catch(() => {});
       }
     },
-    // [B-47/B-63] 滑条拖动/点击：val=分钟。0=关闭；贴近蓝标=本集结束后暂停；其余=定时分钟。
-    onSleepSlide(val) {
-      const min = Number(val) || 0;
+    // [B-65] 拖动中：只更新显示值 + 预览 label，不动定时器 → 实时跟手、无 churn(松手才落)
+    onSleepChange(val) {
+      this.sleepDragging = true;
+      this.sleepSliderVal = Math.max(0, Math.round(Number(val) || 0));
+    },
+    // [B-65] 松手/点击落定：val=分钟。0=关闭；正好落在"本集结束"档=本集结束；其余=定时分钟。
+    onSleepCommit() {
+      this.sleepDragging = false;
+      const min = this.sleepSliderVal;
       if (min <= 0) {
         this.cancelSleep();
         return;
       }
-      // [B-64] 贴近"本集结束"蓝标(仅 ±1 分钟，避免吞掉邻近整数分钟取值) → 本集结束模式
+      // 落在"本集结束"档(=endStop) → 本集结束模式(跟随真实播放进度，非墙钟)。
+      //   仅精确等于该档才触发(值已对齐步长)，不吞掉邻近定时取值。
       if (
         this.sleepMarkerPct != null &&
         this.sleepEpisodeRemainMin > 0 &&
-        Math.abs(min - this.sleepEpisodeRemainMin) <= 1
+        min === this.sleepEndStop
       ) {
         this.setSleepEnd();
         return;
       }
       this.applySleep(min * 60 * 1000, 'min');
     },
-    // [B-47/B-63] 滚轮调节：每格 ±5 分钟（上限随动态量程）
+    // [B-65] 步长(分钟)随单集剩余时长动态：短单集精细、长单集粗 → 好拖、落点是整数
+    sleepStepFor(min) {
+      if (min <= 30) return 1;
+      if (min <= 60) return 2;
+      if (min <= 120) return 5;
+      if (min <= 240) return 10;
+      return 15;
+    },
+    // [B-65] 分钟数 → 人读预览：≥60 显示"X小时Y分"
+    fmtSleepMin(v) {
+      if (v >= 60) {
+        const h = Math.floor(v / 60);
+        const m = v % 60;
+        return m ? `${h}小时${m}分` : `${h}小时`;
+      }
+      return `${v}分钟`;
+    },
+    // [B-47/B-65] 滚轮调节：每格 ±一个步长(随量程动态)，立即落定
     onSleepWheel(e) {
-      const step = e.deltaY < 0 ? 5 : -5;
+      const step = this.sleepStep || 1;
+      const dir = e.deltaY < 0 ? 1 : -1;
       const base = this.sleepMode === 'off' ? 0 : this.sleepSliderVal;
-      this.onSleepSlide(Math.max(0, Math.min(this.sleepMaxMin, base + step)));
+      this.sleepSliderVal = Math.max(
+        0,
+        Math.min(this.sleepMaxMin, base + dir * step)
+      );
+      this.onSleepCommit();
     },
     // [B-47/B-64] 本集结束后暂停：'end' 模式跟随单集真实播放进度(非墙钟)，暂停/卡顿不提前误触发
     setSleepEnd() {
@@ -748,23 +799,20 @@ export default {
         const m = Math.floor(leftSec / 60);
         const s = leftSec % 60;
         this.sleepRemainText = `${m}:${String(s).padStart(2, '0')}`;
-        // 滑块固定停在"本集结束"蓝标位置，不随倒计时跳动（消除 snap 跳格）
-        if (this.sleepEpisodeRemainMin > 0) {
-          this.sleepSliderVal = Math.round(this.sleepEpisodeRemainMin);
-        }
         // 播放到接近结尾(≤2s)且确在播放时才暂停 → 既"本集结束后暂停"、又先于自动续播
         if (dur > 0 && leftSec <= 2 && this.player.playing) {
           this.fireSleep();
         }
         return;
       }
-      // 'min' 模式：墙钟倒计时 + 滑条自缩
+      // [B-65] 'min' 模式：墙钟倒计时。滑块停在设定档(显示"你设了多少")，倒计时只走 label 文案，
+      //   不再每秒回写 sleepSliderVal → 消除"滑块自缩"和松手后被 interval 拽回的打架。
       const left = Math.max(0, this.sleepEndsAt - Date.now());
       const totalSec = Math.round(left / 1000);
       const m = Math.floor(totalSec / 60);
       const s = totalSec % 60;
       this.sleepRemainText = `${m}:${String(s).padStart(2, '0')}`;
-      this.sleepSliderVal = Math.ceil(left / 60000);
+      if (left <= 0) this.fireSleep();
     },
     fireSleep() {
       const wasPlaying =
