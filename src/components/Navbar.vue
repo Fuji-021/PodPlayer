@@ -49,13 +49,16 @@
                 @blur="inputFocus = false"
               />
             </div>
-            <!-- [B-63] 自定义清除 ×（替换难调色的原生按钮，颜色跟随文字；仅有内容时显示） -->
-            <svg-icon
+            <!-- [B-63] 自定义清除 ×（替换难调色的原生按钮，颜色跟随文字；仅有内容时显示）。
+                 用 button 包裹确保原生点击可触发(svg-icon 是组件，@click 需 .native)。 -->
+            <button
               v-if="keywords"
-              class="clear-icon"
-              icon-class="x"
+              class="clear-btn"
+              title="清除"
               @click.stop="clearSearch"
-            />
+            >
+              <svg-icon icon-class="x" />
+            </button>
           </div>
         </div>
         <img
@@ -333,8 +336,7 @@ nav.has-custom-titlebar {
 }
 
 .navigation-buttons {
-  // [B-63] 改内容宽度（原 flex:1）→ 配合搜索框绝对居中，让首页/我的订阅靠左不与搜索框重叠
-  flex: 0 0 auto;
+  flex: 1;
   display: flex;
   align-items: center;
   // [B-32] 抵消第一个 button-icon 的 margin(4px)+padding(8px)=12px，
@@ -359,11 +361,13 @@ nav.has-custom-titlebar {
 }
 
 .navigation-links {
-  // [B-63] 改内容宽度（原 flex:1 居中）→ 紧跟返回键靠左，搜索框绝对居中作锚点不重叠
-  flex: 0 0 auto;
-  margin-left: 8px;
+  // [B-63 改] 首页/我的订阅 **绝对居中**（原则：搜索非主要入口，导航链接才是画面锚点）。
+  //   绝对定位脱离流，不受左右元素影响，永远屏幕正中。
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  justify-content: flex-start;
+  justify-content: center;
   text-transform: uppercase;
   user-select: none;
   a {
@@ -401,10 +405,9 @@ nav.has-custom-titlebar {
 }
 
 .search-box {
-  // [B-63] 绝对居中作为整个导航栏的锚定点（nav 为 fixed，是定位上下文）
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  // [B-63 改] nav-links 已绝对居中 → 这里 flex:1 占据右半区，把(缩小后的)搜索框
+  //   居中在「我的订阅(屏幕中)」与头像之间。搜索非主入口，做小、不喧宾夺主。
+  flex: 1;
   display: flex;
   justify-content: center;
   -webkit-app-region: no-drag;
@@ -415,7 +418,8 @@ nav.has-custom-titlebar {
     height: 32px;
     background: var(--color-secondary-bg-for-transparent);
     border-radius: 8px;
-    width: 240px;
+    // 宽度仅够「🔍 搜索播客」+ 清除×，不再占大块
+    width: 150px;
     // [B-52] 轻反馈 + 聚焦缩放动画
     transition: transform 0.18s ease, background 0.18s ease;
     transform-origin: right center;
@@ -452,17 +456,27 @@ nav.has-custom-titlebar {
     }
   }
 
-  // [B-63] 自定义清除 ×：跟随文字色（默认稍淡，hover 实）
-  .clear-icon {
+  // [B-63] 自定义清除 ×：button 包裹确保可点；颜色跟随文字（默认稍淡，hover 实）
+  .clear-btn {
     flex-shrink: 0;
-    width: 13px;
-    height: 13px;
-    margin-right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 6px 0 2px;
+    padding: 2px;
+    background: transparent;
+    border: none;
     color: var(--color-text);
     opacity: 0.5;
     cursor: pointer;
     -webkit-app-region: no-drag;
     transition: opacity 0.15s ease;
+    .svg-icon {
+      width: 13px;
+      height: 13px;
+      margin: 0; // 覆盖 .search-box .svg-icon 的左右 margin
+      opacity: 1; // 覆盖放大镜的 0.28，避免与 button opacity 叠加过淡
+    }
     &:hover {
       opacity: 0.95;
     }
