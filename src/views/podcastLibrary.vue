@@ -400,10 +400,13 @@ export default {
       let list;
       try {
         list = await getSubscribedPodcasts();
-        // [B-47/B-51] 偶发空(冷启动 Dexie 未 ready / 偶发)但缓存/旧数据非空 → 重试最多 2 次，
+        // [B-47/B-51/D] 偶发空(冷启动 Dexie 未 ready / 偶发) → 重试最多 2 次，
         //   避免订阅列表短暂"全部消失"再恢复（尤其第一次打开程序时）。
+        //   仅在首次加载(!this.loaded)时重试：冷启动 localStorage 无缓存时 podcasts.length===0
+        //   也能重试，避免 Dexie 未 ready 偶发返回空而误判"还没有订阅"。
+        //   已确实无订阅时只在首次多等 ~300ms，可接受。
         let tries = 0;
-        while ((!list || !list.length) && this.podcasts.length && tries < 2) {
+        while ((!list || !list.length) && !this.loaded && tries < 2) {
           await new Promise(r => setTimeout(r, 150));
           list = await getSubscribedPodcasts();
           tries++;
@@ -1244,9 +1247,6 @@ export default {
     border-radius: 50%;
     margin-left: 5px;
     vertical-align: middle;
-  }
-  .dot-manual {
-    background: #27ae60; // 绿 = 手动链接/文件导入
   }
   .dot-discover {
     background: #f1c40f; // 黄 = 首页发现页添加

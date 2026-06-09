@@ -316,7 +316,20 @@ export default class {
         // [播客改造] 真实收听统计：每秒 tick
         if (this._playing) {
           const sec = Math.floor(this._progress);
-          const totalSec = Math.floor((t.dt || 0) / 1000);
+          let totalSec = Math.floor((t.dt || 0) / 1000);
+          // [B-64] 单集时长未知(dt=0，如 RSS 缺 itunes:duration)时用 howler 解码时长兜底，
+          //   否则 totalSec=0 → 整块跳过 → 收听统计/每日聚合完全不记录。
+          if (
+            totalSec <= 0 &&
+            this._howler &&
+            this._howler.state() === 'loaded'
+          ) {
+            const d = Math.floor(this._howler.duration() || 0);
+            if (d > 0) {
+              totalSec = d;
+              t.dt = d * 1000; // 回写，后续 tick 直接命中、进度条/MediaSession 时长也正确
+            }
+          }
           if (totalSec > 0) {
             const lastSec = this._lastListenSec;
             const jump = lastSec >= 0 ? Math.abs(sec - lastSec) : 0;
@@ -795,22 +808,28 @@ export default class {
       return;
     }
     let artists = track.ar.map(a => a.name);
+    // [B-64] 播客封面是外部直链，拼网易云 ?param=NxN 尺寸参数会指向不存在的资源 → 系统媒体控件封面空白。
+    //   仅对网易云曲目拼 param，播客用原始 URL。
+    const picUrl = track.al.picUrl;
+    const artwork = track.podcastEpisodeId
+      ? [{ src: picUrl, type: 'image/jpg', sizes: '512x512' }]
+      : [
+          {
+            src: picUrl + '?param=224y224',
+            type: 'image/jpg',
+            sizes: '224x224',
+          },
+          {
+            src: picUrl + '?param=512y512',
+            type: 'image/jpg',
+            sizes: '512x512',
+          },
+        ];
     const metadata = {
       title: track.name,
       artist: artists.join(','),
       album: track.al.name,
-      artwork: [
-        {
-          src: track.al.picUrl + '?param=224y224',
-          type: 'image/jpg',
-          sizes: '224x224',
-        },
-        {
-          src: track.al.picUrl + '?param=512y512',
-          type: 'image/jpg',
-          sizes: '512x512',
-        },
-      ],
+      artwork,
       length: this.currentTrackDuration,
       trackId: this.current,
       url: '/trackid/' + track.id,
@@ -1238,14 +1257,16 @@ export default class {
   // 关键扩展字段是 podcastAudioUrl —— 它让 _getAudioSource 直接返回音频地址，
   // 跳过整条网易云查询链。
   playPodcastEpisode(episode, podcastTitle) {
+    // [B-64] _justEnded 复位必须在任何 early-return 之前：否则取到无音频地址的队列项早退时，
+    //   _justEnded 滞留 true，下次手动切集会误判为"自动续播"而丢失当前未播完单集的入队保留。
+    const justEnded = this._justEnded;
+    this._justEnded = false;
     if (!episode?.audioUrl) {
       store.dispatch('showToast', '该单集没有音频地址');
       return;
     }
     // [A-24 改] 切换前：旧曲（如果未播完）放回队列头部，下次还能播
     // _justEnded=true 表示当前是 onend 自动续播，旧曲已播完，不入队
-    const justEnded = this._justEnded;
-    this._justEnded = false;
     const oldTrack = this._currentTrack;
     if (oldTrack && oldTrack.podcastEpisodeId && this._howler) {
       const curPos = Math.floor(this._howler.seek() || 0);
@@ -1292,6 +1313,7 @@ export default class {
       dt: (episode.duration || 0) * 1000, // 毫秒
       podcastAudioUrl: episode.audioUrl,
       podcastEpisodeId: episode.id,
+      podcastId: episode.podcastId || '', // [B-64] 透传 podcastId，供收藏记录关联节目(actions 优先用它)
     };
 
     this._enabled = true;

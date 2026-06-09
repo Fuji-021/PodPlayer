@@ -12,6 +12,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+devbuild*.log
+devserve*.log
+
+# Claude Code 会话/worktree 工作目录（本地工具产物，勿入库）
+.claude/
 
 # Editor directories and files
 .idea

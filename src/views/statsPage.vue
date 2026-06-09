@@ -121,10 +121,6 @@ export default {
   async created() {
     await this.enterWithAnimation();
   },
-  async activated() {
-    // keep-alive：每次重新进入都跑一次"重排"动画（用上次快照当起点）
-    await this.enterWithAnimation();
-  },
   methods: {
     // [B-40] 每次进来随机一条跑步提示词
     pickMood() {
@@ -135,19 +131,27 @@ export default {
       this.totalWall = totalWall;
     },
     async loadRange() {
+      // [C] 并发守卫：锁定本次加载序号与 range，await 后失效则放弃，避免旧请求覆盖/存错键
+      const seq = (this._loadSeq = (this._loadSeq || 0) + 1);
+      const range = this.range;
       const { totalWall, list } = await getListenStatsByPodcast(
-        this.range === 'week' ? 7 : 'all'
+        range === 'week' ? 7 : 'all'
       );
+      if (seq !== this._loadSeq) return;
       this.rangeTotal = totalWall;
       this.animateTo(list);
-      this.saveSnapshot(this.range, list);
+      this.saveSnapshot(range, list);
     },
     // [v1.0] 进入页面：以上次快照(各自宽度)为起点 → animateTo(fresh) 平滑过渡。
     //   留存条**同时**位移+伸缩(无等待)、新增条从左长出、离开条回缩，即用户认可的"重排"动画。
     async enterWithAnimation() {
+      // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
+      const seq = (this._loadSeq = (this._loadSeq || 0) + 1);
+      const range = this.range;
       this.pickMood();
       await this.loadTotal();
-      const snap = this.loadSnapshot(this.range);
+      if (seq !== this._loadSeq) return;
+      const snap = this.loadSnapshot(range);
       if (snap && snap.length) {
         const sMax = snap[0].wallSec || 1;
         this.list = snap.map(it => {
@@ -158,12 +162,12 @@ export default {
         this.list = [];
       }
       await this.$nextTick();
-      const fresh = await getListenStatsByPodcast(
-        this.range === 'week' ? 7 : 'all'
-      );
+      if (seq !== this._loadSeq) return;
+      const fresh = await getListenStatsByPodcast(range === 'week' ? 7 : 'all');
+      if (seq !== this._loadSeq) return;
       this.rangeTotal = fresh.totalWall;
       this.animateTo(fresh.list);
-      this.saveSnapshot(this.range, fresh.list);
+      this.saveSnapshot(range, fresh.list);
     },
     // [B-39] 异步提取每个节目封面主色填充矩形条（不阻塞渲染，到了再刷新该行）
     extractColors() {

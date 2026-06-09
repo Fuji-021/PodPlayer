@@ -58,13 +58,22 @@ export async function previewByRssUrl(feedUrl) {
   if (!/^https?:\/\//i.test(url)) {
     throw new Error('无效的 RSS 链接');
   }
-  const existing = await getPodcast(url);
   const xml = await ipcFetch('podcast:fetchRss', url);
   const { podcast, episodes } = parseRss(xml, url);
+  // [B-50 / TOCTOU 修] 抓取耗时期间用户可能刚订阅了本节目；ipcFetch 之后再取最新 existing，
+  //   且**绝不**用预览流程写 subscribed（订阅态只由显式订阅/取消维护）：
+  //   - 已存在 → updatePodcast 只更新元数据字段，保留原 subscribed/source；
+  //   - 不存在 → upsertPodcast 带 subscribed:false 创建（不进"我的订阅"、不算已订阅）。
+  const existing = await getPodcast(url);
+  // podcast 来自 parseRss，本身不含 subscribed/source，不会污染订阅态。
+  if (existing) {
+    await updatePodcast(url, { ...podcast });
+  } else {
+    await upsertPodcast({ ...podcast, source: 'discover', subscribed: false });
+  }
+  await upsertEpisodes(episodes);
   const subscribed = existing ? existing.subscribed !== false : false;
   const source = existing && existing.source ? existing.source : 'discover';
-  await upsertPodcast({ ...podcast, source, subscribed });
-  await upsertEpisodes(episodes);
   return { podcast: { ...podcast, source, subscribed }, episodes };
 }
 

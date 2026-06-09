@@ -15,7 +15,11 @@
 
     <!-- [B-44] 全量 grid，封面大小/缩放与「我的订阅」一致；卡片复用 DiscoverCard（与首页同一交互） -->
     <div v-else class="grid">
-      <DiscoverCard v-for="p in visibleItems" :key="p.id" :podcast="p" />
+      <DiscoverCard
+        v-for="p in visibleItems"
+        :key="p.id || p.feedUrl || p.name"
+        :podcast="p"
+      />
     </div>
   </div>
 </template>

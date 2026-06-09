@@ -54,6 +54,7 @@
               :class="{ 'cover-loaded': coverLoaded }"
               :src="coverSrc"
               @load="coverLoaded = true"
+              @error="coverLoaded = true"
               @click="goToAlbumOrPodcast"
             />
           </div>
@@ -514,11 +515,19 @@ export default {
       () => this.currentTrack && this.currentTrack.name,
       () => this.checkNameOverflow()
     );
-    // [B-36] 封面 url 变化时先置 loading 态，等新图 @load 再淡入
+    // [B-36/B-64] 封面 url 变化时先置 loading 态，等新图 @load 再淡入；
+    //   但缓存命中(来回切最近两集、同 url 复用)时 @load 可能不再触发 → 下一帧主动判
+    //   img.complete && naturalWidth>0 立即置 loaded，避免封面卡在半透明。
     this.$watch(
       () => this.coverSrc,
       () => {
         this.coverLoaded = false;
+        this.$nextTick(() => {
+          const img = this.$el && this.$el.querySelector('.cover-img');
+          if (img && img.complete && img.naturalWidth > 0) {
+            this.coverLoaded = true;
+          }
+        });
       }
     );
     this.$nextTick(() => this.checkNameOverflow());
@@ -690,12 +699,11 @@ export default {
         this.cancelSleep();
         return;
       }
-      // 贴近"本集结束"蓝标 → 按本集结束处理（精确跟随单集真实结束，而非固定分钟）
-      const snap = Math.max(2, this.sleepMaxMin * 0.05);
+      // [B-64] 贴近"本集结束"蓝标(仅 ±1 分钟，避免吞掉邻近整数分钟取值) → 本集结束模式
       if (
         this.sleepMarkerPct != null &&
         this.sleepEpisodeRemainMin > 0 &&
-        Math.abs(min - this.sleepEpisodeRemainMin) <= snap
+        Math.abs(min - this.sleepEpisodeRemainMin) <= 1
       ) {
         this.setSleepEnd();
         return;
@@ -708,18 +716,20 @@ export default {
       const base = this.sleepMode === 'off' ? 0 : this.sleepSliderVal;
       this.onSleepSlide(Math.max(0, Math.min(this.sleepMaxMin, base + step)));
     },
-    // [B-47] 本集结束后暂停
+    // [B-47/B-64] 本集结束后暂停：'end' 模式跟随单集真实播放进度(非墙钟)，暂停/卡顿不提前误触发
     setSleepEnd() {
-      const dur = this.player.currentTrackDuration || 0;
-      const pos = this.player.progress || 0;
-      this.applySleep(Math.max(0, (dur - pos) * 1000), 'end');
+      this.applySleep(0, 'end');
     },
-    // [B-47] 应用睡眠：ms 后暂停，每秒刷新剩余 + 滑条自缩
+    // [B-47/B-64] 应用睡眠：'min'=墙钟 setTimeout；'end'=每秒比较 progress 与时长(由 updateSleepRemain 判定)
     applySleep(ms, mode) {
       this.clearSleep();
       this.sleepMode = mode;
-      this.sleepEndsAt = Date.now() + ms;
-      this.sleepTimer = setTimeout(() => this.fireSleep(), ms);
+      if (mode === 'min') {
+        this.sleepEndsAt = Date.now() + ms;
+        this.sleepTimer = setTimeout(() => this.fireSleep(), ms);
+      } else {
+        this.sleepEndsAt = 0; // 'end' 不用墙钟一次性定时
+      }
       this.updateSleepRemain();
       this.sleepInterval = setInterval(() => this.updateSleepRemain(), 1000);
     },
@@ -730,27 +740,44 @@ export default {
       this.sleepSliderVal = 0;
     },
     updateSleepRemain() {
+      // [B-64] 'end' 模式：用单集真实剩余(时长-进度)而非墙钟 → 暂停/卡顿时进度不动、不会提前暂停
+      if (this.sleepMode === 'end') {
+        const dur = this.player.currentTrackDuration || 0;
+        const pos = this.player.progress || 0;
+        const leftSec = dur > 0 ? Math.max(0, Math.round(dur - pos)) : 0;
+        const m = Math.floor(leftSec / 60);
+        const s = leftSec % 60;
+        this.sleepRemainText = `${m}:${String(s).padStart(2, '0')}`;
+        // 滑块固定停在"本集结束"蓝标位置，不随倒计时跳动（消除 snap 跳格）
+        if (this.sleepEpisodeRemainMin > 0) {
+          this.sleepSliderVal = Math.round(this.sleepEpisodeRemainMin);
+        }
+        // 播放到接近结尾(≤2s)且确在播放时才暂停 → 既"本集结束后暂停"、又先于自动续播
+        if (dur > 0 && leftSec <= 2 && this.player.playing) {
+          this.fireSleep();
+        }
+        return;
+      }
+      // 'min' 模式：墙钟倒计时 + 滑条自缩
       const left = Math.max(0, this.sleepEndsAt - Date.now());
       const totalSec = Math.round(left / 1000);
       const m = Math.floor(totalSec / 60);
       const s = totalSec % 60;
       this.sleepRemainText = `${m}:${String(s).padStart(2, '0')}`;
-      // [B-47] 滑条值随倒计时自缩（向上取整到分钟）
       this.sleepSliderVal = Math.ceil(left / 60000);
     },
     fireSleep() {
-      if (
+      const wasPlaying =
         this.player &&
         this.player.playing &&
-        typeof this.player.pause === 'function'
-      ) {
-        this.player.pause();
-      }
+        typeof this.player.pause === 'function';
+      if (wasPlaying) this.player.pause();
       this.clearSleep();
       this.sleepMode = 'off';
       this.sleepRemainText = '';
       this.sleepSliderVal = 0;
-      this.showToast('睡眠定时已到，已暂停播放');
+      // [B-64] 仅真正执行暂停才提示"已暂停"，否则文案不误导
+      this.showToast(wasPlaying ? '睡眠定时已到，已暂停播放' : '睡眠定时已到');
     },
     clearSleep() {
       if (this.sleepTimer) {

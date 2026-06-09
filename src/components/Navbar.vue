@@ -202,6 +202,19 @@ export default {
       );
     },
   },
+  watch: {
+    // [C 修复] 搜索框关键词与路由同步：刷新/前进后退/外部跳转进入搜索结果页时，
+    //   keywords 仍为 data 初值''，导致搜索框为空（与标题不一致）且 searchDimmed 失效。
+    //   immediate 保证首次进入即同步；仅在 searchPodcast 页用路由参数回填。
+    $route: {
+      immediate: true,
+      handler() {
+        if (this.$route.name === 'searchPodcast') {
+          this.keywords = this.$route.params.keywords || this.keywords;
+        }
+      },
+    },
+  },
   created() {
     if (process.platform === 'win32') {
       this.enableWin32Titlebar = true;

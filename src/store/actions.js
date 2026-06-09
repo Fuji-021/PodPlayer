@@ -250,10 +250,11 @@ export default {
     const already = await podIsFavorited(id);
     if (already) {
       await podRemoveFavorite(id);
+      dispatch('showToast', '已取消收藏');
     } else {
       await podAddFavorite({
         id,
-        podcastId: track.al && track.al.id ? track.al.id : '',
+        podcastId: track.podcastId || (track.al && track.al.id) || '',
         podcastTitle: track.al && track.al.name ? track.al.name : '',
         title: track.name || '',
         coverUrl: track.al && track.al.picUrl ? track.al.picUrl : '',

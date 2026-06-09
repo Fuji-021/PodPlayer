@@ -102,7 +102,7 @@
           >
             <DiscoverCard
               v-for="p in sec.items.slice(0, cols * 2)"
-              :key="sec.key + '-' + p.id"
+              :key="sec.key + '-' + (p.id || p.feedUrl || p.name)"
               :podcast="p"
               @changed="onCardChanged"
             />
@@ -281,8 +281,15 @@ export default {
         );
         this.sections = splitSections(items, subbedNames, this.preferredGenres);
         // [B-53] 新上线：排除已订阅，保持新鲜
+        // [C] 并入热门/寻宝/为你推荐已展示节目名，避免"新上线"与其它三栏重复
+        const shownNames = new Set(subbedNames);
+        ['hot', 'treasure', 'forYou'].forEach(k => {
+          (this.sections[k] || []).forEach(p =>
+            shownNames.add((p.name || '').trim())
+          );
+        });
         this.newItems = (newItems || []).filter(
-          p => !subbedNames.has((p.name || '').trim())
+          p => !shownNames.has((p.name || '').trim())
         );
       } catch (e) {
         this.discoverError = String((e && e.message) || e) || '加载失败';

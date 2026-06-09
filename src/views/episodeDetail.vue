@@ -233,6 +233,10 @@ export default {
       }
     },
   },
+  beforeDestroy() {
+    // [D] 清理 justQueued 反馈定时器，避免离开页面后在已销毁实例上回调
+    clearTimeout(this._queuedTimer);
+  },
   methods: {
     async load() {
       this.episode = await getEpisode(this.episodeId);
@@ -269,8 +273,7 @@ export default {
         ...this.episode,
         podcastTitle: this.podcast ? this.podcast.title : '',
       });
-      // [B-63] 加入反馈：toast 提示 + 按钮短暂高亮变色
-      this.$store.dispatch('showToast', '已加入播放列表');
+      // [B-63] 加入反馈：toast 由 enqueueEpisode action 内部弹出，这里只做按钮短暂高亮变色
       this.justQueued = true;
       clearTimeout(this._queuedTimer);
       this._queuedTimer = setTimeout(() => {

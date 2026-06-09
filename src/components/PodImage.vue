@@ -29,7 +29,13 @@ export default {
   watch: {
     src() {
       this.loaded = false;
-      this.$nextTick(this.checkCached);
+      this.$nextTick(() => {
+        // 父组件在 @error 时会给本 <img> 写 inline opacity(0/0.15)，
+        // inline 优先级高于 class → 换 src 后新封面仍被旧的 inline opacity 压住隐身。
+        // 换图时清掉上一张错误图留下的 inline opacity，让 class 控制淡入。
+        if (this.$el) this.$el.style.opacity = '';
+        this.checkCached();
+      });
     },
   },
   mounted() {

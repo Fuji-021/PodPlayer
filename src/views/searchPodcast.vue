@@ -33,7 +33,7 @@
           v-for="ep in localEps"
           :key="ep.id"
           class="ep-row"
-          @click="playEpisode(ep)"
+          @click="onRowClick(ep)"
           @contextmenu.prevent="openMenu($event, ep)"
         >
           <!-- 左侧=节目封面(非单集封面，便于认出来源)；卡片整体已有动作反馈，封面不再单独加光晕 -->
@@ -153,6 +153,8 @@ export default {
   methods: {
     async doSearch() {
       const kw = this.keywords;
+      // [B] 防竞态：记录本次搜索关键词，旧响应回来后若已切词则丢弃
+      const myKw = this.keywords;
       if (!kw) return;
       // 本地（快）：已订阅节目 + 单集标题
       try {
@@ -160,6 +162,7 @@ export default {
           searchLocalPodcasts(kw).catch(() => []),
           searchLocalEpisodes(kw).catch(() => []),
         ]);
+        if (this.keywords !== myKw) return;
         this.localPods = pods;
         // [B-63] 标记每集"听过"状态（供状态点显黄色）
         try {
@@ -171,8 +174,10 @@ export default {
         } catch (err) {
           /* 忽略：拿不到统计不影响列表 */
         }
+        if (this.keywords !== myKw) return;
         this.localEps = eps;
       } catch (e) {
+        if (this.keywords !== myKw) return;
         this.localPods = [];
         this.localEps = [];
       }
@@ -181,11 +186,14 @@ export default {
       this.errorOnline = '';
       this.onlineItems = [];
       try {
-        this.onlineItems = await searchPodcasts(kw);
+        const items = await searchPodcasts(kw);
+        if (this.keywords !== myKw) return;
+        this.onlineItems = items;
       } catch (e) {
+        if (this.keywords !== myKw) return;
         this.errorOnline = '在线搜索失败：' + ((e && e.message) || e);
       } finally {
-        this.loadingOnline = false;
+        if (this.keywords === myKw) this.loadingOnline = false;
       }
     },
     openLocalPodcast(p) {
@@ -193,6 +201,14 @@ export default {
         name: 'podcastDetail',
         params: { feedUrlEncoded: encodeURIComponent(p.id) },
       });
+    },
+    onRowClick(ep) {
+      // [B] 右键菜单打开时左键点行只关菜单，不误播
+      if (this.menu.open) {
+        this.closeMenu();
+        return;
+      }
+      this.playEpisode(ep);
     },
     playEpisode(ep) {
       if (this.player && this.player.playPodcastEpisode) {
@@ -251,6 +267,8 @@ export default {
           if (root && !root.contains(ev.target)) this.closeMenu();
         };
         document.addEventListener('click', this.menuListener);
+        // [D] 空白处再次右键也能关闭菜单
+        document.addEventListener('contextmenu', this.menuListener);
       });
     },
     closeMenu() {
@@ -258,6 +276,7 @@ export default {
       this.menu.target = null;
       if (this.menuListener) {
         document.removeEventListener('click', this.menuListener);
+        document.removeEventListener('contextmenu', this.menuListener);
         this.menuListener = null;
       }
     },
@@ -274,7 +293,7 @@ export default {
         ...it,
         podcastTitle: it.podcastTitle || '',
       });
-      this.$store.dispatch('showToast', '已加入播放列表');
+      // [E] enqueueEpisode action 内部已 toast，不再手动重复
     },
     onMenuFav() {
       const it = this.menu.target;

@@ -5,6 +5,10 @@ const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
 const ipcRenderer = electron?.ipcRenderer ?? null;
 
+// [E] 寻宝板块起点：榜单前 TREASURE_START 条算"热门"，从此往后才进寻宝池。
+//   统一常量，避免 splitSections/reshuffleSection/getSectionFull 各写魔法数导致漂移。
+const TREASURE_START = 10;
+
 // 取热门播客榜单（250 条，主进程已缓存 6h）
 export async function fetchHotPodcasts(force = false) {
   if (!ipcRenderer) {
@@ -141,7 +145,7 @@ export function splitSections(items, excludeNames, preferredGenres) {
   const used = new Set(excludeNames || []);
   hot.forEach(p => used.add((p.name || '').trim()));
   const treasurePool = items
-    .slice(10)
+    .slice(TREASURE_START)
     .filter(p => !used.has((p.name || '').trim()));
   const treasure = shuffle(treasurePool).slice(0, 16);
   treasure.forEach(p => used.add((p.name || '').trim()));
@@ -154,7 +158,9 @@ export function splitSections(items, excludeNames, preferredGenres) {
 // [B-43] forYou 走分类加权 buildForYou。
 export function reshuffleSection(items, type, excludeNames, preferredGenres) {
   if (type === 'treasure') {
-    return shuffle(excludeSubbed(items, excludeNames).slice(10)).slice(0, 16);
+    return shuffle(
+      excludeSubbed(items, excludeNames).slice(TREASURE_START)
+    ).slice(0, 16);
   }
   return buildForYou(items, excludeNames, preferredGenres);
 }
@@ -162,7 +168,8 @@ export function reshuffleSection(items, type, excludeNames, preferredGenres) {
 // [B-42] 二级页全量：hot=全部榜单（榜单序）；treasure=腰部及以后（排除已订阅）
 export function getSectionFull(items, type, excludeNames) {
   if (!items || !items.length) return [];
-  if (type === 'treasure') return excludeSubbed(items.slice(8), excludeNames);
+  if (type === 'treasure')
+    return excludeSubbed(items.slice(TREASURE_START), excludeNames);
   if (type === 'new') return excludeSubbed(items, excludeNames); // 新上线全部(排除已订阅)
   return items.slice();
 }
