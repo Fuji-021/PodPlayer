@@ -40,7 +40,7 @@
 
     <!-- [统计动画 v1.2] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
          留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左)；离开条塌缩裁切。全程不透明、无渐隐(v1.2 去残影)。 -->
-    <transition-group name="stat" tag="div" class="stat-list" @leave="onLeave">
+    <transition-group name="stat" tag="div" class="stat-list">
       <div
         v-for="item in visibleList"
         :key="item.podcastId"
@@ -144,7 +144,7 @@ export default {
     },
     // [统计动画 v1 路线] 进入页面：以上次快照(各自宽度)为起点 → animateTo(fresh) 平滑过渡。
     //   留存条**同时**位移+伸缩(无等待)、新增条从左长出、离开条收走，即用户认可的"重排"动画。
-    //   (v1=重排路线；v1.1=+消残影；v1.2=去渐隐改不透明塌缩。版本规则见开发文档「版本命名规则」。)
+    //   (v1=重排；v1.1=消残影；v1.2=去渐隐塌缩；v1.2.1=塌缩改纯CSS修顶部闪现。规则见开发文档「版本命名规则」。)
     async enterWithAnimation() {
       // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
       const seq = (this._loadSeq = (this._loadSeq || 0) + 1);
@@ -193,7 +193,7 @@ export default {
     // [B-61] 把当前 list 平滑过渡到 freshList（统一动画核心）：
     //   留存条：保持当前宽 → 下一帧过渡到新宽(最长条变长→其余整体变细=俯视抬高缩小) + FLIP 移动
     //   新增条：宽度从 0 长出(从左边长出来)，不透明(v1.2 去淡入)
-    //   离开条：不透明塌缩(高度+宽→0 裁切，见 onLeave，v1.2 去淡出)
+    //   离开条：不透明塌缩(高度+宽→0 裁切，见 .stat-leave-* CSS，v1.2 去淡出 / v1.2.1 改纯 CSS)
     animateTo(freshList) {
       const maxWall = freshList.length ? freshList[0].wallSec : 1;
       const prev = {};
@@ -221,30 +221,6 @@ export default {
           });
         });
       });
-    },
-    // [统计动画 v1.2] 离开动画：不透明「塌缩」，不再用 opacity 淡出 → 根除半透明残影。
-    //   原因(v1.1 残影根因)：离开条 absolute + z-index:-1 后用 opacity 慢慢淡出，
-    //   在淡出的 0.4s 里它是半透明、还占着原位 → 留存条没盖住处就露出"将逝之条"= 残影。
-    //   改法：opacity 全程保持 1，靠「高度塌缩(max-height→0, overflow:hidden 裁掉条+文字)
-    //   + 时间条宽→0 + 轻微左移」收走。整行始终不透明 + 被裁切 → 干净消失、无幽灵。
-    //   仍保持 position:absolute(由 .stat-leave-active 提供) → 留存条立即 FLIP 补位、不等待。
-    //   z-index:-1 + 轻微位移 = 你说的"略微形变+小位移表示沉到下层"。
-    onLeave(el, done) {
-      const bar = el.querySelector('.bar');
-      const h = el.offsetHeight; // 锁定当前行高作为塌缩起点
-      el.style.zIndex = '-1';
-      el.style.overflow = 'hidden';
-      el.style.maxHeight = h + 'px';
-      void el.offsetHeight; // 强制 reflow，让起点高度生效后再过渡到 0
-      el.style.transition =
-        'max-height 0.42s cubic-bezier(0.22, 1, 0.36, 1), transform 0.42s ease';
-      el.style.maxHeight = '0px';
-      el.style.transform = 'translateX(-8px)';
-      if (bar) {
-        bar.style.transition = 'width 0.42s cubic-bezier(0.22, 1, 0.36, 1)';
-        bar.style.width = '0%';
-      }
-      setTimeout(done, 460);
     },
     // [B-54] 上次进入时的排行快照（localStorage，按 range 分键），作为下次动画起点
     loadSnapshot(range) {
@@ -424,7 +400,7 @@ export default {
 // [B-54] 排行重排动画：move=FLIP 位移（节目被刷上/刷下），enter=新增补入，leave=移除
 .stat-list {
   position: relative;
-  // [B-63改] 建立层叠上下文：离开行 onLeave 压到 z-index:-1 → 沉到本上下文底层，
+  // [B-63改/v1.2.1] 建立层叠上下文：离开行(.stat-leave-active z-index:-1) 沉到本上下文底层，
   //   被在文档流里(z:auto)的留存行盖住 → 第一行无残影。留存行不需 position:relative
   //   (那会覆盖 .stat-leave-active 的 absolute、导致留存行等待离开行=卡顿)。
   isolation: isolate;
@@ -440,12 +416,24 @@ export default {
 .stat-enter {
   transform: translateX(-12px);
 }
-/* [统计动画 v1.2] 离开条：position:absolute 让留存条 FLIP 上移补位；
-   overflow:hidden 配合 onLeave 的 max-height→0 把整行(条+文字)裁掉；不透明塌缩，无淡出。 */
+/* [统计动画 v1.2.1] 离开条：改纯 CSS 不透明塌缩(去掉 onLeave JS 钩子)。
+   v1.2 在 JS 里给离开行设 transform + 强制 reflow，覆盖了 Vue FLIP 的"钉位" →
+   离开瞬间失定位、弹到容器左上角(顶部一闪，如蓝色"文化沙龙")。改纯 CSS 后不再抢定位权。
+   position:absolute 让留存条 FLIP 补位；max-height→0 + overflow:hidden 裁掉整行(条+文字)；
+   z-index:-1 沉到下层；全程不透明、无淡出。 */
 .stat-leave-active {
   position: absolute;
   width: 100%;
   overflow: hidden;
+  z-index: -1;
+  max-height: 52px;
+  transition: max-height 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.stat-leave-to {
+  max-height: 0;
+}
+.stat-leave-to .bar {
+  width: 0 !important;
 }
 .stat-row {
   display: flex;
