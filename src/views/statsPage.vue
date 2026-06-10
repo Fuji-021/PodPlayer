@@ -38,8 +38,8 @@
 
     <div v-if="!visibleList.length" class="empty">这段时间还没有收听记录</div>
 
-    <!-- [B-54/B-61] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
-         留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左长出来)+淡入；离开条回缩到 0+淡出。 -->
+    <!-- [统计动画 v1.2] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
+         留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左)；离开条塌缩裁切。全程不透明、无渐隐(v1.2 去残影)。 -->
     <transition-group name="stat" tag="div" class="stat-list" @leave="onLeave">
       <div
         v-for="item in visibleList"
@@ -142,8 +142,9 @@ export default {
       this.animateTo(list);
       this.saveSnapshot(range, list);
     },
-    // [v1.0] 进入页面：以上次快照(各自宽度)为起点 → animateTo(fresh) 平滑过渡。
-    //   留存条**同时**位移+伸缩(无等待)、新增条从左长出、离开条回缩，即用户认可的"重排"动画。
+    // [统计动画 v1 路线] 进入页面：以上次快照(各自宽度)为起点 → animateTo(fresh) 平滑过渡。
+    //   留存条**同时**位移+伸缩(无等待)、新增条从左长出、离开条收走，即用户认可的"重排"动画。
+    //   (v1=重排路线；v1.1=+消残影；v1.2=去渐隐改不透明塌缩。版本规则见开发文档「版本命名规则」。)
     async enterWithAnimation() {
       // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
       const seq = (this._loadSeq = (this._loadSeq || 0) + 1);
@@ -191,8 +192,8 @@ export default {
     },
     // [B-61] 把当前 list 平滑过渡到 freshList（统一动画核心）：
     //   留存条：保持当前宽 → 下一帧过渡到新宽(最长条变长→其余整体变细=俯视抬高缩小) + FLIP 移动
-    //   新增条：宽度从 0 长出(从左边长出来) + 淡入
-    //   离开条：宽度回缩到 0 + 淡出(见 onLeave)
+    //   新增条：宽度从 0 长出(从左边长出来)，不透明(v1.2 去淡入)
+    //   离开条：不透明塌缩(高度+宽→0 裁切，见 onLeave，v1.2 去淡出)
     animateTo(freshList) {
       const maxWall = freshList.length ? freshList[0].wallSec : 1;
       const prev = {};
@@ -221,20 +222,29 @@ export default {
         });
       });
     },
-    // [B-61/B-63改] 离开动画：时间条回缩到 0 + 整行淡出（与"从左长出"镜像）。
-    //   关键：保持 position:absolute(由 .stat-leave-active 提供，不再被 .stat-row 覆盖) →
-    //   留存条**立即**FLIP 上移补位、不等待离开条；离开条 z-index:-1 沉到底层(配合 .stat-list
-    //   isolation 层叠上下文) → 被移入的留存条盖住，消除第一行残影。
+    // [统计动画 v1.2] 离开动画：不透明「塌缩」，不再用 opacity 淡出 → 根除半透明残影。
+    //   原因(v1.1 残影根因)：离开条 absolute + z-index:-1 后用 opacity 慢慢淡出，
+    //   在淡出的 0.4s 里它是半透明、还占着原位 → 留存条没盖住处就露出"将逝之条"= 残影。
+    //   改法：opacity 全程保持 1，靠「高度塌缩(max-height→0, overflow:hidden 裁掉条+文字)
+    //   + 时间条宽→0 + 轻微左移」收走。整行始终不透明 + 被裁切 → 干净消失、无幽灵。
+    //   仍保持 position:absolute(由 .stat-leave-active 提供) → 留存条立即 FLIP 补位、不等待。
+    //   z-index:-1 + 轻微位移 = 你说的"略微形变+小位移表示沉到下层"。
     onLeave(el, done) {
       const bar = el.querySelector('.bar');
+      const h = el.offsetHeight; // 锁定当前行高作为塌缩起点
       el.style.zIndex = '-1';
-      el.style.transition = 'opacity 0.4s ease';
-      el.style.opacity = '0';
+      el.style.overflow = 'hidden';
+      el.style.maxHeight = h + 'px';
+      void el.offsetHeight; // 强制 reflow，让起点高度生效后再过渡到 0
+      el.style.transition =
+        'max-height 0.42s cubic-bezier(0.22, 1, 0.36, 1), transform 0.42s ease';
+      el.style.maxHeight = '0px';
+      el.style.transform = 'translateX(-8px)';
       if (bar) {
-        bar.style.transition = 'width 0.5s cubic-bezier(0.22, 1, 0.36, 1)';
+        bar.style.transition = 'width 0.42s cubic-bezier(0.22, 1, 0.36, 1)';
         bar.style.width = '0%';
       }
-      setTimeout(done, 520);
+      setTimeout(done, 460);
     },
     // [B-54] 上次进入时的排行快照（localStorage，按 range 分键），作为下次动画起点
     loadSnapshot(range) {
@@ -422,17 +432,20 @@ export default {
 .stat-move {
   transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
 }
-/* [B-61] 新增条：淡入（时间条"从左长出"由 .bar 的 width 过渡驱动，0→目标宽） */
+/* [统计动画 v1.2] 新增条：不再淡入。时间条"从左长出"由 .bar 的 width 过渡(0→目标宽)驱动，
+   整条始终不透明 = 实心条生长；行级仅加「轻微左移→归位」让文字不硬蹦，无 opacity。 */
 .stat-enter-active {
-  transition: opacity 0.55s ease;
+  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .stat-enter {
-  opacity: 0;
+  transform: translateX(-12px);
 }
-/* [B-61] 离开条：position:absolute 让留存条 FLIP 上移补位；回缩+淡出在 onLeave(JS) 里做 */
+/* [统计动画 v1.2] 离开条：position:absolute 让留存条 FLIP 上移补位；
+   overflow:hidden 配合 onLeave 的 max-height→0 把整行(条+文字)裁掉；不透明塌缩，无淡出。 */
 .stat-leave-active {
   position: absolute;
   width: 100%;
+  overflow: hidden;
 }
 .stat-row {
   display: flex;
