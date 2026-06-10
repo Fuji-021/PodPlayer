@@ -1620,25 +1620,28 @@ export default {
   z-index: 110;
   color: var(--color-text);
 }
-// [B-47] 睡眠滑条：与倍速面板同款（左 label + 滑条，可拖动/滚轮）
+// [B-69 S1] 睡眠滑条改「上下两行」：label 独占一行、滑条独占整行(~216px 恒宽)。
+//   原「左 label + 右滑条」同行布局下，label 文案宽度随状态变(关闭64px↔本集结束·4:24:31~105px)
+//   会挤压滑轨宽度；而 vue-slider 的换算比例尺 scale 只在按下瞬间缓存、拖动中不刷新 →
+//   拖动第一帧 label 缩窄→滑轨变宽+左缘左移、scale 仍是旧窄值 → 位置算偏~40% 乱跳/松手跳位。
+//   拆行后滑轨几何与 label 文案完全解耦、交互期间恒定 → 根治。顺带长单集每档像素更大。
 .sleep-slider {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   .sl-label {
     font-size: 12px;
     font-weight: 600;
     opacity: 0.7;
-    flex-shrink: 0;
     white-space: nowrap;
-    min-width: 64px;
     font-variant-numeric: tabular-nums;
   }
   // [B-63] 滑条 + 本集结束蓝标 的相对定位容器
   //   [B67-BUG-1] 给一点行高，弹窗不再"扁空"，滑条上下也多一点呼吸/可点余量
   .sl-track {
     position: relative;
-    flex: 1;
+    width: 100%;
     display: flex;
     align-items: center;
     min-height: 20px;
