@@ -57,11 +57,7 @@
 
 <script>
 import SvgIcon from '@/components/SvgIcon.vue';
-import {
-  subscribePodcast,
-  previewPodcast,
-  hiResLogo,
-} from '@/utils/podcast/discover';
+import { subscribePodcast, hiResLogo } from '@/utils/podcast/discover';
 import { deletePodcast } from '@/utils/podcast/service';
 
 export default {
@@ -115,7 +111,7 @@ export default {
       }
       this.openPodcast();
     },
-    async openPodcast() {
+    openPodcast() {
       // 已订阅：本地 feedUrl 秒进
       if (this.feedUrl) {
         this.$router.push({
@@ -124,20 +120,21 @@ export default {
         });
         return;
       }
-      if (this.busy) return;
-      this.busy = true;
-      try {
-        // [B-50] 未订阅：预览（入库但不订阅，不进我的订阅、不算已订阅状态），再进详情
-        const { feedUrl } = await previewPodcast(this.podcast);
-        this.$router.push({
-          name: 'podcastDetail',
-          params: { feedUrlEncoded: encodeURIComponent(feedUrl) },
-        });
-      } catch (e) {
-        this.toast('打开失败：' + ((e && e.message) || e));
-      } finally {
-        this.busy = false;
-      }
+      // [B67-BUG-2] 未订阅：不再卡在首页 await 抓 RSS(resolveFeed+RSS+入库会等几秒)。
+      //   带"种子"(卡片已知封面/标题/作者)立即跳转 → 详情页先渲染骨架，
+      //   预览抓取挪到详情页后台跑完后 replace 到真实 feedUrl。秒跳、无空白、无卡顿。
+      this.$router.push({
+        name: 'podcastDetail',
+        params: {
+          feedUrlEncoded: '__preview__',
+          previewSeed: {
+            title: this.name || this.podcast.title || '',
+            author: this.podcast.authorsText || this.podcast.author || '',
+            coverUrl: this.cover,
+            raw: this.podcast,
+          },
+        },
+      });
     },
     // hover 按钮点击：已订阅→取消订阅；未订阅→订阅（都不跳转）
     onToggle() {

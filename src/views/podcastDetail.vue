@@ -42,8 +42,9 @@
         <div class="t">{{ podcast.title }}</div>
         <div class="a">{{ podcast.author }}</div>
         <!-- [B-50] 预览(未订阅)节目：点卡片进来=试听浏览，未自动订阅 → 显示订阅按钮 -->
+        <!-- [B67-BUG-2] 骨架载入态(_loading)先不显示订阅按钮(此时 feedUrl 还是哨兵) -->
         <button
-          v-if="podcast.subscribed === false"
+          v-if="podcast.subscribed === false && !podcast._loading"
           class="sub-this-btn"
           @click="subscribeThis"
         >
@@ -54,6 +55,10 @@
     </div>
 
     <div class="episode-list" :class="{ 'select-mode': selectMode }">
+      <!-- [B67-BUG-2] 缓存优先骨架态：后台预览抓取中，单集区给个轻提示，不留空白 -->
+      <div v-if="podcast && podcast._loading" class="ep-loading">
+        正在载入单集…
+      </div>
       <div
         v-for="ep in episodes"
         :key="ep.id"
@@ -251,6 +256,8 @@ import {
   deletePodcast,
   updatePodcast,
 } from '@/utils/podcast/service';
+// [B67-BUG-2] 缓存优先：未订阅节目的后台预览抓取在详情页内做
+import { previewPodcast } from '@/utils/podcast/discover';
 import { getEpisodeProgressBulk } from '@/utils/podcast/db';
 import {
   getListenStats,
@@ -300,7 +307,10 @@ export default {
     feedUrl: {
       immediate: true,
       handler(v) {
-        if (v) this.load();
+        // [B67-BUG-2] '__preview__' 哨兵 = 未订阅节目秒跳进来 → 先渲染骨架、后台预览，
+        //   预览完成后 replace 到真实 feedUrl，watcher 再以真实值走正常 load()。
+        if (v === '__preview__') this.startPreview();
+        else if (v) this.load();
       },
     },
     // [B-31] 监听播放器广播：若广播的 episodeId 在自己列表里 → 重读那一集 listenStats
@@ -324,6 +334,39 @@ export default {
     this.closeEpisodeMenu();
   },
   methods: {
+    // [B67-BUG-2] 未订阅节目秒跳进来：先用卡片"种子"渲染骨架(头图/标题/作者立即可见)，
+    //   后台跑预览(resolveFeed+抓RSS+入库)，完成后 replace 到真实 feedUrl →
+    //   feedUrl watcher 再以真实值走正常 load() 填充单集。失败则 toast + 返回，绝不留空白。
+    async startPreview() {
+      const seed = this.$route.params.previewSeed;
+      if (!seed || !seed.raw) {
+        // 无种子(刷新/直接访问哨兵路由，params 是内存态会丢) → 回我的订阅，避免停在空白
+        this.$router.replace('/library');
+        return;
+      }
+      this.podcast = {
+        title: seed.title || '',
+        author: seed.author || '',
+        coverUrl: seed.coverUrl || '',
+        description: '',
+        subscribed: false,
+        _loading: true, // 骨架态：隐藏订阅按钮、单集区显示"载入中"
+      };
+      this.episodes = [];
+      try {
+        const { feedUrl } = await previewPodcast(seed.raw);
+        this.$router.replace({
+          name: 'podcastDetail',
+          params: { feedUrlEncoded: encodeURIComponent(feedUrl) },
+        });
+      } catch (e) {
+        this.$store.dispatch(
+          'showToast',
+          '载入失败：' + ((e && e.message) || e)
+        );
+        this.$router.back();
+      }
+    },
     async load() {
       this.podcast = await getPodcast(this.feedUrl);
       if (!this.podcast) {
@@ -839,6 +882,13 @@ export default {
 
 .episode-list {
   border-top: 1px solid var(--color-secondary-bg);
+}
+// [B67-BUG-2] 缓存优先骨架态：单集后台载入中的轻提示
+.ep-loading {
+  padding: 28px 4px;
+  text-align: center;
+  font-size: 14px;
+  opacity: 0.45;
 }
 // [B-35] 多选右移改为「容器一次性 padding」：只 1 个元素做 padding 动画，
 // 不再让几十行各自 transition padding（reflow ×N → 卡顿）。
