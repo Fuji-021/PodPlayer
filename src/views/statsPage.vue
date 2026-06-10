@@ -1,5 +1,6 @@
 <template>
-  <div class="stats-page">
+  <!-- [统计动画] --stat-k = 动画时长倍率：Dev 测试床版=2(慢放观察)，主线/dev-serve=1(不受影响) -->
+  <div class="stats-page" :style="{ '--stat-k': animK }">
     <!-- [B-38] 顶部：彩虹猫跑步彩蛋（替代火星天）。文案宽度 = 彩虹条长度，末端 nyancat 在跑 -->
     <div class="hero">
       <div class="run-line">
@@ -116,6 +117,11 @@ export default {
       return this.list.filter(
         it => !this.blockedNames.has((it.title || '').trim())
       );
+    },
+    // [统计动画] 动画时长倍率：仅 Dev 测试床构建(VUE_APP_DEV_SEED=true)放慢 2 倍供观察，
+    //   主线/dev-serve 该变量不为 'true' → 1 倍，完全不受影响。
+    animK() {
+      return process.env.VUE_APP_DEV_SEED === 'true' ? 2 : 1;
     },
   },
   async created() {
@@ -406,12 +412,14 @@ export default {
   isolation: isolate;
 }
 .stat-move {
-  transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform calc(0.65s * var(--stat-k, 1))
+    cubic-bezier(0.22, 1, 0.36, 1);
 }
 /* [统计动画 v1.2] 新增条：不再淡入。时间条"从左长出"由 .bar 的 width 过渡(0→目标宽)驱动，
    整条始终不透明 = 实心条生长；行级仅加「轻微左移→归位」让文字不硬蹦，无 opacity。 */
 .stat-enter-active {
-  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform calc(0.5s * var(--stat-k, 1))
+    cubic-bezier(0.22, 1, 0.36, 1);
 }
 .stat-enter {
   transform: translateX(-12px);
@@ -427,7 +435,8 @@ export default {
   overflow: hidden;
   z-index: -1;
   max-height: 52px;
-  transition: max-height 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: max-height calc(0.42s * var(--stat-k, 1))
+    cubic-bezier(0.22, 1, 0.36, 1);
 }
 .stat-leave-to {
   max-height: 0;
@@ -458,7 +467,8 @@ export default {
     //   静止态最窄=barTargetPct 的 7% 兜底(常规窗口 ≈ 40px+ 放得下封面)。
     min-width: 0;
     // [B-54/B-61] 进度条伸缩(俯视抬高整体缩小) + 从左长出 的丝滑过渡，与 .stat-move 同缓动
-    transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: width calc(0.6s * var(--stat-k, 1))
+      cubic-bezier(0.22, 1, 0.36, 1);
   }
   .thumb {
     width: 40px;
