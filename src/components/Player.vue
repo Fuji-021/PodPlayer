@@ -276,10 +276,11 @@
                       :min="0"
                       :max="sleepMaxMin"
                       :interval="sleepStep"
+                      :height="8"
                       :drag-on-click="true"
                       :duration="0"
                       tooltip="none"
-                      :dot-size="12"
+                      :dot-size="14"
                       @change="onSleepChange"
                       @drag-end="onSleepCommit"
                     ></vue-slider>
@@ -681,7 +682,10 @@ export default {
         // "本集结束"对应的刻度档位：向上取整到步长整数倍 → 落得到、且量程能被步长整除
         const endStop = Math.max(step, Math.ceil(remainMin / step) * step);
         // 剩余≤90min → 量程=2×结束档(蓝标居中、两侧都留定时空间)；否则量程=结束档(蓝标最右)
-        const max = remainMin <= 90 ? endStop * 2 : endStop;
+        //   [B67-BUG-1] 量程强制为步长整数倍：vue-slider 要求 (max-min)%interval===0，
+        //   否则 total=0、gap=100/0=Infinity → 整条滑块死锁(endStop 本就是步长倍，此为未来改动兜底)
+        const max =
+          Math.ceil((remainMin <= 90 ? endStop * 2 : endStop) / step) * step;
         this.sleepStep = step;
         this.sleepEndStop = endStop;
         this.sleepMaxMin = max;
@@ -790,15 +794,23 @@ export default {
       this.sleepRemainText = '';
       this.sleepSliderVal = 0;
     },
+    // [B67-BUG-1] 倒计时格式化：≥1 小时进位成 H:MM:SS，否则 M:SS。
+    //   修长单集(如 264 分钟)标签显示成 "264:31" 的 bug（应为 4:24:31）。
+    fmtClock(sec) {
+      sec = Math.max(0, Math.floor(sec || 0));
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      const ss = String(s).padStart(2, '0');
+      return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+    },
     updateSleepRemain() {
       // [B-64] 'end' 模式：用单集真实剩余(时长-进度)而非墙钟 → 暂停/卡顿时进度不动、不会提前暂停
       if (this.sleepMode === 'end') {
         const dur = this.player.currentTrackDuration || 0;
         const pos = this.player.progress || 0;
         const leftSec = dur > 0 ? Math.max(0, Math.round(dur - pos)) : 0;
-        const m = Math.floor(leftSec / 60);
-        const s = leftSec % 60;
-        this.sleepRemainText = `${m}:${String(s).padStart(2, '0')}`;
+        this.sleepRemainText = this.fmtClock(leftSec); // [B67-BUG-1] H:MM:SS 进位
         // 播放到接近结尾(≤2s)且确在播放时才暂停 → 既"本集结束后暂停"、又先于自动续播
         if (dur > 0 && leftSec <= 2 && this.player.playing) {
           this.fireSleep();
@@ -808,10 +820,7 @@ export default {
       // [B-65] 'min' 模式：墙钟倒计时。滑块停在设定档(显示"你设了多少")，倒计时只走 label 文案，
       //   不再每秒回写 sleepSliderVal → 消除"滑块自缩"和松手后被 interval 拽回的打架。
       const left = Math.max(0, this.sleepEndsAt - Date.now());
-      const totalSec = Math.round(left / 1000);
-      const m = Math.floor(totalSec / 60);
-      const s = totalSec % 60;
-      this.sleepRemainText = `${m}:${String(s).padStart(2, '0')}`;
+      this.sleepRemainText = this.fmtClock(Math.round(left / 1000)); // [B67-BUG-1] H:MM:SS 进位
       if (left <= 0) this.fireSleep();
     },
     fireSleep() {
@@ -1606,7 +1615,7 @@ export default {
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18),
     0 0 0 1px rgba(127, 127, 127, 0.12);
-  padding: 10px 12px;
+  padding: 13px 14px;
   width: 244px;
   z-index: 110;
   color: var(--color-text);
@@ -1626,23 +1635,27 @@ export default {
     font-variant-numeric: tabular-nums;
   }
   // [B-63] 滑条 + 本集结束蓝标 的相对定位容器
+  //   [B67-BUG-1] 给一点行高，弹窗不再"扁空"，滑条上下也多一点呼吸/可点余量
   .sl-track {
     position: relative;
     flex: 1;
     display: flex;
     align-items: center;
+    min-height: 20px;
   }
   .vue-slider {
     width: 100%;
   }
-  // [B-63改] 睡眠滑条：已填充段用蓝色(深色模式可见，原色发黑看不见)，轨道淡灰，把手蓝色。
-  //   ::v-deep 仅作用于睡眠滑条，不影响播放/音量滑条。
+  // [B-63改/B67-BUG-1] 睡眠滑条：已填充段蓝色；轨道用更明显的中性灰(原 0.4 在浅色下几乎看不见)
+  //   + 圆角；滑条本体 8px(原默认 4px 发丝线看不到也拖不准)。::v-deep 仅作用于睡眠滑条。
   ::v-deep .vue-slider-rail {
-    // [B-64] 关闭态(值=0)没有 process 填充 → rail 必须自身明显；用中性灰，深/浅色都看得见
-    background-color: rgba(128, 128, 128, 0.4);
+    // [B67-BUG-1] 0.4→0.5 + 圆角，深/浅色都清晰可见(配合模板 :height=8)
+    background-color: rgba(128, 128, 128, 0.5);
+    border-radius: 4px;
   }
   ::v-deep .vue-slider-process {
     background-color: var(--color-primary);
+    border-radius: 4px;
   }
   ::v-deep .vue-slider-dot-handle {
     // [B-64] 把手常显(全局默认 hover 才显)，让用户一眼看到可拖的蓝色圆点

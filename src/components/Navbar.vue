@@ -71,7 +71,11 @@
     </nav>
 
     <ContextMenu ref="userProfileMenu">
-      <!-- [A-26] "我的"二级菜单：收藏 / 下载 / 收听历史 / 设置 -->
+      <!-- [B-67] "我的"二级菜单重排：最重要的「收听数据」置顶 → 收藏/下载/历史/已屏蔽 -->
+      <div class="item" @click="toStats">
+        <svg-icon icon-class="duration" />
+        收听数据
+      </div>
       <div class="item" @click="toFavorites">
         <svg-icon icon-class="heart" />
         我的收藏
@@ -84,12 +88,6 @@
         <svg-icon icon-class="time-past" />
         收听历史
       </div>
-      <!-- [B-38] 收听数据图标：duration -->
-      <div class="item" @click="toStats">
-        <svg-icon icon-class="duration" />
-        收听数据
-      </div>
-      <!-- [B-47 第5点] 已屏蔽节目 -->
       <div class="item" @click="toBlocked">
         <svg-icon icon-class="ban" />
         已屏蔽节目

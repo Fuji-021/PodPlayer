@@ -150,7 +150,8 @@ export default {
     },
     // [统计动画 v1 路线] 进入页面：以上次快照(各自宽度)为起点 → animateTo(fresh) 平滑过渡。
     //   留存条**同时**位移+伸缩(无等待)、新增条从左长出、离开条收走，即用户认可的"重排"动画。
-    //   (v1=重排；v1.1=消残影；v1.2=去渐隐塌缩；v1.2.1=塌缩改纯CSS修顶部闪现。规则见开发文档「版本命名规则」。)
+    //   (v1=重排；v1.1=消残影；v1.2=去渐隐塌缩；v1.2.1=塌缩改纯CSS修顶部闪现；
+    //    v1.3=整行不透明底色根治半透明条交叉透叠+文字叠糊残影。规则见开发文档「版本命名规则」。)
     async enterWithAnimation() {
       // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
       const seq = (this._loadSeq = (this._loadSeq || 0) + 1);
@@ -450,6 +451,10 @@ export default {
   gap: 12px;
   margin-bottom: 14px;
   cursor: pointer;
+  // [统计动画 v1.3] 整行不透明底色(=页面色，静态外观零变化) → 重排交叉时"行覆盖行"，
+  //   连同条与文字一起被上层行实实在在遮挡。这才是残影/文字叠糊的根治：
+  //   时长条是 hsla(...,0.6) 半透明、z-index 压再低也会透出下层，唯有让整行不透明才能真正盖住。
+  background: var(--color-body-bg);
   // 注意：不要给 .stat-row 加 position:relative —— 会覆盖 .stat-leave-active 的 absolute，
   //   使离开行留在流中、留存行被迫等待 → 卡顿/等待感。残影改由"离开行 z-index:-1"解决。
   &:hover .name {
