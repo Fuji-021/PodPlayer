@@ -41,7 +41,12 @@
 
     <!-- [统计动画 v1.2] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
          留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左)；离开条塌缩裁切。全程不透明、无渐隐(v1.2 去残影)。 -->
-    <transition-group name="stat" tag="div" class="stat-list">
+    <transition-group
+      name="stat"
+      tag="div"
+      class="stat-list"
+      @before-leave="pinLeave"
+    >
       <div
         v-for="item in visibleList"
         :key="item.podcastId"
@@ -151,7 +156,9 @@ export default {
     // [统计动画 v1 路线] 进入页面：以上次快照(各自宽度)为起点 → animateTo(fresh) 平滑过渡。
     //   留存条**同时**位移+伸缩(无等待)、新增条从左长出、离开条收走，即用户认可的"重排"动画。
     //   (v1=重排；v1.1=消残影；v1.2=去渐隐塌缩；v1.2.1=塌缩改纯CSS修顶部闪现；
-    //    v1.3=整行不透明底色根治半透明条交叉透叠+文字叠糊残影。规则见开发文档「版本命名规则」。)
+    //    v1.3=整行不透明底色根治半透明条交叉透叠+文字叠糊残影；
+    //    v1.4=离开行 before-leave 钉坐标(原地塌缩，修"全部→周"离开行跳位被裁切)+ leave 镜像 enter。
+    //    规则见开发文档「版本命名规则」。)
     async enterWithAnimation() {
       // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
       const seq = (this._loadSeq = (this._loadSeq || 0) + 1);
@@ -299,6 +306,15 @@ export default {
     onCoverError(e) {
       e.target.style.opacity = 0;
     },
+    // [统计动画 v1.4] 离开行"钉在原地"再塌缩：before-leave 在 leave-active(absolute) 生效前触发，
+    //   此刻 offsetTop 仍是旧布局值 → 内联钉住 top/left/width。否则 absolute 无坐标的离开行会按
+    //   新布局重算静态位置、集体跳挤到列表上部，与 FLIP 上移的留存行重叠 → "全部→周"方向相邻行被
+    //   上下裁切(第三方诊断 B-72 段实锤)。只钉坐标、不碰 transform、不强制 reflow → 不与 FLIP 抢定位权。
+    pinLeave(el) {
+      el.style.top = el.offsetTop + 'px';
+      el.style.left = el.offsetLeft + 'px';
+      el.style.width = el.offsetWidth + 'px';
+    },
   },
 };
 </script>
@@ -432,15 +448,20 @@ export default {
    z-index:-1 沉到下层；全程不透明、无淡出。 */
 .stat-leave-active {
   position: absolute;
-  width: 100%;
+  // [v1.4] 去掉 width:100% → 由 pinLeave 内联钉的 width 接管(配合钉死的 top/left，离开行原地不动)
   overflow: hidden;
   z-index: -1;
   max-height: 52px;
-  transition: max-height calc(0.42s * var(--stat-k, 1))
-    cubic-bezier(0.22, 1, 0.36, 1);
+  // [v1.4] 镜像 enter(条宽0→目标 + 行 translateX(-12)→0)：先让条缩回(max-height 延迟 0.18s)、
+  //   行再 translateX(-12) 滑出 → 视觉上正是进入动画倒放，"怎么来的怎么回去"。
+  //   transform 写在 CSS 过渡里与 FLIP 无冲突(v1.2.1 踩的坑是 JS 设 transform+强制 reflow，不是 transform 本身)。
+  transition: max-height calc(0.3s * var(--stat-k, 1))
+      cubic-bezier(0.22, 1, 0.36, 1) calc(0.18s * var(--stat-k, 1)),
+    transform calc(0.42s * var(--stat-k, 1)) cubic-bezier(0.22, 1, 0.36, 1);
 }
 .stat-leave-to {
   max-height: 0;
+  transform: translateX(-12px);
 }
 .stat-leave-to .bar {
   width: 0 !important;
