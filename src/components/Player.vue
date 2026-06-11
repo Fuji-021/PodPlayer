@@ -46,6 +46,15 @@
         class="prog-mark"
         :style="{ left: markPct(mk) + '%', background: markColor }"
       ></div>
+      <!-- [B-77] 标记提示：hover 标记键时在**播放头正上方**浮出"标记此刻"(随进度跟着走)，
+           替代原来贴在按钮上、又方又带异色描边的原生 title。 -->
+      <div
+        v-if="markHovering"
+        class="mark-hint-tip"
+        :style="{ left: progressPercent + '%' }"
+      >
+        标记此刻
+      </div>
     </div>
     <div class="controls">
       <div class="playing">
@@ -168,11 +177,11 @@
           :style="
             markCount > 5 && markCount <= 10 ? { color: markColor } : null
           "
-          title="标记此刻"
           @click.stop
+          @mouseenter="markHovering = true"
           @mousedown.stop="onMarkPressStart"
           @mouseup="onMarkPressEnd"
-          @mouseleave="onMarkPressCancel"
+          @mouseleave="onMarkLeave"
         >
           <span class="mark-charge"></span>
           <svg-icon class="mark-icon" icon-class="social-network" />
@@ -430,6 +439,7 @@ export default {
       markColor: '#e67e22',
       markCharging: false,
       markPulse: false,
+      markHovering: false, // [B-77] hover 标记键 → 播放头上方浮"标记此刻"提示
       // [播客改造] 单集名是否溢出（决定是否启用跑马灯）
       nameOverflow: false,
       // [B-36] 封面加载淡入：切歌时置 false，图片 @load 后 true → opacity 过渡
@@ -518,6 +528,10 @@ export default {
       const p = this.player.progress || 0;
       if (dur <= 0) return 0;
       return Math.min(100, Math.max(0, (p / dur) * 100));
+    },
+    // [B-77] 播放头百分比（标记提示气泡定位用，随进度跟着走）
+    progressPercent() {
+      return this.bufferingLeftPercent;
     },
     // [播客改造 A-21] 倍速显示固定 1 位小数（步进 0.1 不会有更多位数）
     rateLabel() {
@@ -722,6 +736,11 @@ export default {
       }
       this.markCharging = false;
       this._markPressed = false;
+    },
+    // [B-77] 鼠标移出标记键：收起"标记此刻"提示 + 取消长按计时
+    onMarkLeave() {
+      this.markHovering = false;
+      this.onMarkPressCancel();
     },
     addMarkHere() {
       const id = this.markEpisodeId;
@@ -1263,6 +1282,22 @@ export default {
   background: var(--color-primary); // 兜底，实际 inline markColor 覆盖
   pointer-events: none;
   z-index: 4;
+}
+// [B-77] 标记提示气泡：浮在播放头正上方，干净圆角(无方框/异色描边)，随进度跟着走。
+.mark-hint-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--color-body-bg);
+  color: var(--color-text);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  z-index: 112;
 }
 // [播客改造] hover 进度条时不再放大小白点（与 hover 时间预览功能重叠），
 // 只在真正拖动时显示 dot。需写在 scoped 之外，否则 ::v-deep 选不到 vue-slider 内部 DOM
