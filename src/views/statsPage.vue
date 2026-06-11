@@ -41,12 +41,7 @@
 
     <!-- [统计动画 v1.2] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
          留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左)；离开条塌缩裁切。全程不透明、无渐隐(v1.2 去残影)。 -->
-    <transition-group
-      name="stat"
-      tag="div"
-      class="stat-list"
-      @before-leave="pinLeave"
-    >
+    <transition-group name="stat" tag="div" class="stat-list">
       <div
         v-for="item in visibleList"
         :key="item.podcastId"
@@ -157,7 +152,8 @@ export default {
     //   留存条**同时**位移+伸缩(无等待)、新增条从左长出、离开条收走，即用户认可的"重排"动画。
     //   (v1=重排；v1.1=消残影；v1.2=去渐隐塌缩；v1.2.1=塌缩改纯CSS修顶部闪现；
     //    v1.3=整行不透明底色根治半透明条交叉透叠+文字叠糊残影；
-    //    v1.4=离开行 before-leave 钉坐标(原地塌缩，修"全部→周"离开行跳位被裁切)+ leave 镜像 enter。
+    //    v1.4=离开行钉坐标+镜像[已废弃：快速切换时内联残留致崩]；
+    //    v1.5=离开行**瞬时消失**(砍掉整条 leave 路径) + .bar overflow:hidden 修封面越界。
     //    规则见开发文档「版本命名规则」。)
     async enterWithAnimation() {
       // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
@@ -207,7 +203,7 @@ export default {
     // [B-61] 把当前 list 平滑过渡到 freshList（统一动画核心）：
     //   留存条：保持当前宽 → 下一帧过渡到新宽(最长条变长→其余整体变细=俯视抬高缩小) + FLIP 移动
     //   新增条：宽度从 0 长出(从左边长出来)，不透明(v1.2 去淡入)
-    //   离开条：不透明塌缩(高度+宽→0 裁切，见 .stat-leave-* CSS，v1.2 去淡出 / v1.2.1 改纯 CSS)
+    //   离开条：瞬时消失(v1.5，无 leave 动画)
     animateTo(freshList) {
       const maxWall = freshList.length ? freshList[0].wallSec : 1;
       const prev = {};
@@ -225,11 +221,13 @@ export default {
       });
       this.list = next;
       this.extractColors();
-      // 双 rAF：先让"起点宽度"(新条 0 / 留存条旧值)真正绘制一帧，再统一过渡到目标宽 → 必触发 width 过渡
+      // 双 rAF：先让"起点宽度"(新条 0 / 留存条旧值)真正绘制一帧，再统一过渡到目标宽 → 必触发 width 过渡。
+      // [v1.5/B69-V1 消除] 写的是本次捕获的 next(每次 animateTo 都新建对象)而非 this.list：
+      //   快速切换时旧 rAF 不会把"瞬时到位"误写进新一轮列表(否则新条会跳过从 0 长出的过程)。
       this.$nextTick(() => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            this.list.forEach(it => {
+            next.forEach(it => {
               it._w = it._target;
             });
           });
@@ -306,15 +304,11 @@ export default {
     onCoverError(e) {
       e.target.style.opacity = 0;
     },
-    // [统计动画 v1.4] 离开行"钉在原地"再塌缩：before-leave 在 leave-active(absolute) 生效前触发，
-    //   此刻 offsetTop 仍是旧布局值 → 内联钉住 top/left/width。否则 absolute 无坐标的离开行会按
-    //   新布局重算静态位置、集体跳挤到列表上部，与 FLIP 上移的留存行重叠 → "全部→周"方向相邻行被
-    //   上下裁切(第三方诊断 B-72 段实锤)。只钉坐标、不碰 transform、不强制 reflow → 不与 FLIP 抢定位权。
-    pinLeave(el) {
-      el.style.top = el.offsetTop + 'px';
-      el.style.left = el.offsetLeft + 'px';
-      el.style.width = el.offsetWidth + 'px';
-    },
+    // [统计动画 v1.5] v1.4 的 pinLeave 已删除：内联钉的 top/left/width 在离开动画被**中途取消**
+    //   (用户周/全部快速来回切，同 key 行复活)时不会被清掉 → 布局永久畸形、离开行卡死不走
+    //   (Dev 实测"切换直接崩、周显示全部 12 行")。leave 路径自 v1~v1.4 五版皆出 bug(残影/顶闪/
+    //   切割/越界/卡死)，v1.5 决定性收敛：**离开行瞬时消失**(无 leave 动画、无钩子、无内联残留)，
+    //   留存行 FLIP + 新增行从左长出保持不变。
   },
 };
 </script>
@@ -423,9 +417,7 @@ export default {
 // [B-54] 排行重排动画：move=FLIP 位移（节目被刷上/刷下），enter=新增补入，leave=移除
 .stat-list {
   position: relative;
-  // [B-63改/v1.2.1] 建立层叠上下文：离开行(.stat-leave-active z-index:-1) 沉到本上下文底层，
-  //   被在文档流里(z:auto)的留存行盖住 → 第一行无残影。留存行不需 position:relative
-  //   (那会覆盖 .stat-leave-active 的 absolute、导致留存行等待离开行=卡顿)。
+  // [B-63改/v1.2.1] 独立层叠上下文(v1.5 后离开行已瞬时移除，保留它无害且利于未来叠层控制)
   isolation: isolate;
 }
 .stat-move {
@@ -441,31 +433,10 @@ export default {
 .stat-enter {
   transform: translateX(-12px);
 }
-/* [统计动画 v1.2.1] 离开条：改纯 CSS 不透明塌缩(去掉 onLeave JS 钩子)。
-   v1.2 在 JS 里给离开行设 transform + 强制 reflow，覆盖了 Vue FLIP 的"钉位" →
-   离开瞬间失定位、弹到容器左上角(顶部一闪，如蓝色"文化沙龙")。改纯 CSS 后不再抢定位权。
-   position:absolute 让留存条 FLIP 补位；max-height→0 + overflow:hidden 裁掉整行(条+文字)；
-   z-index:-1 沉到下层；全程不透明、无淡出。 */
-.stat-leave-active {
-  position: absolute;
-  // [v1.4] 去掉 width:100% → 由 pinLeave 内联钉的 width 接管(配合钉死的 top/left，离开行原地不动)
-  overflow: hidden;
-  z-index: -1;
-  max-height: 52px;
-  // [v1.4] 镜像 enter(条宽0→目标 + 行 translateX(-12)→0)：先让条缩回(max-height 延迟 0.18s)、
-  //   行再 translateX(-12) 滑出 → 视觉上正是进入动画倒放，"怎么来的怎么回去"。
-  //   transform 写在 CSS 过渡里与 FLIP 无冲突(v1.2.1 踩的坑是 JS 设 transform+强制 reflow，不是 transform 本身)。
-  transition: max-height calc(0.3s * var(--stat-k, 1))
-      cubic-bezier(0.22, 1, 0.36, 1) calc(0.18s * var(--stat-k, 1)),
-    transform calc(0.42s * var(--stat-k, 1)) cubic-bezier(0.22, 1, 0.36, 1);
-}
-.stat-leave-to {
-  max-height: 0;
-  transform: translateX(-12px);
-}
-.stat-leave-to .bar {
-  width: 0 !important;
-}
+/* [统计动画 v1.5] 离开条：**瞬时消失**(不再定义任何 .stat-leave-* 过渡 → Vue 检测无过渡、立即移除)。
+   leave 路径(absolute/钉坐标/max-height 塌缩/条回缩)自 v1~v1.4 五个版本反复出 bug：
+   残影(v1.1)→顶部闪现(v1.2.1)→交叉透叠(v1.3)→跳位切割(v1.4)→快速切换内联残留崩坏(v1.4 实测)。
+   v1.5 决定性收敛：离开行没有动画就没有这一类 bug；留存行 FLIP 平移 + 新增行从左长出保持原样。 */
 .stat-row {
   display: flex;
   align-items: center;
@@ -476,8 +447,6 @@ export default {
   //   连同条与文字一起被上层行实实在在遮挡。这才是残影/文字叠糊的根治：
   //   时长条是 hsla(...,0.6) 半透明、z-index 压再低也会透出下层，唯有让整行不透明才能真正盖住。
   background: var(--color-body-bg);
-  // 注意：不要给 .stat-row 加 position:relative —— 会覆盖 .stat-leave-active 的 absolute，
-  //   使离开行留在流中、留存行被迫等待 → 卡顿/等待感。残影改由"离开行 z-index:-1"解决。
   &:hover .name {
     color: var(--color-primary);
   }
@@ -489,9 +458,12 @@ export default {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    // [B-61] min-width:0 → 新条能从 0 长出、离开条能回缩到 0；封面 thumb 随右端从左侧带出。
-    //   静止态最窄=barTargetPct 的 7% 兜底(常规窗口 ≈ 40px+ 放得下封面)。
+    // [B-61] min-width:0 → 新条能从 0 长出；静止态最窄=barTargetPct 的 7% 兜底(常规窗口 ≈ 40px+ 放得下封面)。
     min-width: 0;
+    // [v1.5/越界修] 裁掉超出条框的内容：条窄于 40px 封面时(新增条从 0 长出的前几帧 / 极窄窗口的 7% 兜底条)，
+    //   右对齐的封面会从条**左缘**溢出、捅出页面左边界(用户截图红圈"全部越界")。裁切后封面随条变宽逐渐露出，
+    //   观感正是"从左长出带出封面"。
+    overflow: hidden;
     // [B-54/B-61] 进度条伸缩(俯视抬高整体缩小) + 从左长出 的丝滑过渡，与 .stat-move 同缓动
     transition: width calc(0.6s * var(--stat-k, 1))
       cubic-bezier(0.22, 1, 0.36, 1);
