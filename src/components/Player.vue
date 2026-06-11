@@ -259,18 +259,22 @@
               >
                 <div class="sleep-slider">
                   <span class="sl-label">{{ sleepLabel }}</span>
-                  <!-- [B-63] 单滑条：拖到最左=关闭；蓝色细标=本集结束(拖到此=本集结束后暂停)。
+                  <!-- [B-63] 单滑条：拖到最左=睡眠(关)；蓝色细标=本集结束(拖到此=本集结束后暂停)。
                        max 按单集剩余时间动态算(开菜单瞬时计算)，蓝标位置随之变化。 -->
                   <div class="sl-track">
+                    <!-- [B-73] "本集结束"蓝标：可点(=直接设本集结束)，hover 内条轻微放大 + 冒出小提示 -->
                     <div
                       v-if="sleepMarkerPct != null"
                       class="sl-end-marker"
-                      :style="{
-                        left: sleepMarkerPct + '%',
-                        background: sleepMarkerColor,
-                      }"
-                      title="本集结束"
-                    ></div>
+                      :style="{ left: sleepMarkerPct + '%' }"
+                      @click.stop="onMarkerClick"
+                    >
+                      <i
+                        class="sl-end-bar"
+                        :style="{ background: sleepMarkerColor }"
+                      ></i>
+                      <span class="sl-end-tip">本集结束</span>
+                    </div>
                     <vue-slider
                       :value="sleepSliderVal"
                       :min="0"
@@ -492,12 +496,13 @@ export default {
       // [B-65] 拖动中实时预览拖到的目标值（松手才真正落定时器），给即时反馈
       if (this.sleepDragging) {
         const v = this.sleepSliderVal;
-        if (v <= 0) return '关闭';
+        // [B-73] 最左档文案由"关闭"改"睡眠"：用户易把"关闭"误读成"关闭软件"
+        if (v <= 0) return '睡眠';
         if (this.sleepMarkerPct != null && v === this.sleepEndStop)
           return '本集结束';
         return this.fmtSleepMin(v);
       }
-      if (this.sleepMode === 'off') return '关闭';
+      if (this.sleepMode === 'off') return '睡眠';
       if (this.sleepMode === 'end') {
         return '本集结束 · ' + (this.sleepRemainText || '0:00');
       }
@@ -778,6 +783,15 @@ export default {
     // [B-47/B-64] 本集结束后暂停：'end' 模式跟随单集真实播放进度(非墙钟)，暂停/卡顿不提前误触发
     setSleepEnd() {
       this.applySleep(0, 'end');
+    },
+    // [B-73] 点"本集结束"蓝标 → 直接设本集结束(等价把滑块拖到该档)。蓝标仅有单集时显示，故 endStop>0。
+    //   把手同步贴到 endStop，再走 setSleepEnd。click 仅在 mousedown/up 同落于标上才触发，
+    //   滑条拖动结束于标上(down 在轨/把手)不会误触发，故不抢拖动。
+    onMarkerClick() {
+      if (this.sleepMarkerPct == null) return;
+      this.sleepDragging = false;
+      this.sleepSliderVal = this.sleepEndStop;
+      this.setSleepEnd();
     },
     // [B-47/B-64] 应用睡眠：'min'=墙钟 setTimeout；'end'=每秒比较 progress 与时长(由 updateSleepRemain 判定)
     applySleep(ms, mode) {
@@ -1676,21 +1690,57 @@ export default {
     background-color: var(--color-primary);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
   }
-  // [B-63改] "本集结束"标记：用当前封面主色调(inline sleepMarkerColor 绑定)，
+  // [B-63改] "本集结束"标记：用当前封面主色调(inline sleepMarkerColor 绑定 .sl-end-bar)，
   //   区别于蓝色进度条 → 记忆点，与"定位到本集结束"呼应。
+  // [B-73] 可见细条更小(2×10)，hover 时内条轻微放大(scale1.4≈回到原 14 高)+ 冒出"本集结束"小提示，
+  //   提升可发现性；整标可点(=直接设本集结束，等价拖到该档)。外层是稍大的透明命中区(便于 hover/点中)，
+  //   放大只作用于内条 .sl-end-bar，提示 .sl-end-tip 不随之缩放。
   .sl-end-marker {
     position: absolute;
     top: 50%;
+    left: 0; // 实际由 inline left:% 覆盖
     transform: translate(-50%, -50%);
-    width: 3px;
-    height: 14px;
-    border-radius: 2px;
-    background: var(
-      --color-primary
-    ); // 兜底，实际由 inline sleepMarkerColor 覆盖
-    box-shadow: 0 0 0 1.5px var(--color-body-bg);
-    pointer-events: none;
+    width: 8px; // 透明命中区，比可见细条宽，便于鼠标 hover/点击
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
     z-index: 3;
+    .sl-end-bar {
+      width: 2px;
+      height: 10px;
+      border-radius: 2px;
+      // 兜底，实际由 inline sleepMarkerColor 覆盖
+      background: var(--color-primary);
+      box-shadow: 0 0 0 1.5px var(--color-body-bg);
+      transition: transform 0.12s ease;
+    }
+    .sl-end-tip {
+      position: absolute;
+      bottom: calc(100% + 1px);
+      left: 50%;
+      transform: translateX(-50%);
+      white-space: nowrap;
+      font-size: 11px;
+      line-height: 1;
+      padding: 3px 6px;
+      border-radius: 5px;
+      background: var(--color-body-bg);
+      color: var(--color-text);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s ease;
+    }
+    &:hover {
+      .sl-end-bar {
+        transform: scale(1.4);
+      }
+      .sl-end-tip {
+        opacity: 1;
+      }
+    }
   }
 }
 
