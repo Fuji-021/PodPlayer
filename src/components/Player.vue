@@ -276,11 +276,11 @@
                       :min="0"
                       :max="sleepMaxMin"
                       :interval="sleepStep"
-                      :height="8"
+                      :height="4"
                       :drag-on-click="true"
                       :duration="0"
                       tooltip="none"
-                      :dot-size="14"
+                      :dot-size="12"
                       @change="onSleepChange"
                       @drag-end="onSleepCommit"
                     ></vue-slider>
@@ -1658,10 +1658,11 @@ export default {
   .vue-slider {
     flex: 1;
   }
-  // [B-63改/B67-BUG-1] 睡眠滑条：已填充段蓝色；轨道用更明显的中性灰(原 0.4 在浅色下几乎看不见)
-  //   + 圆角；滑条本体 8px(原默认 4px 发丝线看不到也拖不准)。::v-deep 仅作用于睡眠滑条。
+  // [B-63改/B67-BUG-1] 睡眠滑条：已填充段蓝色；轨道用更明显的中性灰(原 0.4 在浅色下几乎看不见)+ 圆角。
+  //   [B-72] 轨道高度由 8 改回 4(模板 :height=4)、把手 14→12，与倍速滑条(默认 4px + dot 12)一致、更精致。
+  //   B67-BUG-1 当初加到 8px 是想治"看不到/拖不动"，但 B-69bis 已实锤真凶是滑轨 0px 塌缩(已 flex:1 修)，
+  //   与 4px/浅色无关 → 现可安全改细。::v-deep 仅作用于睡眠滑条。
   ::v-deep .vue-slider-rail {
-    // [B67-BUG-1] 0.4→0.5 + 圆角，深/浅色都清晰可见(配合模板 :height=8)
     background-color: rgba(128, 128, 128, 0.5);
     border-radius: 4px;
   }
