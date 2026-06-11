@@ -303,14 +303,18 @@ export default {
       unsubModeAutoTimer: null,
       unsubTarget: null,
       // [A-28] 排序：updatedAt(导入) / title(名称) / episodeTime(最新一集)；方向 asc/desc
-      sortBy: localStorage.getItem('podcastLibrary.sortBy') || 'updatedAt',
+      // [B-75] 删除"按节目名"排序后，旧存档若是 'title' 回落到默认(按订阅时间)
+      sortBy: (() => {
+        const s = localStorage.getItem('podcastLibrary.sortBy') || 'updatedAt';
+        return s === 'title' ? 'updatedAt' : s;
+      })(),
       sortDir: localStorage.getItem('podcastLibrary.sortDir') || 'desc',
       sortMenuOpen: false,
       sortOutsideListener: null,
       // [B-33] 排序下拉选项（文字外显，自带方向箭头）
       sortOptions: [
         { key: 'updatedAt', icon: 'sort-alt', label: '按订阅时间' },
-        { key: 'title', icon: 'sort-alpha-down-alt', label: '按节目名' },
+        // [B-75] 删除"按节目名"：播客名个性化，A→Z 排序无意义，去掉减视觉冗余
         {
           key: 'episodeTime',
           icon: 'arrow-down-small-big',
@@ -350,7 +354,6 @@ export default {
       const sign = this.sortDir === 'asc' ? 1 : -1;
       const byKey = {
         updatedAt: p => p.updatedAt || 0,
-        title: p => (p.title || '').toLowerCase(),
         episodeTime: p => p.latestEpisodeTime || 0,
         listenWall: p => (p.listenSummary && p.listenSummary.wallSec) || 0,
       };
