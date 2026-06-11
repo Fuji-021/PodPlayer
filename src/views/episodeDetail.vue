@@ -283,7 +283,8 @@ export default {
         const parent = node.parentNode;
         if (!parent || (parent.closest && parent.closest('a'))) return;
         const text = node.nodeValue || '';
-        const re = /\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b/g;
+        // [B-77] 同时认半角 : 与全角 ：(中文 show notes 常用全角，原来只认半角 → 时间戳没被识别)
+        const re = /\b(\d{1,2})[:：](\d{2})(?:[:：](\d{2}))?\b/g;
         if (!re.test(text)) return;
         re.lastIndex = 0;
         const frag = document.createDocumentFragment();
@@ -339,14 +340,15 @@ export default {
       const cur = player.currentTrack;
       const isThis = cur && cur.podcastEpisodeId === this.episode.id;
       if (isThis) {
-        player.progress = sec; // howler seek（setter 会处理未 loaded 时 once('load')）
+        // [B-77] 用播放器规范 seek()(内部 howler.seek + 进度同步)，比直接写 progress 更可靠
+        player.seek(sec);
         if (!player.playing && typeof player.play === 'function') player.play();
       } else {
         const title = (this.podcast && this.podcast.title) || '';
         // 起播后再 seek：此 once('load') 注册在 savedPos seek 之后 → 时间戳生效
         Promise.resolve(player.playPodcastEpisode(this.episode, title))
           .then(() => {
-            player.progress = sec;
+            player.seek(sec);
           })
           .catch(() => {});
       }
