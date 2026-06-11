@@ -44,7 +44,11 @@
         <!-- [B-50] 预览(未订阅)节目：点卡片进来=试听浏览，未自动订阅 → 显示订阅按钮 -->
         <!-- [B67-BUG-2] 骨架载入态(_loading)先不显示订阅按钮(此时 feedUrl 还是哨兵) -->
         <button
-          v-if="podcast.subscribed === false && !podcast._loading"
+          v-if="
+            podcast.subscribed === false &&
+            !podcast._loading &&
+            !podcast._loadError
+          "
           class="sub-this-btn"
           @click="subscribeThis"
         >
@@ -55,8 +59,15 @@
     </div>
 
     <div class="episode-list" :class="{ 'select-mode': selectMode }">
+      <!-- [B-70] 预览失败原地错误态：不跳走，给原因 + 返回，不甩用户到我的订阅 -->
+      <div v-if="podcast && podcast._loadError" class="ep-loading ep-error">
+        <div>该节目暂时无法打开，链接可能已失效。</div>
+        <button class="ep-error-back" @click="$router.replace('/')">
+          返回首页
+        </button>
+      </div>
       <!-- [B67-BUG-2] 缓存优先骨架态：后台预览抓取中，单集区给个轻提示，不留空白 -->
-      <div v-if="podcast && podcast._loading" class="ep-loading">
+      <div v-else-if="podcast && podcast._loading" class="ep-loading">
         正在载入单集…
       </div>
       <div
@@ -340,8 +351,8 @@ export default {
     async startPreview() {
       const seed = this.$route.params.previewSeed;
       if (!seed || !seed.raw) {
-        // 无种子(刷新/直接访问哨兵路由，params 是内存态会丢) → 回我的订阅，避免停在空白
-        this.$router.replace('/library');
+        // 无种子(刷新/直接访问哨兵路由，params 是内存态会丢) → 回首页，避免停在空白
+        this.$router.replace('/');
         return;
       }
       this.podcast = {
@@ -371,18 +382,29 @@ export default {
         });
       } catch (e) {
         if (stale()) return;
+        // [B-70] 预览失败(该节目无 Apple 源 / feed 失效 / 抓取失败，如《她山石》)：
+        //   过去 replace('/library') 把用户直接甩到我的订阅(恶性体验)。改为**原地错误态**——
+        //   保留骨架头图/标题，单集区显示失败原因 + 返回按钮，绝不擅自跳走。
+        //   诊断日志：打印失败原因 + 节目种子(可看出是无 Apple 链接还是 feed/抓取问题)。
+        // eslint-disable-next-line no-console
+        console.warn('[B-70] 预览失败', {
+          name: seed.title,
+          raw: seed.raw,
+          error: (e && e.message) || e,
+        });
+        this.$set(this.podcast, '_loading', false);
+        this.$set(this.podcast, '_loadError', true);
         this.$store.dispatch(
           'showToast',
-          '载入失败：' + ((e && e.message) || e)
+          '该节目暂时无法打开：' + ((e && e.message) || e)
         );
-        this.$router.replace('/library');
       }
     },
     async load() {
       this.podcast = await getPodcast(this.feedUrl);
       if (!this.podcast) {
-        // 节目不存在（被删了或 URL 错），回订阅列表
-        this.$router.replace('/library');
+        // [B-70] 节目不存在(被删/URL 错/预览入库竞态)：回首页(不再甩到我的订阅)
+        this.$router.replace('/');
         return;
       }
       // [B-46 / D-3] 进详情即视为"已看过新单集"，清掉我的订阅页该卡片的新单集角标
@@ -900,6 +922,24 @@ export default {
   text-align: center;
   font-size: 14px;
   opacity: 0.45;
+}
+// [B-70] 预览失败原地错误态
+.ep-error {
+  opacity: 0.7;
+  .ep-error-back {
+    margin-top: 14px;
+    padding: 7px 18px;
+    border: none;
+    border-radius: 8px;
+    background: var(--color-secondary-bg);
+    color: var(--color-text);
+    font-size: 13px;
+    cursor: pointer;
+    &:hover {
+      background: var(--color-primary);
+      color: #fff;
+    }
+  }
 }
 // [B-35] 多选右移改为「容器一次性 padding」：只 1 个元素做 padding 动画，
 // 不再让几十行各自 transition padding（reflow ×N → 卡顿）。
