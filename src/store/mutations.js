@@ -55,6 +55,21 @@ export default {
     state.podcastBlocked.items = items;
     localStorage.setItem('podcastBlocked', JSON.stringify(items));
   },
+  // [B-70] 标记/取消标记"链接无法解析"的节目（发现页卡片标红点）。按节目名为键。
+  addBrokenPodcast(state, name) {
+    const n = String(name || '').trim();
+    if (!n || state.podcastBroken.names.includes(n)) return;
+    const names = [...state.podcastBroken.names, n];
+    state.podcastBroken.names = names;
+    localStorage.setItem('podcastBroken', JSON.stringify(names));
+  },
+  removeBrokenPodcast(state, name) {
+    const n = String(name || '').trim();
+    if (!n || !state.podcastBroken.names.includes(n)) return;
+    const names = state.podcastBroken.names.filter(x => x !== n);
+    state.podcastBroken.names = names;
+    localStorage.setItem('podcastBroken', JSON.stringify(names));
+  },
   // [B-48 第5点] 设置/清除自定义头像（dataURL）
   setPodcastAvatar(state, dataUrl) {
     state.podcastAvatar = dataUrl || '';

@@ -48,6 +48,12 @@
       <span class="cn-text">{{ podcast.name }}</span>
       <!-- [B-49] 已订阅绿点（少数派标记；封面仍零常驻状态，点在名字旁不在封面上） -->
       <span v-if="subbed" class="src-dot" title="已订阅"></span>
+      <!-- [B-70] 链接无法解析红点：点进去预览抓取失败过的节目，标红让用户避开 -->
+      <span
+        v-else-if="broken"
+        class="src-dot broken-dot"
+        title="链接无法解析，暂时打不开"
+      ></span>
     </div>
     <div class="card-meta">
       {{ podcast.primaryGenreName }} · {{ fmtCount(podcast.avgPlayCount) }}
@@ -87,6 +93,14 @@ export default {
     },
     subbed() {
       return !!this.feedUrl;
+    },
+    // [B-70] 该节目是否"链接无法解析"(点进去预览抓取失败过) → 标红点
+    broken() {
+      const names =
+        (this.$store.state.podcastBroken &&
+          this.$store.state.podcastBroken.names) ||
+        [];
+      return names.includes(this.name);
     },
     feedUrl() {
       if (this.subscribedMap[this.name]) return this.subscribedMap[this.name];
@@ -418,6 +432,10 @@ export default {
   border-radius: 50%;
   margin-left: 5px;
   background: #27ae60;
+}
+// [B-70] 链接无法解析红点
+.src-dot.broken-dot {
+  background: #e74c3c;
 }
 .card-meta {
   margin-top: 3px;

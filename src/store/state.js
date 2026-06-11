@@ -42,6 +42,11 @@ export default {
   podcastBlocked: {
     items: JSON.parse(localStorage.getItem('podcastBlocked') || '[]'),
   },
+  // [B-70] 链接无法解析/打开失败的节目（点进去预览抓取失败）。names: [节目名]，按节目名为键。
+  //   用途：发现页卡片标**红点**，让用户一眼避开打不开的节目；下次再点若成功则自动消红点。
+  podcastBroken: {
+    names: JSON.parse(localStorage.getItem('podcastBroken') || '[]'),
+  },
   // [B-48 第5点] 自定义头像（裁切后的 1:1 dataURL，持久化 localStorage）；空=用默认头像
   podcastAvatar: localStorage.getItem('podcastAvatar') || '',
   // [播客改造 C-14] 当前是否在加载音频（点单集到出声的等待）

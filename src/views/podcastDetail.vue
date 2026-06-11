@@ -376,6 +376,8 @@ export default {
       try {
         const { feedUrl } = await previewPodcast(seed.raw);
         if (stale()) return;
+        // [B-70] 这次成功了 → 清掉该节目的"链接无法解析"红点标记(自愈)
+        this.$store.commit('removeBrokenPodcast', seed.title);
         this.$router.replace({
           name: 'podcastDetail',
           params: { feedUrlEncoded: encodeURIComponent(feedUrl) },
@@ -394,6 +396,8 @@ export default {
         });
         this.$set(this.podcast, '_loading', false);
         this.$set(this.podcast, '_loadError', true);
+        // [B-70] 记下该节目"链接无法解析" → 发现页卡片标红点，下次一眼避开
+        this.$store.commit('addBrokenPodcast', seed.title);
         this.$store.dispatch(
           'showToast',
           '该节目暂时无法打开：' + ((e && e.message) || e)
