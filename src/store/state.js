@@ -47,6 +47,11 @@ export default {
   podcastBroken: {
     names: JSON.parse(localStorage.getItem('podcastBroken') || '[]'),
   },
+  // [B-75] 单集"标记位置"：用户听到喜欢处打点，进度条上显示细蓝标(封面主色)。
+  //   结构 { [episodeId]: [秒,...] }，持久化 localStorage。本集标记 >5 按钮变封面色、>10 变彩虹(彩蛋#2)。
+  podcastMarks: {
+    map: JSON.parse(localStorage.getItem('podcastMarks') || '{}'),
+  },
   // [B-48 第5点] 自定义头像（裁切后的 1:1 dataURL，持久化 localStorage）；空=用默认头像
   podcastAvatar: localStorage.getItem('podcastAvatar') || '',
   // [播客改造 C-14] 当前是否在加载音频（点单集到出声的等待）

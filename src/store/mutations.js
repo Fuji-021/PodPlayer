@@ -70,6 +70,27 @@ export default {
     state.podcastBroken.names = names;
     localStorage.setItem('podcastBroken', JSON.stringify(names));
   },
+  // [B-75] 单集标记位置：加一个标记点（按 episodeId 存秒数；±2s 内视为重复不加；升序）
+  addPodcastMark(state, { episodeId, sec } = {}) {
+    if (!episodeId || typeof sec !== 'number' || sec < 0) return;
+    const map = { ...state.podcastMarks.map };
+    const arr = (map[episodeId] || []).slice();
+    if (arr.some(s => Math.abs(s - sec) < 2)) return; // 相近点不重复
+    arr.push(sec);
+    arr.sort((a, b) => a - b);
+    map[episodeId] = arr;
+    state.podcastMarks.map = map;
+    localStorage.setItem('podcastMarks', JSON.stringify(map));
+  },
+  // [B-75] 清空某集的全部标记（长按标记键触发）
+  clearPodcastMarks(state, episodeId) {
+    if (!episodeId) return;
+    const map = { ...state.podcastMarks.map };
+    if (!(episodeId in map)) return;
+    delete map[episodeId];
+    state.podcastMarks.map = map;
+    localStorage.setItem('podcastMarks', JSON.stringify(map));
+  },
   // [B-48 第5点] 设置/清除自定义头像（dataURL）
   setPodcastAvatar(state, dataUrl) {
     state.podcastAvatar = dataUrl || '';

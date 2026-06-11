@@ -39,6 +39,13 @@
         class="buffering-bar"
         :style="{ left: bufferingLeftPercent + '%' }"
       ></div>
+      <!-- [B-75] 标记位置：进度条上每个标记一条细蓝标(封面主色)，纯展示、点击无反馈(pointer-events:none) -->
+      <div
+        v-for="(mk, i) in currentMarks"
+        :key="'mk' + i"
+        class="prog-mark"
+        :style="{ left: markPct(mk) + '%', background: markColor }"
+      ></div>
     </div>
     <div class="controls">
       <div class="playing">
@@ -149,6 +156,28 @@
       <div class="right-control-buttons">
         <div class="blank"></div>
         <div class="container" @click.stop>
+          <!-- [B-75] 标记位置键：紧贴金刚键右侧，与左侧"收藏"对称。短按=标记当前时间点(轻反馈不变色)；
+               长按 5 秒=清空本集全部标记。标记 >5 变封面主色、>10 变彩虹(彩蛋#2)。仅播客单集显示。 -->
+          <div
+            v-if="isPodcastTrack"
+            class="mark-control"
+            :class="{
+              charging: markCharging,
+              pulse: markPulse,
+              rainbow: markCount > 10,
+            }"
+            :style="
+              markCount > 5 && markCount <= 10 ? { color: markColor } : null
+            "
+            :title="markBtnTitle"
+            @click.stop
+            @mousedown.stop="onMarkPressStart"
+            @mouseup="onMarkPressEnd"
+            @mouseleave="onMarkPressCancel"
+          >
+            <span class="mark-charge"></span>
+            <svg-icon class="mark-icon" icon-class="social-network" />
+          </div>
           <!-- [播客改造 A-6] 倍速按钮：右侧按钮区第一个，紧贴中间播放控制 -->
           <div ref="rateControl" class="rate-control" @click.stop>
             <button
@@ -395,6 +424,11 @@ export default {
       // [播客改造 A-7.8] 进度条 hover 预览
       hoverTime: null,
       hoverX: 0,
+      // [B-75] 标记位置：封面主色(细蓝标 + 按钮变色用)、长按充能态、短按 pulse 反馈。
+      //   _markColorSrc/_markTimer/_markPulseTimer/_markPressed 用裸实例属性(不入 data，免响应式+避开保留键)
+      markColor: '#e67e22',
+      markCharging: false,
+      markPulse: false,
       // [播客改造] 单集名是否溢出（决定是否启用跑马灯）
       nameOverflow: false,
       // [B-36] 封面加载淡入：切歌时置 false，图片 @load 后 true → opacity 过渡
@@ -521,6 +555,25 @@ export default {
       }
       return !!this.player.isCurrentTrackLiked;
     },
+    // [B-75] 标记位置相关
+    markEpisodeId() {
+      const t = this.player && this.player.currentTrack;
+      return (t && t.podcastEpisodeId) || '';
+    },
+    currentMarks() {
+      const map =
+        (this.$store.state.podcastMarks &&
+          this.$store.state.podcastMarks.map) ||
+        {};
+      return (this.markEpisodeId && map[this.markEpisodeId]) || [];
+    },
+    markCount() {
+      return this.currentMarks.length;
+    },
+    markBtnTitle() {
+      if (this.markCount === 0) return '标记这一刻（长按 5 秒清空）';
+      return `已标记 ${this.markCount} 处（短按再标，长按 5 秒清空）`;
+    },
   },
   mounted() {
     this.setupMediaControls();
@@ -537,8 +590,9 @@ export default {
     //   img.complete && naturalWidth>0 立即置 loaded，避免封面卡在半透明。
     this.$watch(
       () => this.coverSrc,
-      () => {
+      src => {
         this.coverLoaded = false;
+        this.refreshMarkColor(src); // [B-75] 换封面 → 刷新标记主色
         this.$nextTick(() => {
           const img = this.$el && this.$el.querySelector('.cover-img');
           if (img && img.complete && img.naturalWidth > 0) {
@@ -547,6 +601,7 @@ export default {
         });
       }
     );
+    this.refreshMarkColor(this.coverSrc); // [B-75] 初始封面主色
     this.$nextTick(() => this.checkNameOverflow());
     // [播客改造 A-6] 从 player 状态恢复倍速（持久化由 store 的 Proxy 自动完成）
     if (this.player && typeof this.player.playbackRate === 'number') {
@@ -561,6 +616,9 @@ export default {
     // [B-46] 卸载睡眠定时器的监听与计时器
     this.closeSleepMenu();
     this.clearSleep();
+    // [B-75] 清理标记长按/pulse 计时器
+    clearTimeout(this._markTimer);
+    clearTimeout(this._markPulseTimer);
   },
   methods: {
     ...mapMutations(['toggleLyrics']),
@@ -615,6 +673,77 @@ export default {
       } else if (t.id) {
         this.likeATrack(t.id);
       }
+    },
+    // [B-75] 标记位置 ===
+    markPct(sec) {
+      const dur = this.player.currentTrackDuration || 0;
+      if (dur <= 0) return 0;
+      return Math.min(100, Math.max(0, (sec / dur) * 100));
+    },
+    // 封面主色：换封面时算一次缓存（细蓝标 + 按钮变色用）
+    refreshMarkColor(src) {
+      if (!src || src === this._markColorSrc) return;
+      this._markColorSrc = src;
+      getCoverColor(src)
+        .then(hsl => {
+          if (hsl && this._markColorSrc === src) {
+            this.markColor = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
+          }
+        })
+        .catch(() => {});
+    },
+    // 按下：起 5 秒长按计时 + 充能动画（mousedown）
+    onMarkPressStart() {
+      if (!this.markEpisodeId) return;
+      this._markPressed = true;
+      this.markCharging = true;
+      clearTimeout(this._markTimer);
+      this._markTimer = setTimeout(() => {
+        // 长按满 5 秒 → 清空本集全部标记
+        this.markCharging = false;
+        this._markPressed = false;
+        this._markTimer = null;
+        this.clearAllMarks();
+      }, 5000);
+    },
+    // 松手：未到 5 秒 = 短按 → 标记当前时间点（mouseup）
+    onMarkPressEnd() {
+      if (!this._markPressed) return; // 已被长按消费 / 已取消
+      this._markPressed = false;
+      this.markCharging = false;
+      if (this._markTimer) {
+        clearTimeout(this._markTimer);
+        this._markTimer = null;
+        this.addMarkHere();
+      }
+    },
+    // 移出按钮：取消（既不标记也不清空）
+    onMarkPressCancel() {
+      if (this._markTimer) {
+        clearTimeout(this._markTimer);
+        this._markTimer = null;
+      }
+      this.markCharging = false;
+      this._markPressed = false;
+    },
+    addMarkHere() {
+      const id = this.markEpisodeId;
+      if (!id) return;
+      const sec = Math.floor(this.player.progress || 0);
+      this.$store.commit('addPodcastMark', { episodeId: id, sec });
+      // 短按反馈：图标 pulse 一下（不变色）
+      this.markPulse = true;
+      clearTimeout(this._markPulseTimer);
+      this._markPulseTimer = setTimeout(() => {
+        this.markPulse = false;
+      }, 260);
+      this.showToast('已标记 ' + this.fmtClock(sec));
+    },
+    clearAllMarks() {
+      const id = this.markEpisodeId;
+      if (!id || !this.markCount) return;
+      this.$store.commit('clearPodcastMarks', id);
+      this.showToast('已清空本集标记');
     },
     // [播客改造 A-21] 倍速：步进 0.1，0.5-3 范围
     setRate(rate) {
@@ -1127,6 +1256,18 @@ export default {
   width: 100%;
   position: relative; // [播客改造 A-7.8] 让 hover-tip absolute 相对它定位
 }
+// [B-75] 标记位置：进度条上的细蓝标(封面主色)。极细(比进度条略粗)、纯展示、不挡点击。
+.prog-mark {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--color-primary); // 兜底，实际 inline markColor 覆盖
+  pointer-events: none;
+  z-index: 4;
+}
 // [播客改造] hover 进度条时不再放大小白点（与 hover 时间预览功能重叠），
 // 只在真正拖动时显示 dot。需写在 scoped 之外，否则 ::v-deep 选不到 vue-slider 内部 DOM
 .progress-bar ::v-deep .vue-slider:hover .vue-slider-dot-handle {
@@ -1390,6 +1531,76 @@ export default {
   // [播客改造 A-7.1] 已收藏：爱心变红
   &.favorited .svg-icon {
     color: #e74c3c;
+  }
+}
+
+// [B-75] 标记位置键：与左侧"收藏"对称、紧贴金刚键右侧。
+//   短按=标记(图标 pulse、不变色)；长按 5 秒=充能圈填满→清空本集标记。
+//   彩蛋#2：本集标记 >5 → 图标变封面主色(inline color)；>10 → 彩虹流转。
+.mark-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 0 8px;
+  border-radius: 50%;
+  cursor: pointer;
+  user-select: none;
+  // 长按充能圈：从中心放大，5 秒线性填满=即将清空；松手 0.2s 缩回（视觉区分长/短按）
+  .mark-charge {
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.18;
+    transform: scale(0);
+    transform-origin: center;
+    transition: transform 0.2s ease;
+    pointer-events: none;
+  }
+  .mark-icon {
+    position: relative;
+    width: 18px;
+    height: 18px;
+    transition: transform 0.12s ease;
+  }
+  &:hover {
+    background: var(--color-secondary-bg-for-transparent);
+  }
+  // 短按反馈：图标弹一下（不变色）
+  &.pulse .mark-icon {
+    transform: scale(1.32);
+  }
+  // 长按充能：圈用 5 秒线性放大填满
+  &.charging .mark-charge {
+    transform: scale(1);
+    transition: transform 5s linear;
+  }
+  // 彩蛋#2：>10 标记 → 图标彩虹流转（animation 的 color 覆盖 inline color）
+  &.rainbow .mark-icon {
+    animation: markRainbow 2.4s linear infinite;
+  }
+}
+@keyframes markRainbow {
+  0% {
+    color: hsl(0, 80%, 56%);
+  }
+  20% {
+    color: hsl(45, 90%, 52%);
+  }
+  40% {
+    color: hsl(140, 65%, 45%);
+  }
+  60% {
+    color: hsl(195, 80%, 50%);
+  }
+  80% {
+    color: hsl(265, 70%, 60%);
+  }
+  100% {
+    color: hsl(360, 80%, 56%);
   }
 }
 
