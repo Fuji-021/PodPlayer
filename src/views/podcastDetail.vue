@@ -353,18 +353,29 @@ export default {
         _loading: true, // 骨架态：隐藏订阅按钮、单集区显示"载入中"
       };
       this.episodes = [];
+      // [B69-P1] 在途令牌 + 守卫：previewPodcast 抓 RSS 可达数秒，期间用户可能已离开骨架页/
+      //   返回首页/又点了别的卡片。$router 是全局对象、组件销毁后调用仍生效 → 不加守卫会
+      //   "数秒后把用户强行拉回本节目"或 A/B 串台。await 后校验：组件已销毁 / 又发起了新预览 /
+      //   已不在哨兵路由 → 直接放弃，不抢导航。
+      const token = (this._previewToken = (this._previewToken || 0) + 1);
+      const stale = () =>
+        this._isDestroyed ||
+        token !== this._previewToken ||
+        this.$route.params.feedUrlEncoded !== '__preview__';
       try {
         const { feedUrl } = await previewPodcast(seed.raw);
+        if (stale()) return;
         this.$router.replace({
           name: 'podcastDetail',
           params: { feedUrlEncoded: encodeURIComponent(feedUrl) },
         });
       } catch (e) {
+        if (stale()) return;
         this.$store.dispatch(
           'showToast',
           '载入失败：' + ((e && e.message) || e)
         );
-        this.$router.back();
+        this.$router.replace('/library');
       }
     },
     async load() {

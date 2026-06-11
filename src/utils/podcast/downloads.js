@@ -235,27 +235,36 @@ export async function getDownload(episodeId) {
 }
 
 // [B-33/B-35] 我的下载页：已下载单集富对象（join 元数据），按下载时间**正序**（最早在上、最新在下）
+//   [B69-F3] 原来循环内逐条 await db.episodes.get + db.podcasts.get（2N 次串行 IndexedDB 往返，
+//   下载多了明显变慢）→ 改 bulkGet 批量取（与 B-36 详情页同款）。
 export async function getDownloadedEpisodes() {
   const rows = await db.episodeDownloads.toArray();
   const done = rows.filter(r => r && r.status === 'done');
+  const eps = await db.episodes.bulkGet(done.map(r => r.id)).catch(() => []);
+  const podIds = [
+    ...new Set(
+      eps
+        .filter(Boolean)
+        .map(e => e.podcastId)
+        .filter(Boolean)
+    ),
+  ];
+  const pods = await db.podcasts.bulkGet(podIds).catch(() => []);
+  const podMap = {};
+  podIds.forEach((pid, i) => {
+    if (pods[i]) podMap[pid] = pods[i];
+  });
   const result = [];
-  for (const r of done) {
-    const ep = await db.episodes.get(r.id);
-    if (!ep) continue;
-    let podcastTitle = '';
-    try {
-      const pod = await db.podcasts.get(ep.podcastId);
-      podcastTitle = (pod && pod.title) || '';
-    } catch (e) {
-      // ignore
-    }
+  done.forEach((r, i) => {
+    const ep = eps[i];
+    if (!ep) return;
     result.push({
       ...ep,
-      podcastTitle,
+      podcastTitle: (podMap[ep.podcastId] && podMap[ep.podcastId].title) || '',
       filePath: r.filePath,
       downloadedAt: r.addedAt || 0,
     });
-  }
+  });
   result.sort((a, b) => (a.downloadedAt || 0) - (b.downloadedAt || 0));
   return result;
 }
