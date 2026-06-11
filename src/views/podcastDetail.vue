@@ -162,6 +162,25 @@
         下滑加载更多 · 已显示 {{ visibleEpisodes.length }} /
         {{ episodes.length }}
       </div>
+      <!-- [B-74 彩蛋#1] 全部加载完 + 列表够长(分页过) → 彩虹猫(nyancat)到底奖励。
+           吉祥物位置登记在案，后续统计彩蛋个数用。 -->
+      <div
+        v-else-if="episodes.length > 50"
+        class="ep-egg"
+        title="彩蛋 · 你滑到底啦"
+      >
+        <span class="ep-egg-rainbow"></span>
+        <img class="ep-egg-cat" src="/img/logos/nyancat.gif" alt="nyancat" />
+        <span class="ep-egg-text"
+          >喵～到底啦 · 共 {{ episodes.length }} 集</span
+        >
+      </div>
+      <!-- [B-74] 未渲染部分的预留占位，稳住自绘滚动条(详见 spacerHeight 注释) -->
+      <div
+        v-if="spacerHeight > 0"
+        class="ep-spacer"
+        :style="{ height: spacerHeight + 'px' }"
+      ></div>
     </div>
 
     <!-- [B-34] 多选模式固定下载栏（滚动时固定在播放栏上方） -->
@@ -321,6 +340,15 @@ export default {
       if (this.epDisplayLimit >= this.episodes.length) return this.episodes;
       return this.episodes.slice(0, this.epDisplayLimit);
     },
+    // [B-74] 未渲染单集的预留占位高度：稳住自绘滚动条。
+    //   自绘 Scrollbar 的拖动按实时 scrollHeight 算位移(Scrollbar.vue handleDragMove)，
+    //   F1 边滚边加载会让 scrollHeight 不断变大 → 托条跳动/脱手、底部不断后退够不到。
+    //   在列表底补一段"剩余条数×行估高"的占位 → scrollHeight 在分页期间基本恒定 → 托条稳。
+    //   74≈单行估高(行高可变，固定估值令漂移从"每次暴跳3300px"降到全程几个百分点)。
+    spacerHeight() {
+      const remaining = this.episodes.length - this.visibleEpisodes.length;
+      return remaining > 0 ? remaining * 74 : 0;
+    },
     // [B-33] 节目简介去 HTML 标签 → 纯文本（避免 RSS 描述里的 <p style> 源码当文字显示）
     cleanDescription() {
       return stripHtmlToText((this.podcast && this.podcast.description) || '');
@@ -380,7 +408,11 @@ export default {
       if (this.epDisplayLimit >= this.episodes.length) return;
       const el = this._scrollEl;
       if (!el) return;
-      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 600) {
+      // [B-74] 触发点改为"已渲染行的底部"而非文档底部：底部有 spacerHeight 占位，
+      //   文档底在占位之下很远；要在用户接近**真实行**末尾(留 600px 抢跑余量)就加载，
+      //   否则会先滚进一片空白占位才加载。renderedBottom = 文档高 - 占位高。
+      const renderedBottom = el.scrollHeight - this.spacerHeight;
+      if (el.scrollTop + el.clientHeight >= renderedBottom - 600) {
         this._loadingMore = true;
         this.epDisplayLimit = Math.min(
           this.episodes.length,
@@ -984,6 +1016,43 @@ export default {
   font-size: 13px;
   opacity: 0.4;
   user-select: none;
+}
+// [B-74 彩蛋#1] 滑到长列表底部的彩虹猫(nyancat)奖励：彩虹条 + 像素猫(尺寸≈字号) + 短趣味文案 + 条数
+.ep-egg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px 4px 28px;
+  font-size: 13px;
+  opacity: 0.75;
+  user-select: none;
+  .ep-egg-rainbow {
+    width: 26px;
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(
+      90deg,
+      #ff3b30,
+      #ff9500,
+      #ffcc00,
+      #34c759,
+      #007aff,
+      #5856d6
+    );
+  }
+  .ep-egg-cat {
+    height: 18px; // ≈ 文案字号，吉祥物不抢镜
+    width: auto;
+    image-rendering: pixelated; // nyancat 像素图，缩放保持锐利
+  }
+  .ep-egg-text {
+    color: var(--color-text);
+  }
+}
+// [B-74] 未渲染部分预留占位（稳住自绘滚动条），无内容、不可交互
+.ep-spacer {
+  pointer-events: none;
 }
 // [B-70] 预览失败原地错误态
 .ep-error {
