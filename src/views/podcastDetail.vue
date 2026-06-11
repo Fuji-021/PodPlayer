@@ -71,7 +71,7 @@
         正在载入单集…
       </div>
       <div
-        v-for="ep in episodes"
+        v-for="ep in visibleEpisodes"
         :key="ep.id"
         class="episode-row"
         :class="{
@@ -156,6 +156,11 @@
         >
           <svg-icon icon-class="menu-dots-vertical" />
         </button>
+      </div>
+      <!-- [B-73.2/F1] 还有未渲染的单集 → 底部提示(滚动接近此处会自动抢跑加载下一批) -->
+      <div v-if="episodes.length > visibleEpisodes.length" class="ep-more-hint">
+        下滑加载更多 · 已显示 {{ visibleEpisodes.length }} /
+        {{ episodes.length }}
       </div>
     </div>
 
@@ -302,11 +307,19 @@ export default {
       // [B-34] 多选下载模式
       selectMode: false,
       selectedEpIds: [],
+      // [B-73.2/F1] 单集"抢跑"分页：当前渲染条数上限(首屏 50，滚动接近底部再 +50)。
+      //   episodes 仍存全量(批量下载/选择/播放广播都用它)，仅限制**渲染**量。大档节目(机核 1000+ 集)秒开。
+      epDisplayLimit: 50,
     };
   },
   computed: {
     feedUrl() {
       return decodeURIComponent(this.$route.params.feedUrlEncoded || '');
+    },
+    // [B-73.2/F1] 实际渲染的单集子集（前 epDisplayLimit 条）。全量在 this.episodes。
+    visibleEpisodes() {
+      if (this.epDisplayLimit >= this.episodes.length) return this.episodes;
+      return this.episodes.slice(0, this.epDisplayLimit);
     },
     // [B-33] 节目简介去 HTML 标签 → 纯文本（避免 RSS 描述里的 <p style> 源码当文字显示）
     cleanDescription() {
@@ -339,12 +352,45 @@ export default {
         .catch(() => {});
     },
   },
+  mounted() {
+    // [B-73.2/F1] 滚动监听挂外层滚动容器 <main>(内层滚动不冒泡 window)，近底部抢跑加载下一批。
+    //   Vue2 的 methods 已绑定实例，可直接作回调引用、removeEventListener 用同一引用。
+    this._scrollEl = this.$el && this.$el.closest('main');
+    if (this._scrollEl) {
+      this._scrollEl.addEventListener('scroll', this.maybeLoadMore, {
+        passive: true,
+      });
+    }
+  },
   beforeDestroy() {
     // [B-34] 离开页面时清理浮层/菜单的 document 监听，避免泄漏
     this.closeCoverMenu();
     this.closeEpisodeMenu();
+    if (this._scrollEl) {
+      this._scrollEl.removeEventListener('scroll', this.maybeLoadMore);
+    }
   },
   methods: {
+    // [B-73.2/F1] "抢跑"分页：滚到距底 ≤600px(=提前抢跑余量)就追加 50 条。
+    //   episodes 全量保留，只调 epDisplayLimit(限渲染量)→ 大档节目秒开、滚动永远追不上加载。
+    //   _loadingMore 守卫：一次渲染周期只加一批，防同一滚动帧多次触发(re-render 异步、scrollHeight 未更新)。
+    //   滚动条只覆盖"已加载内容"，故拖动条到底=已加载底→触发下一批，够不到第 1000 集 → 天然限速。
+    maybeLoadMore() {
+      if (this._loadingMore) return;
+      if (this.epDisplayLimit >= this.episodes.length) return;
+      const el = this._scrollEl;
+      if (!el) return;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 600) {
+        this._loadingMore = true;
+        this.epDisplayLimit = Math.min(
+          this.episodes.length,
+          this.epDisplayLimit + 50
+        );
+        this.$nextTick(() => {
+          this._loadingMore = false;
+        });
+      }
+    },
     // [B67-BUG-2] 未订阅节目秒跳进来：先用卡片"种子"渲染骨架(头图/标题/作者立即可见)，
     //   后台跑预览(resolveFeed+抓RSS+入库)，完成后 replace 到真实 feedUrl →
     //   feedUrl watcher 再以真实值走正常 load() 填充单集。失败则 toast + 返回，绝不留空白。
@@ -364,6 +410,7 @@ export default {
         _loading: true, // 骨架态：隐藏订阅按钮、单集区显示"载入中"
       };
       this.episodes = [];
+      this.epDisplayLimit = 50; // [B-73.2/F1] 预览态也复位渲染量
       // [B69-P1] 在途令牌 + 守卫：previewPodcast 抓 RSS 可达数秒，期间用户可能已离开骨架页/
       //   返回首页/又点了别的卡片。$router 是全局对象、组件销毁后调用仍生效 → 不加守卫会
       //   "数秒后把用户强行拉回本节目"或 A/B 串台。await 后校验：组件已销毁 / 又发起了新预览 /
@@ -427,6 +474,9 @@ export default {
         listenedSec: (progresses[i] && progresses[i].position) || 0,
         listenStats: stats[i] || null,
       }));
+      // [B-73.2/F1] 新节目视图：渲染量回到首屏 50、滚动条回到顶部(避免沿用上个节目的深滚动位)
+      this.epDisplayLimit = 50;
+      if (this._scrollEl) this._scrollEl.scrollTop = 0;
     },
     playEpisode(ep) {
       const title = this.podcast ? this.podcast.title : '';
@@ -926,6 +976,14 @@ export default {
   text-align: center;
   font-size: 14px;
   opacity: 0.45;
+}
+// [B-73.2/F1] 还有未渲染单集时的底部提示（滚动接近会自动加载下一批）
+.ep-more-hint {
+  padding: 18px 4px 24px;
+  text-align: center;
+  font-size: 13px;
+  opacity: 0.4;
+  user-select: none;
 }
 // [B-70] 预览失败原地错误态
 .ep-error {
