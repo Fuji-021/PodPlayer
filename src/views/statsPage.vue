@@ -39,8 +39,8 @@
 
     <div v-if="!visibleList.length" class="empty">这段时间还没有收听记录</div>
 
-    <!-- [统计动画 v1.2] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
-         留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左)；离开条塌缩裁切。全程不透明、无渐隐(v1.2 去残影)。 -->
+    <!-- [统计动画 v1.5] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
+         留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左)；离开条瞬时消失(v1.5)。全程不透明、无渐隐。 -->
     <transition-group name="stat" tag="div" class="stat-list">
       <div
         v-for="item in visibleList"
@@ -153,7 +153,8 @@ export default {
     //   (v1=重排；v1.1=消残影；v1.2=去渐隐塌缩；v1.2.1=塌缩改纯CSS修顶部闪现；
     //    v1.3=整行不透明底色根治半透明条交叉透叠+文字叠糊残影；
     //    v1.4=离开行钉坐标+镜像[已废弃：快速切换时内联残留致崩]；
-    //    v1.5=离开行**瞬时消失**(砍掉整条 leave 路径) + .bar overflow:hidden 修封面越界。
+    //    v1.5=离开行**瞬时消失**(砍掉整条 leave 路径) + .bar overflow:hidden 修封面越界；
+    //    v1.5.1=行间隙 margin→padding(涂实透明窗口) + 容器实底 + 去 isolation，修 FLIP 交叉漏出的细线。
     //    规则见开发文档「版本命名规则」。)
     async enterWithAnimation() {
       // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
@@ -417,8 +418,10 @@ export default {
 // [B-54] 排行重排动画：move=FLIP 位移（节目被刷上/刷下），enter=新增补入，leave=移除
 .stat-list {
   position: relative;
-  // [B-63改/v1.2.1] 独立层叠上下文(v1.5 后离开行已瞬时移除，保留它无害且利于未来叠层控制)
-  isolation: isolate;
+  // [v1.5.1] 容器自身涂不透明底色：行下方/行间的一切区域都有"自己人"的实底，
+  //   FLIP 重绘期间不会留下未失效的残影细线。isolation 已删(v1.5 起无 z-index:-1 离开行，
+  //   独立层叠上下文反而徒增合成层、提高重绘残留概率)。
+  background: var(--color-body-bg);
 }
 .stat-move {
   transition: transform calc(0.65s * var(--stat-k, 1))
@@ -441,7 +444,10 @@ export default {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
+  // [v1.5.1/细线修] 行间隙由 margin 改 padding：margin 不涂背景=透明窗口，FLIP 交叉时
+  //   下层行的文字/封面阴影会从 14px 窗口里漏出 1~2px 横向细线(用户截图"莫名其妙不干净的细线")。
+  //   padding 属于行盒、被 v1.3 的不透明底色一并涂实 → 行与行无缝全覆盖，细线无处可漏。
+  padding-bottom: 14px;
   cursor: pointer;
   // [统计动画 v1.3] 整行不透明底色(=页面色，静态外观零变化) → 重排交叉时"行覆盖行"，
   //   连同条与文字一起被上层行实实在在遮挡。这才是残影/文字叠糊的根治：
