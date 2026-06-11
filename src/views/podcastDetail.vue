@@ -157,13 +157,12 @@
           <svg-icon icon-class="menu-dots-vertical" />
         </button>
       </div>
-      <!-- [B-73.2/F1] 还有未渲染的单集 → 底部提示(滚动接近此处会自动抢跑加载下一批) -->
+      <!-- [B-75/F1] 后台水合中(还没补满) → 底部轻提示，补满即消失 -->
       <div v-if="episodes.length > visibleEpisodes.length" class="ep-more-hint">
-        下滑加载更多 · 已显示 {{ visibleEpisodes.length }} /
-        {{ episodes.length }}
+        载入中 · {{ visibleEpisodes.length }} / {{ episodes.length }}
       </div>
-      <!-- [B-74 彩蛋#1] 全部加载完 + 列表够长(分页过) → 彩虹猫(nyancat)到底奖励。
-           吉祥物位置登记在案，后续统计彩蛋个数用。 -->
+      <!-- [B-74 彩蛋#1] 全部渲染完 + 列表够长(>50) → 彩虹猫(nyancat)到底奖励。
+           吉祥物位置登记在案(memory easter-eggs.md)，后续统计彩蛋个数用。 -->
       <div
         v-else-if="episodes.length > 50"
         class="ep-egg"
@@ -175,12 +174,6 @@
           >喵～到底啦 · 共 {{ episodes.length }} 集</span
         >
       </div>
-      <!-- [B-74] 未渲染部分的预留占位，稳住自绘滚动条(详见 spacerHeight 注释) -->
-      <div
-        v-if="spacerHeight > 0"
-        class="ep-spacer"
-        :style="{ height: spacerHeight + 'px' }"
-      ></div>
     </div>
 
     <!-- [B-34] 多选模式固定下载栏（滚动时固定在播放栏上方） -->
@@ -326,8 +319,8 @@ export default {
       // [B-34] 多选下载模式
       selectMode: false,
       selectedEpIds: [],
-      // [B-73.2/F1] 单集"抢跑"分页：当前渲染条数上限(首屏 50，滚动接近底部再 +50)。
-      //   episodes 仍存全量(批量下载/选择/播放广播都用它)，仅限制**渲染**量。大档节目(机核 1000+ 集)秒开。
+      // [B-75/F1] 单集渐进渲染上限：首屏 50 条即时上屏(秒开)，随后 _startHydration 在后台
+      //   逐帧补满到全量。episodes 始终全量(批量下载/选择/播放广播都用它)，只限制**渲染**节奏。
       epDisplayLimit: 50,
     };
   },
@@ -335,19 +328,10 @@ export default {
     feedUrl() {
       return decodeURIComponent(this.$route.params.feedUrlEncoded || '');
     },
-    // [B-73.2/F1] 实际渲染的单集子集（前 epDisplayLimit 条）。全量在 this.episodes。
+    // [B-75/F1] 实际渲染的单集子集（前 epDisplayLimit 条）。全量在 this.episodes。
     visibleEpisodes() {
       if (this.epDisplayLimit >= this.episodes.length) return this.episodes;
       return this.episodes.slice(0, this.epDisplayLimit);
-    },
-    // [B-74] 未渲染单集的预留占位高度：稳住自绘滚动条。
-    //   自绘 Scrollbar 的拖动按实时 scrollHeight 算位移(Scrollbar.vue handleDragMove)，
-    //   F1 边滚边加载会让 scrollHeight 不断变大 → 托条跳动/脱手、底部不断后退够不到。
-    //   在列表底补一段"剩余条数×行估高"的占位 → scrollHeight 在分页期间基本恒定 → 托条稳。
-    //   74≈单行估高(行高可变，固定估值令漂移从"每次暴跳3300px"降到全程几个百分点)。
-    spacerHeight() {
-      const remaining = this.episodes.length - this.visibleEpisodes.length;
-      return remaining > 0 ? remaining * 74 : 0;
     },
     // [B-33] 节目简介去 HTML 标签 → 纯文本（避免 RSS 描述里的 <p style> 源码当文字显示）
     cleanDescription() {
@@ -380,47 +364,38 @@ export default {
         .catch(() => {});
     },
   },
-  mounted() {
-    // [B-73.2/F1] 滚动监听挂外层滚动容器 <main>(内层滚动不冒泡 window)，近底部抢跑加载下一批。
-    //   Vue2 的 methods 已绑定实例，可直接作回调引用、removeEventListener 用同一引用。
-    this._scrollEl = this.$el && this.$el.closest('main');
-    if (this._scrollEl) {
-      this._scrollEl.addEventListener('scroll', this.maybeLoadMore, {
-        passive: true,
-      });
-    }
-  },
   beforeDestroy() {
     // [B-34] 离开页面时清理浮层/菜单的 document 监听，避免泄漏
     this.closeCoverMenu();
     this.closeEpisodeMenu();
-    if (this._scrollEl) {
-      this._scrollEl.removeEventListener('scroll', this.maybeLoadMore);
-    }
+    this._stopHydration(); // [B-75] 取消后台水合，避免在已销毁实例上回调
   },
   methods: {
-    // [B-73.2/F1] "抢跑"分页：滚到距底 ≤600px(=提前抢跑余量)就追加 50 条。
-    //   episodes 全量保留，只调 epDisplayLimit(限渲染量)→ 大档节目秒开、滚动永远追不上加载。
-    //   _loadingMore 守卫：一次渲染周期只加一批，防同一滚动帧多次触发(re-render 异步、scrollHeight 未更新)。
-    //   滚动条只覆盖"已加载内容"，故拖动条到底=已加载底→触发下一批，够不到第 1000 集 → 天然限速。
-    maybeLoadMore() {
-      if (this._loadingMore) return;
-      if (this.epDisplayLimit >= this.episodes.length) return;
-      const el = this._scrollEl;
-      if (!el) return;
-      // [B-74] 触发点改为"已渲染行的底部"而非文档底部：底部有 spacerHeight 占位，
-      //   文档底在占位之下很远；要在用户接近**真实行**末尾(留 600px 抢跑余量)就加载，
-      //   否则会先滚进一片空白占位才加载。renderedBottom = 文档高 - 占位高。
-      const renderedBottom = el.scrollHeight - this.spacerHeight;
-      if (el.scrollTop + el.clientHeight >= renderedBottom - 600) {
-        this._loadingMore = true;
+    // [B-75/F1] 后台渐进水合：首屏 50 上屏后，用 rAF 逐帧把 epDisplayLimit 补满到全量。
+    //   为何这样：B-73.2 靠滚动触发 + B-74 底部占位(spacer)，会让自绘滚动条拖到一片"未渲染的
+    //   空白占位"里、且托条按变化的 scrollHeight 算位移而跳动/脱手(用户反馈"还不如上一版")。
+    //   改后台水合后：列表很快是**完整真实高度** → 滚动条/拖动稳、永不留空白；首屏仍是即时 50 条。
+    //   每帧 +120，1000 集约 8 帧(~130ms)内填满；组件销毁/换节目即取消。
+    _startHydration() {
+      this._stopHydration();
+      const step = () => {
+        if (this._isDestroyed) return;
+        if (this.epDisplayLimit >= this.episodes.length) {
+          this._hydrateRaf = null;
+          return;
+        }
         this.epDisplayLimit = Math.min(
           this.episodes.length,
-          this.epDisplayLimit + 50
+          this.epDisplayLimit + 120
         );
-        this.$nextTick(() => {
-          this._loadingMore = false;
-        });
+        this._hydrateRaf = requestAnimationFrame(step);
+      };
+      this._hydrateRaf = requestAnimationFrame(step);
+    },
+    _stopHydration() {
+      if (this._hydrateRaf) {
+        cancelAnimationFrame(this._hydrateRaf);
+        this._hydrateRaf = null;
       }
     },
     // [B67-BUG-2] 未订阅节目秒跳进来：先用卡片"种子"渲染骨架(头图/标题/作者立即可见)，
@@ -506,9 +481,12 @@ export default {
         listenedSec: (progresses[i] && progresses[i].position) || 0,
         listenStats: stats[i] || null,
       }));
-      // [B-73.2/F1] 新节目视图：渲染量回到首屏 50、滚动条回到顶部(避免沿用上个节目的深滚动位)
+      // [B-75/F1] 新节目视图：渲染量回到首屏 50、滚动条回到顶部(避免沿用上个节目的深滚动位)，
+      //   随后后台逐帧水合补满全量。
       this.epDisplayLimit = 50;
-      if (this._scrollEl) this._scrollEl.scrollTop = 0;
+      const main = this.$el && this.$el.closest('main');
+      if (main) main.scrollTop = 0;
+      this.$nextTick(() => this._startHydration());
     },
     playEpisode(ep) {
       const title = this.podcast ? this.podcast.title : '';
@@ -1049,10 +1027,6 @@ export default {
   .ep-egg-text {
     color: var(--color-text);
   }
-}
-// [B-74] 未渲染部分预留占位（稳住自绘滚动条），无内容、不可交互
-.ep-spacer {
-  pointer-events: none;
 }
 // [B-70] 预览失败原地错误态
 .ep-error {
