@@ -1112,9 +1112,13 @@ export default class {
       // [B-81 修] howler 未 loaded 时直接 seek 会被忽略(时间戳/快进"点了不动"真因之一)。
       //   与 progress setter(224) 同范式：loaded 才立即 seek，否则挂 once('load') 等加载完成再 seek。
       if (this._howler && this._howler.state() !== 'loaded') {
-        this._howler.once('load', () => {
+        // [B-81 自审] 捕获当前 howler 引用 h：避免 load 触发前用户切了集，
+        //   回调里 this._howler 已指向新实例 → 把新单集误 seek 到旧时间戳(跨集污染)。
+        //   对被替换/卸载的旧实例 seek 无害，且绝不误碰新实例。
+        const h = this._howler;
+        h.once('load', () => {
           try {
-            this._howler?.seek(time);
+            h.seek(time);
           } catch (e) {
             /* ignore */
           }
