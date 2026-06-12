@@ -41,14 +41,20 @@
       <!-- [播客改造 A-22] 添加订阅 + 导入 OPML 合并为 + 号按钮 + 弹窗。
            A-23 之后 podcast 详情已拆为独立路由，本页只在订阅列表显示。 -->
       <div class="actions">
-        <!-- [B-46 / D-3] 刷新订阅：并发重抓所有 RSS，发现新单集入库 + 卡片角标 -->
+        <!-- [B-80] 清理角标按钮(原刷新按钮)：刷新已移到后台静默自动跑。
+             有角标→点击像刷子摇晃一下 + 清零全部角标(角标各自播离场动画)；
+             无角标→点不动，只轻微缩小下沉反馈。 -->
         <button
-          class="refresh-button"
-          :class="{ spinning: refreshing }"
-          :disabled="refreshing"
-          @click="refreshSubs"
+          class="clean-button"
+          :class="{
+            active: hasBadges,
+            shaking: cleaning,
+            sinking: sinking,
+          }"
+          :title="hasBadges ? '清理“有更新”角标' : '没有可清理的角标'"
+          @click="clearBadges"
         >
-          <svg-icon icon-class="refresh" />
+          <svg-icon icon-class="clean" />
         </button>
         <div ref="plusControl" class="plus-control" @click.stop>
           <!-- [播客改造] title 屏蔽（不要原生 tooltip），文案保留供后续恢复 -->
@@ -145,8 +151,11 @@
               <div class="label">取消订阅</div>
             </div>
           </div>
-          <!-- [B-46 / D-3] 有更新角标：刷新发现新单集即显示，进详情后清零 -->
-          <div v-if="p.newCount > 0" class="new-badge">有更新</div>
+          <!-- [B-46 / D-3] 有更新角标：后台刷新发现新单集即显示，进详情/点清理角标后清零。
+               [B-80] 包 transition：清零时角标渐隐缩小离场(不让用户看到突兀消失)。 -->
+          <transition name="badge-pop">
+            <div v-if="p.newCount > 0" class="new-badge">有更新</div>
+          </transition>
         </div>
         <div class="title">
           {{ p.title || '(无标题)'
@@ -251,7 +260,7 @@ import {
   exportSubscriptionsOpml,
 } from '@/utils/podcast/service';
 import { getPodcastListenSummary } from '@/utils/podcast/listening';
-import { getLastListenedByPodcast } from '@/utils/podcast/db';
+import { getLastListenedByPodcast, updatePodcast } from '@/utils/podcast/db';
 import { ensureTinyCover } from '@/utils/podcast/coverHalo';
 import SvgIcon from '@/components/SvgIcon.vue';
 
@@ -282,8 +291,9 @@ export default {
       newFeedUrl: '',
       addError: '',
       adding: false,
-      // [B-46 / D-3] 订阅刷新中
-      refreshing: false,
+      // [B-80] 清理角标按钮：cleaning=摇晃中(有角标点击)，sinking=下沉反馈(无角标点击)
+      cleaning: false,
+      sinking: false,
       // [B-47 / 第3点] 是否已至少加载过一次（避免加载期间闪"还没有订阅"）
       loaded: false,
       // [播客改造 A-22] + 号弹窗开关
@@ -367,6 +377,10 @@ export default {
       });
       return arr;
     },
+    // [B-80] 是否有"有更新"角标可清理（决定清理角标按钮是否可点 + 高亮态）
+    hasBadges() {
+      return this.podcasts.some(p => (p.newCount || 0) > 0);
+    },
   },
   mounted() {
     // [S 级 bug 修] 窗口缩放监听，加 .resizing 暂时禁用动画
@@ -389,12 +403,16 @@ export default {
       this._scrollEl.removeEventListener('scroll', this.onMainScroll);
     }
     if (this.scrollTimer) clearTimeout(this.scrollTimer);
+    clearTimeout(this._cleanTimer); // [B-80]
+    clearTimeout(this._sinkTimer);
   },
   activated() {
     this.loadPodcasts();
+    this.autoRefresh(); // [B-80] 进页后台静默刷新订阅(10 分钟节流，无打扰)
   },
   created() {
     this.loadPodcasts();
+    this.autoRefresh(); // [B-80] 启动即后台静默刷新一次(节流保护)
   },
   methods: {
     // [B-35] 该节目下载进度（0-100），无下载任务返 -1。
@@ -469,25 +487,49 @@ export default {
       }
       console.log('[播客库] loaded', this.podcasts.length, 'podcasts');
     },
-    // [B-46 / D-3] 刷新订阅：并发(≤5)重抓所有 RSS，diff 新单集入库 + 卡片角标，toast 汇报
-    async refreshSubs() {
-      if (this.refreshing) return;
-      this.refreshing = true;
+    // [B-80] 后台静默自动刷新订阅(无打扰)：并发重抓所有 RSS，diff 新单集入库→更新角标。
+    //   10 分钟节流(每次进页都跑会狂抓)；无 toast、无转圈，发现新集只让卡片角标静静出现。
+    async autoRefresh() {
+      const KEY = 'podcastLibrary.lastAutoRefresh';
+      const last = Number(localStorage.getItem(KEY) || 0);
+      if (Date.now() - last < 10 * 60 * 1000) return; // 节流
+      if (this._autoRefreshing) return;
+      this._autoRefreshing = true;
+      localStorage.setItem(KEY, String(Date.now()));
       try {
-        const { totalNew } = await refreshAllSubscriptions();
-        await this.loadPodcasts(); // 重新读取（含更新后的 newCount）
-        this.$store.dispatch(
-          'showToast',
-          totalNew > 0 ? `发现 ${totalNew} 集新单集` : '已是最新，没有新单集'
-        );
+        await refreshAllSubscriptions();
+        await this.loadPodcasts(); // 重读，含更新后的 newCount → 角标自动出现
       } catch (e) {
-        this.$store.dispatch(
-          'showToast',
-          '刷新失败：' + ((e && e.message) || e)
-        );
+        // 静默失败，不打扰用户(下次进页节流过期后会再试)
       } finally {
-        this.refreshing = false;
+        this._autoRefreshing = false;
       }
+    },
+    // [B-80] 点清理角标按钮：有角标→像刷子摇晃一下 + 清零全部角标(角标各自播离场动画)；
+    //   无角标→点不动，只给"轻微缩小下沉"反馈、不执行任何操作。
+    async clearBadges() {
+      if (this.cleaning) return;
+      if (!this.hasBadges) {
+        // 无可清理 → 下沉反馈
+        this.sinking = true;
+        clearTimeout(this._sinkTimer);
+        this._sinkTimer = setTimeout(() => {
+          this.sinking = false;
+        }, 240);
+        return;
+      }
+      // 摇晃反馈
+      this.cleaning = true;
+      clearTimeout(this._cleanTimer);
+      this._cleanTimer = setTimeout(() => {
+        this.cleaning = false;
+      }, 600);
+      // 本地先置 0 触发角标离场动画 + 持久化(不让用户看到"清理过程"，角标自己渐隐缩小走)
+      const toClear = this.podcasts.filter(p => (p.newCount || 0) > 0);
+      toClear.forEach(p => this.$set(p, 'newCount', 0));
+      await Promise.all(
+        toClear.map(p => updatePodcast(p.id, { newCount: 0 }).catch(() => {}))
+      );
     },
     // [B-33] 选排序：同 key 再点 → 切方向（菜单保持开，看方向变化）；换 key → 设置并关闭
     setSort(key) {
@@ -844,7 +886,8 @@ export default {
 }
 
 // [B-46 / D-3] 刷新订阅按钮（点击旋转）
-.refresh-button {
+// [B-80] 清理角标按钮(原刷新按钮位置)
+.clean-button {
   align-self: center;
   background: transparent;
   color: var(--color-text);
@@ -854,30 +897,69 @@ export default {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.6;
-  transition: 0.2s;
+  opacity: 0.35; // 默认(无角标)较暗=不可用感
+  transition: opacity 0.2s, transform 0.18s ease, background 0.2s;
   .svg-icon {
     width: 20px;
     height: 20px;
+    transition: transform 0.2s;
   }
-  &:hover {
-    opacity: 1;
-    background: var(--color-secondary-bg-for-transparent);
-  }
-  &:disabled {
-    cursor: default;
-  }
-  &.spinning {
-    opacity: 1;
-    .svg-icon {
-      animation: refreshSpin 0.8s linear infinite;
+  // 有角标 → 点亮、可用
+  &.active {
+    opacity: 0.8;
+    cursor: pointer;
+    &:hover {
+      opacity: 1;
+      background: var(--color-secondary-bg-for-transparent);
     }
   }
-}
-@keyframes refreshSpin {
-  to {
-    transform: rotate(360deg);
+  // 无角标点击 → 轻微缩小下沉反馈(像按了一下没东西可刷)
+  &.sinking {
+    transform: translateY(1px) scale(0.9);
   }
+  // 有角标点击 → 像拿刷子刷：图标快速摇晃几下
+  &.shaking .svg-icon {
+    animation: brushShake 0.55s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+  }
+}
+@keyframes brushShake {
+  0% {
+    transform: rotate(0);
+  }
+  15% {
+    transform: rotate(-16deg);
+  }
+  30% {
+    transform: rotate(13deg);
+  }
+  45% {
+    transform: rotate(-10deg);
+  }
+  60% {
+    transform: rotate(7deg);
+  }
+  75% {
+    transform: rotate(-4deg);
+  }
+  100% {
+    transform: rotate(0);
+  }
+}
+// [B-80] 角标离场动画：清零时渐隐 + 缩小弹出(不让用户看到突兀消失)
+.badge-pop-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.badge-pop-leave-to {
+  opacity: 0;
+  transform: scale(0.4) translateY(-4px);
+}
+// 角标出现(后台刷到新集)也轻微弹入
+.badge-pop-enter-active {
+  transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.badge-pop-enter {
+  opacity: 0;
+  transform: scale(0.4);
 }
 
 // [B-33] "更多"按钮：紧贴"阅"字，点击弹排序下拉
