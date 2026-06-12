@@ -48,6 +48,7 @@
         v-for="item in visibleList"
         :key="item.podcastId"
         class="stat-row"
+        :class="{ leaving: item._leaving }"
         @click="goPodcast(item)"
       >
         <div
@@ -131,6 +132,9 @@ export default {
   async created() {
     await this.enterWithAnimation();
   },
+  beforeDestroy() {
+    clearTimeout(this._leaveTimer); // [v1.5.5] 防离场剔除定时器在已销毁实例上回调
+  },
   methods: {
     // [B-40] 每次进来随机一条跑步提示词
     pickMood() {
@@ -161,8 +165,10 @@ export default {
     //    v1.5.1=行间隙 margin→padding(涂实透明窗口) + 容器实底 + 去 isolation，修 FLIP 交叉漏出的细线；
     //    v1.5.2=行加页面同色 2px 光环(box-shadow spread)，盖死 FLIP 合成层亚像素发丝缝的"毛刺"；
     //    v1.5.3=.stat-leave-active{display:none} 让离开行真正即时消失；
-    //    v1.5.4=enterWithAnimation 改"先取 fresh 再建列表"，根治"周快照里已过期节目(FView Friday)
-    //           先渲染上屏(图1)→fresh 到了再移除(图2)=先出现后跳没"。快照仅作起点宽度、过期条永不上屏。
+    //    v1.5.4=enterWithAnimation 改"先取 fresh 再建列表"，根治"进页周快照里已过期节目先上屏再移除"(那条是 enter 路径)；
+    //    v1.5.5=【采纳 R6 审查】离场改**数据驱动软离场**(离开条留列表里 行高+条宽缩回 0、动画完再剔除)——
+    //           根治用户报的 toggle 路径"FView 先出现后跳没"：await 窗口的旧列表残留帧被随后 0.6s 优雅缩回吞掉，
+    //           是 enter 的镜像「怎么来的怎么回去」(B-72 起诉求)，且半路折返自愈、绕开五轮全部雷区。
     //    规则见开发文档「版本命名规则」。)
     async enterWithAnimation() {
       // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
@@ -230,13 +236,16 @@ export default {
     // [B-61] 把当前 list 平滑过渡到 freshList（统一动画核心）：
     //   留存条：保持当前宽 → 下一帧过渡到新宽(最长条变长→其余整体变细=俯视抬高缩小) + FLIP 移动
     //   新增条：宽度从 0 长出(从左边长出来)，不透明(v1.2 去淡入)
-    //   离开条：瞬时消失(v1.5，无 leave 动画)
+    //   离开条：[v1.5.5/R6] 数据驱动"软离场"——不交给 Vue 的 leave 机制(规避五轮全部雷区)，而是
+    //     留在列表里把"条宽→0 + 行高塌缩→0"(=enter 从0长出的镜像，正是用户从 B-72 起要的"怎么来的怎么回去")，
+    //     动画结束后再真正剔除；半路切回时该条重回 fresh→被无 _leaving 地重建→自愈长回。
     animateTo(freshList) {
       const maxWall = freshList.length ? freshList[0].wallSec : 1;
       const prev = {};
       this.list.forEach(it => {
         prev[it.podcastId] = it;
       });
+      const freshIds = new Set(freshList.map(x => x.podcastId));
       const next = freshList.map(it => {
         const p = prev[it.podcastId];
         return {
@@ -246,11 +255,21 @@ export default {
           colorHsl: p ? p.colorHsl : undefined, // 留存沿用色，避免闪色
         };
       });
+      // [v1.5.5/R6] 收集"在旧列表、不在 fresh、且尚未离场"的条目，标 _leaving + 目标宽 0，插回原相对位次
+      this.list.forEach((it, idx) => {
+        if (!freshIds.has(it.podcastId) && !it._leaving) {
+          next.splice(Math.min(idx, next.length), 0, {
+            ...it,
+            _leaving: true,
+            _target: 0,
+          });
+        }
+      });
       this.list = next;
       this.extractColors();
-      // 双 rAF：先让"起点宽度"(新条 0 / 留存条旧值)真正绘制一帧，再统一过渡到目标宽 → 必触发 width 过渡。
-      // [v1.5/B69-V1 消除] 写的是本次捕获的 next(每次 animateTo 都新建对象)而非 this.list：
-      //   快速切换时旧 rAF 不会把"瞬时到位"误写进新一轮列表(否则新条会跳过从 0 长出的过程)。
+      // 双 rAF：先让"起点宽度"(新条 0 / 留存条旧值 / 离场条当前宽)真正绘制一帧，再统一过渡到目标宽。
+      // [v1.5/B69-V1 消除] 写本次捕获的 next(每次 animateTo 都新建对象)而非 this.list：快速切换时旧 rAF
+      //   不会把"瞬时到位"误写进新一轮列表(否则新条跳过从 0 长出 / 离场条跳过缩回过程)。
       this.$nextTick(() => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
@@ -260,6 +279,14 @@ export default {
           });
         });
       });
+      // [v1.5.5/R6] 离场动画(条缩 0 + 行高塌缩，0.6s)结束后真正剔除仍带 _leaving 的对象。
+      //   每次 animateTo 重置定时器；半路切回时该条已被 fresh 重建(无 _leaving)→ filter 不会误删它。
+      clearTimeout(this._leaveTimer);
+      this._leaveTimer = setTimeout(() => {
+        if (this.list.some(x => x._leaving)) {
+          this.list = this.list.filter(x => !x._leaving);
+        }
+      }, 700 * this.animK);
     },
     // [B-54] 上次进入时的排行快照（localStorage，按 range 分键），作为下次动画起点
     loadSnapshot(range) {
@@ -462,14 +489,10 @@ export default {
 .stat-enter {
   transform: translateX(-12px);
 }
-/* [统计动画 v1.5/v1.5.3] 离开条：**瞬时消失**。
-   leave 路径(absolute/钉坐标/max-height 塌缩/条回缩)自 v1~v1.4 五个版本反复出 bug：
-   残影(v1.1)→顶部闪现(v1.2.1)→交叉透叠(v1.3)→跳位切割(v1.4)→快速切换内联残留崩坏(v1.4 实测)。
-   v1.5 砍掉整条 leave 路径；但 v1.5.3 发现"删掉 leave CSS"≠ 真正瞬时——Vue transition-group 在
-   FLIP move 阶段仍会把离开行**滞留约 0.6s**(显示陈旧内容)再移除：Dev 测试床 7 条离开被 FLIP 互相
-   遮掩没暴露，master 上"唯一在全部不在本周"的单条节目(如 FView Friday)就露出"先显示→再跳走"。
-   v1.5.3 显式 `display:none`：离开行即刻移出布局、不可见(无论 Vue 等不等过渡)，且不引入任何内联样式/
-   绝对定位 → 不会重蹈 v1.4 覆辙。留存行 FLIP + 新增行从左长出保持原样。 */
+/* [统计动画 v1.5.5/R6] 离场不再走 Vue 的 leave 机制(规避 v1~v1.5.4 全部历史雷区)，改为**数据驱动软离场**：
+   离开条以 `.leaving` 留在列表里、`max-height→0` 行高塌缩 + `.bar` 宽度 `_w→0`，0.6s 后由 setTimeout 真正剔除。
+   这是 enter(从0长出)的镜像 =「怎么来的怎么回去」(用户 B-72 起的诉求)；且无 absolute/无内联钉坐标、可半路折返自愈。
+   `.stat-leave-active{display:none}` 仅作"最终剔除瞬间"的兜底——此时行高已 0，零痕迹。 */
 .stat-leave-active {
   display: none;
 }
@@ -477,6 +500,15 @@ export default {
   display: flex;
   align-items: center;
   gap: 12px;
+  // [v1.5.5/R6] 软离场：正常行 max-height 容纳(~54px)、离场塌缩到 0；与 .bar 宽度过渡同时同缓动。
+  max-height: 60px;
+  transition: max-height calc(0.6s * var(--stat-k, 1))
+    cubic-bezier(0.22, 1, 0.36, 1);
+  &.leaving {
+    max-height: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
   // [v1.5.1/细线修] 行间隙由 margin 改 padding：margin 不涂背景=透明窗口，FLIP 交叉时
   //   下层行的文字/封面阴影会从 14px 窗口里漏出 1~2px 横向细线(用户截图"莫名其妙不干净的细线")。
   //   padding 属于行盒、被 v1.3 的不透明底色一并涂实 → 行与行无缝全覆盖，细线无处可漏。
