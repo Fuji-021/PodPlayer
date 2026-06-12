@@ -37,7 +37,9 @@
 
     <div class="range-total"> 共 {{ fmtDur(rangeTotal) }} </div>
 
-    <div v-if="!visibleList.length" class="empty">这段时间还没有收听记录</div>
+    <div v-if="loaded && !visibleList.length" class="empty">
+      这段时间还没有收听记录
+    </div>
 
     <!-- [统计动画 v1.5] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
          留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左)；离开条瞬时消失(v1.5)。全程不透明、无渐隐。 -->
@@ -96,6 +98,8 @@ export default {
       totalWall: 0, // 全部累计（顶部大数字始终显示总量）
       rangeTotal: 0, // 当前范围合计
       list: [],
+      // [v1.5.4] 首次 fresh 取数完成前不渲染"暂无记录"空态(改先取数后建列表，取数窗口很短但要防空态闪现)
+      loaded: false,
     };
   },
   computed: {
@@ -156,7 +160,9 @@ export default {
     //    v1.5=离开行**瞬时消失**(砍掉整条 leave 路径) + .bar overflow:hidden 修封面越界；
     //    v1.5.1=行间隙 margin→padding(涂实透明窗口) + 容器实底 + 去 isolation，修 FLIP 交叉漏出的细线；
     //    v1.5.2=行加页面同色 2px 光环(box-shadow spread)，盖死 FLIP 合成层亚像素发丝缝的"毛刺"；
-    //    v1.5.3=.stat-leave-active{display:none} 让离开行真正即时消失(修"全部→周"唯一离开节目先显示再跳走)。
+    //    v1.5.3=.stat-leave-active{display:none} 让离开行真正即时消失；
+    //    v1.5.4=enterWithAnimation 改"先取 fresh 再建列表"，根治"周快照里已过期节目(FView Friday)
+    //           先渲染上屏(图1)→fresh 到了再移除(图2)=先出现后跳没"。快照仅作起点宽度、过期条永不上屏。
     //    规则见开发文档「版本命名规则」。)
     async enterWithAnimation() {
       // [C] 并发守卫：锁定本次加载序号与 range，每个 await 后校验，避免初次加载期间切范围导致旧 fresh 覆盖/存错键
@@ -165,22 +171,40 @@ export default {
       this.pickMood();
       await this.loadTotal();
       if (seq !== this._loadSeq) return;
-      const snap = this.loadSnapshot(range);
-      if (snap && snap.length) {
-        const sMax = snap[0].wallSec || 1;
-        this.list = snap.map(it => {
-          const w = this.barTargetPct(it, sMax);
-          return { ...it, _target: w, _w: w };
-        });
-      } else {
-        this.list = [];
-      }
-      await this.$nextTick();
-      if (seq !== this._loadSeq) return;
+      // [v1.5.4 根治] 先取 fresh，再据它建列表 —— **绝不直接渲染快照**。
+      //   旧逻辑先把快照渲染上屏：而"周快照"是上次存的，里面可能有现已过期(7 天前听过、出窗)的节目
+      //   (如 FView Friday) → 先渲染快照=图1、fresh 到了再移除=图2，即用户报的"先出现后跳没"。
       const fresh = await getListenStatsByPodcast(range === 'week' ? 7 : 'all');
       if (seq !== this._loadSeq) return;
       this.rangeTotal = fresh.totalWall;
-      this.animateTo(fresh.list);
+      // 快照仅用来给"仍在 fresh 里的条目"提供**起点宽度**(返回页时各条从上次宽度平滑过渡)；
+      //   不在 fresh 里的快照条目(过期/已变动)**永不上屏**。
+      const snap = this.loadSnapshot(range) || [];
+      const sMax = snap.length ? snap[0].wallSec || 1 : 1;
+      const startW = {};
+      snap.forEach(s => {
+        startW[s.podcastId] = this.barTargetPct(s, sMax);
+      });
+      const maxWall = fresh.list.length ? fresh.list[0].wallSec : 1;
+      const next = fresh.list.map(it => ({
+        ...it,
+        _target: this.barTargetPct(it, maxWall),
+        // 在快照里→从上次宽度平滑过渡；新条→从 0 长出
+        _w: startW[it.podcastId] != null ? startW[it.podcastId] : 0,
+      }));
+      this.list = next;
+      this.loaded = true;
+      this.extractColors();
+      // 双 rAF：先让起点宽度绘制一帧，再统一过渡到目标宽。写本次捕获的 next(非 this.list) → 防快速切换串写。
+      this.$nextTick(() => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            next.forEach(it => {
+              it._w = it._target;
+            });
+          });
+        });
+      });
       this.saveSnapshot(range, fresh.list);
     },
     // [B-39] 异步提取每个节目封面主色填充矩形条（不阻塞渲染，到了再刷新该行）
