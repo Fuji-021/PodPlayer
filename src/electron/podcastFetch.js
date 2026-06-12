@@ -40,4 +40,15 @@ export function registerPodcastIpc() {
       return { ok: false, error: String((err && err.message) || err) };
     }
   });
+
+  // [B-83] 抓单集网页 HTML（小宇宙等把 RSS shownotes 截断、完整文稿只在单集页的
+  //   __NEXT_DATA__ 里）。渲染端拿到 HTML 后自己解析，主进程只负责绕过 CORS 抓原文。
+  ipcMain.handle('podcast:fetchEpisodePage', async (_event, url) => {
+    try {
+      const text = await fetchText(url);
+      return { ok: true, text };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
 }

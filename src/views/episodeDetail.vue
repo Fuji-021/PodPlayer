@@ -107,7 +107,17 @@
 </template>
 
 <script>
-import { getPodcast, getEpisode, getEpisodeProgress } from '@/utils/podcast/db';
+import {
+  getPodcast,
+  getEpisode,
+  getEpisodeProgress,
+  updateEpisode,
+} from '@/utils/podcast/db';
+import {
+  looksTruncated,
+  xyzEpisodeUrl,
+  fetchXyzShownotes,
+} from '@/utils/podcast/shownotesEnrich';
 import {
   getListenStats,
   listenedPercentStepped,
@@ -263,6 +273,29 @@ export default {
       const p = await getEpisodeProgress(this.episodeId).catch(() => null);
       this.progressSec = (p && p.position) || 0;
       this.listenStats = await getListenStats(this.episodeId).catch(() => null);
+      // [B-83] 简介疑似被小宇宙截断 → 按需抓单集页补全完整 shownotes(异步、不阻塞渲染)
+      this.enrichShownotesIfNeeded();
+    },
+    // [B-83] 小宇宙截断节目：抓公开单集页的完整 shownotes 补全 description。
+    //   仅小宇宙链接、且当前简介带截断尾巴或明显偏短时才抓；命中更长文稿才替换并持久化
+    //   (打 xyzFull 标记，配合 upsertEpisodes 防降级，后台刷新不会再把它覆盖回截断版)。
+    async enrichShownotesIfNeeded() {
+      const ep = this.episode;
+      if (!ep || ep.xyzFull) return;
+      if (!xyzEpisodeUrl(ep.link)) return;
+      const cur = ep.description || '';
+      if (!looksTruncated(cur) && cur.length >= 1200) return;
+      const full = await fetchXyzShownotes(ep.link);
+      if (!full || full.length <= cur.length) return;
+      // 用户可能在抓取期间已切到别的单集 → 校验仍是同一集再写
+      if (!this.episode || this.episode.id !== ep.id) return;
+      this.$set(this.episode, 'description', full);
+      this.episode.xyzFull = true;
+      try {
+        await updateEpisode(ep.id, { description: full, xyzFull: true });
+      } catch (e) {
+        /* 持久化失败不影响本次显示 */
+      }
     },
     play() {
       const title = (this.podcast && this.podcast.title) || '';

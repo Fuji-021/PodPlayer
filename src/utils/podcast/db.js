@@ -89,10 +89,39 @@ export async function deletePodcast(id) {
 
 // === 单集 ===
 
+// [B-83] 截断尾巴检测：小宇宙等把部分节目 shownotes 截断后加"在小宇宙查看完整…"类尾巴。
+const TRUNCATED_TAIL_RE =
+  /(在|去)小宇宙.{0,12}(完整|文稿|该单集|查看|收听)|查看完整(的)?(单集)?(简介|文稿|节目内容|shownotes)/i;
+function isTruncatedDesc(s) {
+  if (!s) return false;
+  return TRUNCATED_TAIL_RE.test(String(s).slice(-180));
+}
+
 // 整批 upsert，新集插入、老集刷新元数据，避免被反复重写已听进度（进度在另一张表）。
-export function upsertEpisodes(episodes) {
+// [B-83] 防降级：刷新重抓时若新 description 带截断尾巴 / 明显短于库内旧值，则保留旧的
+//   完整简介(及 xyzFull 补全标记)，其余字段照常更新——避免 B-80 后台刷新把已补全/完整的
+//   简介覆盖成截断版(本 bug 的传播链就在这条全量覆盖上)。
+export async function upsertEpisodes(episodes) {
   if (!episodes?.length) return Promise.resolve();
-  return db.episodes.bulkPut(episodes);
+  const existing = await db.episodes.bulkGet(episodes.map(e => e.id));
+  const exMap = new Map();
+  existing.forEach(e => e && exMap.set(e.id, e));
+  const merged = episodes.map(e => {
+    const old = exMap.get(e.id);
+    if (!old) return e;
+    const oldDesc = old.description || '';
+    const newDesc = e.description || '';
+    const downgrade =
+      oldDesc.length > newDesc.length &&
+      (isTruncatedDesc(newDesc) || newDesc.length < oldDesc.length * 0.6);
+    return downgrade ? { ...e, description: oldDesc, xyzFull: old.xyzFull } : e;
+  });
+  return db.episodes.bulkPut(merged);
+}
+
+// [B-83] 单集局部更新(补全 shownotes 后写回 description + xyzFull 标记)。
+export function updateEpisode(id, patch) {
+  return db.episodes.update(id, patch);
 }
 
 export function getEpisodesByPodcast(podcastId) {
