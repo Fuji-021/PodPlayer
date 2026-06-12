@@ -270,6 +270,33 @@ export default {
     },
     // [B-74] show notes 里把纯文本时间戳包成可点链接（只遍历文本节点，不碰标签/属性）。
     linkifyTimestamps(root) {
+      // [B-81 真因4] 有些 RSS 把时间戳本身做成 <a>(如 <a href="#t=...">14:27</a>)，
+      //   或 sanitizeHtml 把非 http 的 href 剥掉但保留 <a> → 变成无 href 的 <a>14:27</a>。
+      //   这类"整段就是一个时间戳"的 <a> 会被下面文本遍历的 closest('a') 跳过 → 死链不可点。
+      //   先把它们就地转成 ts-seek(只认纯文本时间戳，绝不碰含其它文字的正常外链)。
+      const tsFull = /^\s*(\d{1,2})[:：](\d{2})(?:[:：](\d{2}))?\s*$/;
+      Array.from(root.querySelectorAll('a')).forEach(a => {
+        if (a.querySelector('*')) return; // 含子元素的不碰
+        const m = (a.textContent || '').match(tsFull);
+        if (!m) return;
+        let sec;
+        if (m[3] !== undefined) {
+          const H = +m[1];
+          const M = +m[2];
+          const S = +m[3];
+          if (M >= 60 || S >= 60) return;
+          sec = H * 3600 + M * 60 + S;
+        } else {
+          const M = +m[1];
+          const S = +m[2];
+          if (S >= 60) return;
+          sec = M * 60 + S;
+        }
+        a.classList.add('ts-seek');
+        a.setAttribute('data-sec', String(sec));
+        a.removeAttribute('href'); // 交给 onNotesClick 原地 seek，不走默认导航
+        a.removeAttribute('target');
+      });
       const walker = document.createTreeWalker(
         root,
         NodeFilter.SHOW_TEXT,
