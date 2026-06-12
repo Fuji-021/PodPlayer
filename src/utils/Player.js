@@ -1256,7 +1256,9 @@ export default class {
   // 这里把它包装成播放引擎认识的 "track" 形状（含 al/ar/dt 等字段），
   // 关键扩展字段是 podcastAudioUrl —— 它让 _getAudioSource 直接返回音频地址，
   // 跳过整条网易云查询链。
-  playPodcastEpisode(episode, podcastTitle) {
+  // [B-74] startAt(秒)：从某时间点起播(show notes 时间戳跳转用)。传入时覆盖续播位置，
+  //   走 _playAudioSource 的 once('load') seek 同一条路 → 加载完成才 seek，确定性、不抢跑。
+  playPodcastEpisode(episode, podcastTitle, startAt = null) {
     // [B-64] _justEnded 复位必须在任何 early-return 之前：否则取到无音频地址的队列项早退时，
     //   _justEnded 滞留 true，下次手动切集会误判为"自动续播"而丢失当前未播完单集的入队保留。
     const justEnded = this._justEnded;
@@ -1331,13 +1333,13 @@ export default class {
     if (track.name) setTitle(track);
 
     // 走统一恢复路径（autoplay=true），含进度续播
-    return this._loadCurrentPodcastEpisode(true);
+    return this._loadCurrentPodcastEpisode(true, startAt);
   }
 
   // [播客改造 S-1] 按 this._currentTrack（必须是已构造好的播客 track）装载 howler，
   // 不查网易云。autoplay 控制是否自动播放（重启时为 false，新点一集时为 true）。
   // 同时从 episodeProgress 表读上次进度，howler 加载完成后 seek 过去。
-  async _loadCurrentPodcastEpisode(autoplay) {
+  async _loadCurrentPodcastEpisode(autoplay, startAt = null) {
     const track = this._currentTrack;
     if (!track || !track.podcastAudioUrl) return false;
 
@@ -1365,6 +1367,14 @@ export default class {
       savedPos = 0;
       saveEpisodeProgress(track.podcastEpisodeId, 0).catch(() => {});
       resetEpisodeListening(track.podcastEpisodeId).catch(() => {});
+    }
+    // [B-74] 时间戳跳转：调用方指定起播秒数 → 覆盖续播位置(放在"已听完归零"之后，
+    //   保证时间戳必赢)。clamp 到时长内，避免越界；之后由 once('load') 确定性 seek。
+    if (typeof startAt === 'number' && startAt > 1) {
+      savedPos =
+        trackDurSec > 0
+          ? Math.min(Math.floor(startAt), trackDurSec - 2)
+          : Math.floor(startAt);
     }
     // 每次切到新单集，重置 listening tick 的 lastSec（让首秒不会被错判为跳跃）
     this._lastListenSec = -1;

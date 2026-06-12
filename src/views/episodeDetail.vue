@@ -345,12 +345,10 @@ export default {
         if (!player.playing && typeof player.play === 'function') player.play();
       } else {
         const title = (this.podcast && this.podcast.title) || '';
-        // 起播后再 seek：此 once('load') 注册在 savedPos seek 之后 → 时间戳生效
-        Promise.resolve(player.playPodcastEpisode(this.episode, title))
-          .then(() => {
-            player.seek(sec);
-          })
-          .catch(() => {});
+        // [B-74 修] 原来 .then 后再 seek：那时新 howler 还没 load 完，seek 被随后的
+        //   续播 once('load') 覆盖 → 点了不跳。改为把起播秒数传进去，由 _playAudioSource
+        //   的 once('load') 在加载完成时确定性 seek（与续播同路）。
+        player.playPodcastEpisode(this.episode, title, sec);
       }
       this.$store.dispatch('showToast', '已跳到 ' + this.fmtTs(sec));
     },
