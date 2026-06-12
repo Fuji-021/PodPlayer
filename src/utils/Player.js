@@ -1109,7 +1109,19 @@ export default class {
       ipcRenderer?.send('seeked', time);
     }
     if (time !== null) {
-      this._howler?.seek(time);
+      // [B-81 修] howler 未 loaded 时直接 seek 会被忽略(时间戳/快进"点了不动"真因之一)。
+      //   与 progress setter(224) 同范式：loaded 才立即 seek，否则挂 once('load') 等加载完成再 seek。
+      if (this._howler && this._howler.state() !== 'loaded') {
+        this._howler.once('load', () => {
+          try {
+            this._howler?.seek(time);
+          } catch (e) {
+            /* ignore */
+          }
+        });
+      } else {
+        this._howler?.seek(time);
+      }
       if (this._playing)
         this._playDiscordPresence(this._currentTrack, this.seek(null, false));
     }
@@ -1370,7 +1382,9 @@ export default class {
     }
     // [B-74] 时间戳跳转：调用方指定起播秒数 → 覆盖续播位置(放在"已听完归零"之后，
     //   保证时间戳必赢)。clamp 到时长内，避免越界；之后由 once('load') 确定性 seek。
-    if (typeof startAt === 'number' && startAt > 1) {
+    // [B-81 修] 门槛用 >=0(不是 >1)：点 00:00/00:01 也要覆盖续播位、回到片头，
+    //   否则有续播进度时点片头时间戳会停在上次续播点(="点了不跳到该处")。
+    if (typeof startAt === 'number' && startAt >= 0) {
       savedPos =
         trackDurSec > 0
           ? Math.min(Math.floor(startAt), trackDurSec - 2)

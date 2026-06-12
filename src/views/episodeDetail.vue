@@ -339,8 +339,9 @@ export default {
       if (!player || !this.episode) return;
       const cur = player.currentTrack;
       const isThis = cur && cur.podcastEpisodeId === this.episode.id;
-      if (isThis) {
-        // [B-77] 用播放器规范 seek()(内部 howler.seek + 进度同步)，比直接写 progress 更可靠
+      if (isThis && player._howler) {
+        // 本集已是当前曲且 howler 已创建：原地 seek
+        //   (seek() 内部已对"howler 加载中"用 once('load') 兜底，加载窗口内点击也不丢)
         player.seek(sec);
         if (!player.playing && typeof player.play === 'function') player.play();
       } else {
