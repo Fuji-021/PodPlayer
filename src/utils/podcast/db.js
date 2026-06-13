@@ -87,6 +87,53 @@ export async function deletePodcast(id) {
   await db.podcasts.update(id, { subscribed: false });
 }
 
+// [F2 / B69-F2] 预览孤儿清理：发现页"预览"(previewByRssUrl)会把 subscribed:false 节目 +
+//   其全部单集入库供试听，用户不订阅就成孤儿、长期堆积拖慢 DB。
+//   清理判据(全部满足才删，极保守)：
+//     · subscribed === false（绝不碰已订阅节目）；
+//     · 零互动：无 episodeProgress / episodeListenStats（id 前缀 `pid::`）/ favorites / episodeDownloads
+//       → "取消订阅但听过/收藏/下载过"的节目必命中而被保留(其历史是有意保留的，见 deletePodcast)；
+//     · updatedAt 距今 > minAgeMs（默认 1h）→ 避开刚预览/正在看的(预览会刷新 updatedAt)。
+//   删除内容：该节目的全部 episodes + podcasts 记录。屏蔽节目存在 localStorage(按名)、不在本表，无影响。
+export async function prunePreviewOrphans(opts = {}) {
+  const minAgeMs = opts.minAgeMs != null ? opts.minAgeMs : 60 * 60 * 1000;
+  const excludeId = opts.excludeId || null;
+  const now = Date.now();
+  let candidates = [];
+  try {
+    candidates = await db.podcasts
+      .filter(p => p && p.subscribed === false)
+      .toArray();
+  } catch (e) {
+    return { pruned: 0, episodesDeleted: 0 };
+  }
+  let pruned = 0;
+  let episodesDeleted = 0;
+  for (const p of candidates) {
+    const pid = p && p.id;
+    if (!pid || pid === excludeId) continue;
+    if (p.updatedAt && now - p.updatedAt < minAgeMs) continue; // 太新 → 跳过
+    try {
+      const prefix = pid + '::';
+      if (await db.episodeProgress.where('id').startsWith(prefix).count())
+        continue;
+      if (await db.episodeListenStats.where('id').startsWith(prefix).count())
+        continue;
+      if (await db.favorites.where('podcastId').equals(pid).count()) continue;
+      if (await db.episodeDownloads.where('podcastId').equals(pid).count())
+        continue;
+      // 纯预览孤儿 → 删单集 + 节目记录
+      const n = await db.episodes.where('podcastId').equals(pid).delete();
+      await db.podcasts.delete(pid);
+      episodesDeleted += n || 0;
+      pruned += 1;
+    } catch (e) {
+      // 单档失败不影响其它
+    }
+  }
+  return { pruned, episodesDeleted };
+}
+
 // === 单集 ===
 
 // [B-83] 截断尾巴检测：小宇宙等把部分节目 shownotes 截断后加"在小宇宙查看完整…"类尾巴。

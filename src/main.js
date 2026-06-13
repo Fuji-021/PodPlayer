@@ -90,6 +90,23 @@ loadAllDownloads()
   })
   .catch(() => {});
 
+// [F2 / B69-F2] 启动后空闲清理"预览孤儿"(发现页预览残留的 subscribed:false 零互动节目+单集)，
+//   防其长期堆积拖慢 DB。延迟到启动稳定后跑、低优先、失败静默；只删零互动的预览残留，
+//   不碰已订阅/有历史/近 1h 预览过的节目(详见 db.js prunePreviewOrphans 判据)。
+import { prunePreviewOrphans } from '@/utils/podcast/db';
+setTimeout(() => {
+  prunePreviewOrphans()
+    .then(r => {
+      if (r && r.pruned) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[F2 prune] 清理预览孤儿 ${r.pruned} 档 / ${r.episodesDeleted} 单集`
+        );
+      }
+    })
+    .catch(() => {});
+}, 6000);
+
 new Vue({
   i18n,
   store,
