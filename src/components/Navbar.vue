@@ -14,7 +14,7 @@
         /></button-icon>
       </div>
       <div class="navigation-links">
-        <router-link to="/" :class="{ active: $route.name === 'home' }">{{
+        <router-link to="/" :class="{ active: navSection === 'home' }">{{
           $t('nav.home')
         }}</router-link>
         <!-- [播客改造] 暂时屏蔽"发现"入口（源码保留） -->
@@ -26,9 +26,19 @@
         >
         <router-link
           to="/library"
-          :class="{ active: $route.name === 'library' }"
+          :class="{ active: navSection === 'library' }"
           >{{ $t('nav.library') }}</router-link
         >
+        <!-- [NAS] 连接状态图标：放「我的订阅」旁，绿(在线·呼吸)/红(断联·静止)；未启用不显示。点击重连。 -->
+        <div
+          v-if="nasState.enabled"
+          class="nas-status"
+          :class="nasStateClass"
+          :title="nasTitle"
+          @click="onNasClick"
+        >
+          <svg-icon icon-class="router-wifi-alt" />
+        </div>
       </div>
       <div class="right-part">
         <!-- [B-52] 播客搜索框：本地(我的订阅/单集) + 在线(iTunes)，回车跳搜索页 -->
@@ -60,16 +70,6 @@
               <svg-icon icon-class="x" />
             </button>
           </div>
-        </div>
-        <!-- [NAS] 连接状态图标：绿(在线·呼吸灯)/红(断联·静止)；未启用则不显示。点击=立即重连探测。 -->
-        <div
-          v-if="nasState.enabled"
-          class="nas-status"
-          :class="nasStateClass"
-          :title="nasTitle"
-          @click="onNasClick"
-        >
-          <svg-icon icon-class="router-wifi-alt" />
         </div>
         <img
           class="avatar"
@@ -181,6 +181,9 @@ export default {
       cropperSrc: '',
       // [NAS] 连接状态（轮询 nasStatus 刷新）：enabled=已配置启用；alive=在线
       nasState: { enabled: false, alive: false },
+      // [导航高亮] 当前所在顶层区(home/library)；进节目/单集详情(/library 子页)保持不变
+      //   → 高亮不在进详情后消失，且反映"从首页还是我的订阅进来的"。
+      navSection: 'home',
     };
   },
   computed: {
@@ -233,6 +236,11 @@ export default {
         if (this.$route.name === 'searchPodcast') {
           this.keywords = this.$route.params.keywords || this.keywords;
         }
+        // [导航高亮] 仅顶层区切换才更新 navSection；节目/单集详情(/library 子页)保持不变，
+        //   使高亮不在进详情后变白，且反映从哪个区进来的。
+        const n = this.$route.name;
+        if (n === 'home') this.navSection = 'home';
+        else if (n === 'library') this.navSection = 'library';
       },
     },
   },
@@ -592,33 +600,34 @@ nav.has-custom-titlebar {
     opacity: 0.35;
   }
 }
+// [NAS] 连接状态图标：放「我的订阅」旁(navigation-links 内)，绿(在线·呼吸)/红(断联·静止)
+.nas-status {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  margin-left: 10px;
+  vertical-align: middle;
+  .svg-icon {
+    width: 18px;
+    height: 18px;
+  }
+  &.online {
+    color: #1db954;
+    animation: nas-breathe 2.4s ease-in-out infinite;
+  }
+  &.offline {
+    color: #e74c3c;
+  }
+  &:hover {
+    filter: brightness(1.15);
+  }
+}
 .right-part {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  // [NAS] 连接状态图标：放头像左边，绿(在线·呼吸)/红(断联·静止)
-  .nas-status {
-    -webkit-app-region: no-drag;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-    margin-left: 10px;
-    .svg-icon {
-      width: 19px;
-      height: 19px;
-    }
-    &.online {
-      color: #1db954;
-      animation: nas-breathe 2.4s ease-in-out infinite;
-    }
-    &.offline {
-      color: #e74c3c;
-    }
-    &:hover {
-      filter: brightness(1.15);
-    }
-  }
   .avatar {
     user-select: none;
     height: 30px;

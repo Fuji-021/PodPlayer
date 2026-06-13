@@ -130,9 +130,9 @@
 | 其他→关闭主面板(最小化到托盘) | **保留** | 软件窗口行为 |
 | 其他→启动后显示音乐库 | **改**为「启动后显示：首页 / 我的订阅」二选一(对应 background.js showLibraryDefault，B-79 现强制首页) |
 | 其他→倒序播放 | **删** | |
-| 彩虹猫(进度条样式开关) | **保留开关**；**名字换成吉祥物 GIF 图**(nyancat)；后续会加更多样式 |
+| 彩虹猫(进度条样式开关) | **保留开关**；**名字换成吉祥物 GIF 图**(nyancat，用户确认 gif 资源已在项目文件里、需我自己找)；后续会加更多样式 |
 | 代理 / realIP | **待评估多半删** | 原为网易云 API 走代理/伪装 IP 绕区域限制；RSS 抓取走主进程 axios，未必需要 |
 | 快捷键 | **保留 + 改造**贴合播放器功能(播放/暂停/快进退/切集/睡眠等) |
-| made by(Vercel 等) | **换成 `DESINE BY FUJIPHOTOGRAPH`**(用户原文，待确认是否 DESIGN)，**粗衬线字体**；软件版本由开发定 |
+| made by(Vercel 等) | **换成 `DESIGN BY FUJII`**(用户 2026-06-13 确认：是 DESIGN 不是 DESINE；签名用 Fujii 非 Fujiphotograph)，**粗衬线字体**；软件版本由开发定 |
 
 **进展（2026-06-13 本轮）**：已删 **UnblockNeteaseMusic 段 + 缓存段 + 歌词段**(模板移除，UI 已消失)。**注**：为零风险，本轮只删模板块，对应 computed/method/import(musicQuality/cacheLimit/lyric*/unm*/clearCache 等)暂留为 dormant dead code，**待一轮专门的 script 清理**(它们 unused 无 lint 错、不影响功能)。仍待办：音质 item、倒序播放、Last.fm/Discord(自定义段，含 import 级联)、启动页二选一(动 background.js showLibraryDefault，谨慎)、彩虹猫换 GIF(需 nyancat gif 资源)、made-by(待确认拼写)、快捷键改造。另：hover 预取 NAS 单集映射已加(我的订阅卡 mouseenter → 进详情秒显 wifi 标识)。

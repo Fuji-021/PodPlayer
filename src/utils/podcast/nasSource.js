@@ -148,14 +148,34 @@ export async function nasEpisodeGuidSet(podcastId) {
   }
 }
 
-// 进节目详情页预热整档（暖主进程 episodes 缓存）→ 点哪集都秒解析。失败静默、不阻塞。
+// [审查 R·节流] 预取并发上限 + 在途去重：防"滚动滑过 N 张卡 → N 个 warmPodcast 并发灌爆主进程"。
+let _warmInflight = 0;
+const _warming = new Set();
+const WARM_MAX = 2;
+
+// 预热整档（暖主进程 episodes 缓存）→ 点哪集都秒解析。失败静默、不阻塞。
+//   并发≤2、同档在途去重；超限直接丢弃(详情页打开时的按需取数兜底，不影响正确性)。
 export function prefetchNasPodcast(podcastId) {
   if (!isNasEnabled() || !podcastId) return;
-  ensureProbed().then(alive => {
-    if (alive) {
-      ipcRenderer.invoke('nas:warmPodcast', podcastId).catch(() => {});
-    }
-  });
+  if (_warming.has(podcastId) || _warmInflight >= WARM_MAX) return;
+  _warming.add(podcastId);
+  _warmInflight += 1;
+  const done = () => {
+    _warming.delete(podcastId);
+    _warmInflight -= 1;
+  };
+  ensureProbed()
+    .then(alive => {
+      if (!alive) {
+        done();
+        return;
+      }
+      ipcRenderer
+        .invoke('nas:warmPodcast', podcastId)
+        .catch(() => {})
+        .then(done);
+    })
+    .catch(done);
 }
 
 // 设置/测试用（P2 设置页接此；P1 可经此启用+配置）。写配置后重读状态+重探。

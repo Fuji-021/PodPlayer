@@ -109,6 +109,7 @@
         :class="{ 'unsub-mode': unsubModeId === p.id }"
         @click="onCardClick(p)"
         @mouseenter="onCardHover(p)"
+        @mouseleave="onCardLeave"
         @contextmenu.prevent="onCardContextMenu($event, p)"
       >
         <div class="cover-box">
@@ -419,6 +420,7 @@ export default {
     if (this.scrollTimer) clearTimeout(this.scrollTimer);
     clearTimeout(this._cleanTimer); // [B-80]
     clearTimeout(this._sinkTimer);
+    clearTimeout(this._nasHoverTimer); // [NAS] hover 预取防抖定时器
   },
   activated() {
     this.loadPodcasts();
@@ -447,10 +449,20 @@ export default {
     //   每档只暖一次(dedup)；prefetchNasPodcast 内部 NAS 未启用/不可用则 no-op。
     onCardHover(p) {
       if (!p || !p.id) return;
+      // [审查 R·闸1] 滚动期间一律不预取——滚动时卡片逐张滑过指针会狂触发 mouseenter，正是 IPC 风暴来源。
+      if (this.isScrolling) return;
       if (!this._nasHovered) this._nasHovered = new Set();
       if (this._nasHovered.has(p.id)) return;
-      this._nasHovered.add(p.id);
-      prefetchNasPodcast(p.id);
+      // [审查 R·闸2] 停留防抖：mouseenter 后 180ms 仍停留(未滚动/未移开)才预取；快速滑过被持续清除、不触发。
+      clearTimeout(this._nasHoverTimer);
+      this._nasHoverTimer = setTimeout(() => {
+        if (this.isScrolling || this._nasHovered.has(p.id)) return;
+        this._nasHovered.add(p.id);
+        prefetchNasPodcast(p.id); // 闸3(并发≤2/在途去重)在 nasSource 内
+      }, 180);
+    },
+    onCardLeave() {
+      clearTimeout(this._nasHoverTimer);
     },
     // [B-35] 该节目下载进度（0-100），无下载任务返 -1。
     //   episodeId 形如 `${feedUrl}::${guid}`，p.id = feedUrl，按前缀聚合属于该节目的下载中单集。
