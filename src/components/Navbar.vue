@@ -61,6 +61,16 @@
             </button>
           </div>
         </div>
+        <!-- [NAS] 连接状态图标：绿(在线·呼吸灯)/红(断联·静止)；未启用则不显示。点击=立即重连探测。 -->
+        <div
+          v-if="nasState.enabled"
+          class="nas-status"
+          :class="nasStateClass"
+          :title="nasTitle"
+          @click="onNasClick"
+        >
+          <svg-icon icon-class="router-wifi-alt" />
+        </div>
         <img
           class="avatar"
           :src="avatarUrl"
@@ -148,6 +158,8 @@ import LinuxTitlebar from '@/components/LinuxTitlebar.vue';
 import ContextMenu from '@/components/ContextMenu.vue';
 import ButtonIcon from '@/components/ButtonIcon.vue';
 import AvatarCropper from '@/components/AvatarCropper.vue';
+// [NAS] 连接状态（熔断器）：导航栏状态图标读它。未启用则图标不显示。
+import { nasStatus, testNasConnection } from '@/utils/podcast/nasSource';
 
 export default {
   name: 'Navbar',
@@ -167,6 +179,8 @@ export default {
       enableLinuxTitlebar: false,
       // [B-48 第5点] 头像裁切弹窗源图 dataURL（非空=显示弹窗）
       cropperSrc: '',
+      // [NAS] 连接状态（轮询 nasStatus 刷新）：enabled=已配置启用；alive=在线
+      nasState: { enabled: false, alive: false },
     };
   },
   computed: {
@@ -199,6 +213,15 @@ export default {
         !this.inputFocus
       );
     },
+    // [NAS] 状态图标着色：在线=绿(呼吸)，断联=红(静止)。（黄=慢 待 TODO）
+    nasStateClass() {
+      return this.nasState.alive ? 'online' : 'offline';
+    },
+    nasTitle() {
+      return this.nasState.alive
+        ? 'NAS 已连接 · 音源就近（点击重新检测）'
+        : 'NAS 未连接 · 使用在线音源（点击重连）';
+    },
   },
   watch: {
     // [C 修复] 搜索框关键词与路由同步：刷新/前进后退/外部跳转进入搜索结果页时，
@@ -222,6 +245,23 @@ export default {
     ) {
       this.enableLinuxTitlebar = true;
     }
+  },
+  mounted() {
+    // [NAS] 轮询熔断状态刷新图标（只读模块状态、无网络）；2s 足够、开销忽略。
+    this._nasPoll = setInterval(() => {
+      const s = nasStatus();
+      if (
+        s.enabled !== this.nasState.enabled ||
+        s.alive !== this.nasState.alive
+      ) {
+        this.nasState = { enabled: s.enabled, alive: s.alive };
+      }
+    }, 2000);
+    const s0 = nasStatus();
+    this.nasState = { enabled: s0.enabled, alive: s0.alive };
+  },
+  beforeDestroy() {
+    clearInterval(this._nasPoll);
   },
   methods: {
     go(where) {
@@ -258,6 +298,17 @@ export default {
     },
     showUserProfileMenu(e) {
       this.$refs.userProfileMenu.openMenu(e);
+    },
+    // [NAS] 点状态图标 → 立即重新探测连接（手动重连）；结果反映到图标 + toast。
+    async onNasClick() {
+      const r = await testNasConnection();
+      const ok = !!(r && r.ok);
+      const s = nasStatus();
+      this.nasState = { enabled: s.enabled, alive: s.alive };
+      this.$store.dispatch(
+        'showToast',
+        ok ? 'NAS 已连接' : 'NAS 暂时连不上，已使用在线音源'
+      );
     },
     logout() {
       if (!confirm('确定要退出登录吗？')) return;
@@ -531,11 +582,43 @@ nav.has-custom-titlebar {
   }
 }
 
+// [NAS] 状态图标呼吸灯（在线绿态缓慢呼吸；离线红态静止不加此动画）
+@keyframes nas-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
 .right-part {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  // [NAS] 连接状态图标：放头像左边，绿(在线·呼吸)/红(断联·静止)
+  .nas-status {
+    -webkit-app-region: no-drag;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    margin-left: 10px;
+    .svg-icon {
+      width: 19px;
+      height: 19px;
+    }
+    &.online {
+      color: #1db954;
+      animation: nas-breathe 2.4s ease-in-out infinite;
+    }
+    &.offline {
+      color: #e74c3c;
+    }
+    &:hover {
+      filter: brightness(1.15);
+    }
+  }
   .avatar {
     user-select: none;
     height: 30px;
