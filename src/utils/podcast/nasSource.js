@@ -114,6 +114,40 @@ export async function resolveNasUrl(track) {
   }
 }
 
+// 归一化 feedUrl（与主进程 nasBridge.normFeed 同口径）：去协议 + 去尾斜杠，用于 NAS 集合比对。
+export function normFeedUrl(u) {
+  return String(u || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
+}
+
+// [NAS·状态点] 取"NAS 上有哪些节目"的归一化 feedUrl 集合。未启用/不可用 → 空集(=不显示任何标识)。
+export async function nasPodcastSet() {
+  if (!isNasEnabled()) return new Set();
+  const alive = await ensureProbed();
+  if (!alive) return new Set();
+  try {
+    const r = await ipcRenderer.invoke('nas:podcastSet');
+    return new Set((r && r.feeds) || []);
+  } catch (e) {
+    return new Set();
+  }
+}
+
+// [NAS·状态点] 取某档在 NAS 上已归档的单集 guid 集合。未启用/不可用 → 空集。
+export async function nasEpisodeGuidSet(podcastId) {
+  if (!isNasEnabled() || !podcastId) return new Set();
+  const alive = await ensureProbed();
+  if (!alive) return new Set();
+  try {
+    const r = await ipcRenderer.invoke('nas:episodeGuids', podcastId);
+    return new Set((r && r.guids) || []);
+  } catch (e) {
+    return new Set();
+  }
+}
+
 // 进节目详情页预热整档（暖主进程 episodes 缓存）→ 点哪集都秒解析。失败静默、不阻塞。
 export function prefetchNasPodcast(podcastId) {
   if (!isNasEnabled() || !podcastId) return;

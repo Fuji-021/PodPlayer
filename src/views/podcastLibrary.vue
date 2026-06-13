@@ -163,7 +163,13 @@
             v-if="p.source === 'discover'"
             class="src-dot dot-discover"
             title="来自首页发现页订阅"
-          ></span>
+          ></span
+          ><span
+            v-if="nasOn(p)"
+            class="nas-dot"
+            title="NAS 上有此节目（音源就近）"
+            ><svg-icon icon-class="wifi"
+          /></span>
         </div>
         <div class="author">{{ p.author || '' }}</div>
         <!-- [B-31] 按用户要求：累计听过时长不在卡片下显示，留待将来"统计"入口页 -->
@@ -261,6 +267,7 @@ import {
 } from '@/utils/podcast/service';
 import { getPodcastListenSummary } from '@/utils/podcast/listening';
 import { getLastListenedByPodcast, updatePodcast } from '@/utils/podcast/db';
+import { nasPodcastSet, normFeedUrl } from '@/utils/podcast/nasSource';
 import { ensureTinyCover } from '@/utils/podcast/coverHalo';
 import SvgIcon from '@/components/SvgIcon.vue';
 
@@ -294,6 +301,8 @@ export default {
       // [B-80] 清理角标按钮：cleaning=摇晃中(有角标点击)，sinking=下沉反馈(无角标点击)
       cleaning: false,
       sinking: false,
+      // [NAS] "NAS 上有此节目"的归一化 feedUrl 集合（连上 NAS 才非空；空=不显示任何 wifi 标识）
+      nasPodSet: new Set(),
       // [B-47 / 第3点] 是否已至少加载过一次（避免加载期间闪"还没有订阅"）
       loaded: false,
       // [播客改造 A-22] + 号弹窗开关
@@ -409,12 +418,26 @@ export default {
   activated() {
     this.loadPodcasts();
     this.autoRefresh(); // [B-80] 进页后台静默刷新订阅(10 分钟节流，无打扰)
+    this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合(未连上则空、无标识)
   },
   created() {
     this.loadPodcasts();
     this.autoRefresh(); // [B-80] 启动即后台静默刷新一次(节流保护)
+    this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合
   },
   methods: {
+    // [NAS] 拉取"NAS 上有哪些节目"集合(未连上/未启用则空集)；失败静默。
+    async refreshNasSet() {
+      try {
+        this.nasPodSet = await nasPodcastSet();
+      } catch (e) {
+        /* 静默：保持空集，不显示标识 */
+      }
+    },
+    // [NAS] 该节目在 NAS 上是否有归档(决定是否显示 wifi 标识)。
+    nasOn(p) {
+      return !!(p && p.id && this.nasPodSet.has(normFeedUrl(p.id)));
+    },
     // [B-35] 该节目下载进度（0-100），无下载任务返 -1。
     //   episodeId 形如 `${feedUrl}::${guid}`，p.id = feedUrl，按前缀聚合属于该节目的下载中单集。
     podcastDlProgress(p) {
@@ -1397,6 +1420,29 @@ export default {
   }
   .dot-discover {
     background: #f1c40f; // 黄 = 首页发现页添加
+  }
+  // [NAS] "NAS 上有此节目"标识：小 wifi 图标，略低饱和绿 + 呼吸(与 navbar 状态图标同节奏)
+  .nas-dot {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 5px;
+    vertical-align: middle;
+    color: #3fa06a;
+    animation: nas-breathe 2.6s ease-in-out infinite;
+    .svg-icon {
+      width: 13px;
+      height: 13px;
+    }
+  }
+}
+// [NAS] 呼吸灯（节目/单集 NAS 标识共用；与 navbar 状态图标同节奏）
+@keyframes nas-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
   }
 }
 // [B-46 / D-3] 新单集角标（红底白字，封面右上角）

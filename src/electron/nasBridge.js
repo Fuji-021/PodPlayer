@@ -188,4 +188,31 @@ export function registerNasIpc() {
       return { ok: false };
     }
   });
+
+  // [NAS·状态点] 库里所有节目的归一化 feedUrl 集合（供订阅页标"NAS 上有此节目"）。
+  ipcMain.handle('nas:podcastSet', async () => {
+    const c = getCfg();
+    if (!ready(c)) return { feeds: [] };
+    try {
+      const items = await ensureItems(c);
+      return { feeds: Object.keys(items) };
+    } catch (e) {
+      return { feeds: [] };
+    }
+  });
+
+  // [NAS·状态点] 某档在 NAS 上已归档的单集 guid 集合（供详情页标"NAS 上有此单集"）。
+  ipcMain.handle('nas:episodeGuids', async (_e, podcastId) => {
+    const c = getCfg();
+    if (!ready(c)) return { guids: [] };
+    try {
+      const items = await ensureItems(c);
+      const itemId = items[normFeed(podcastId)];
+      if (!itemId) return { guids: [] };
+      const eps = await ensureEps(c, itemId);
+      return { guids: Object.keys(eps.byGuid) };
+    } catch (e) {
+      return { guids: [] };
+    }
+  });
 }

@@ -99,7 +99,15 @@
           :style="{ width: Math.max(2, downloadPercent(ep)) + '%' }"
         ></div>
         <div class="ep-main">
-          <div class="ep-title">{{ ep.title }}</div>
+          <div class="ep-title">
+            {{ ep.title
+            }}<span
+              v-if="nasEpOn(ep)"
+              class="nas-dot"
+              title="NAS 上有此单集（音源就近）"
+              ><svg-icon icon-class="wifi"
+            /></span>
+          </div>
           <div class="ep-sub">
             <span>{{ formatDate(ep.pubDate) }}</span>
             <!-- [C-4 改] 时长 / 剩余 / 听过X%(黄) / 已听完(绿) -->
@@ -289,7 +297,10 @@ import {
 import { stripHtmlToText } from '@/utils/podcast/sanitizeHtml';
 import { getEpisodeCache, setEpisodeCache } from '@/utils/podcast/episodeCache';
 import { prefetchShownotesForEpisodes } from '@/utils/podcast/shownotesEnrich';
-import { prefetchNasPodcast } from '@/utils/podcast/nasSource';
+import {
+  prefetchNasPodcast,
+  nasEpisodeGuidSet,
+} from '@/utils/podcast/nasSource';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 export default {
@@ -314,6 +325,8 @@ export default {
       // [B-75/F1] 单集渐进渲染上限：首屏 50 条即时上屏(秒开)，随后 _startHydration 在后台
       //   逐帧补满到全量。episodes 始终全量(批量下载/选择/播放广播都用它)，只限制**渲染**节奏。
       epDisplayLimit: 50,
+      // [NAS] 本档在 NAS 上已归档的单集 guid 集合(连上才非空；空=不显示 wifi 标识)
+      nasEpGuids: new Set(),
     };
   },
   computed: {
@@ -493,6 +506,12 @@ export default {
       prefetchShownotesForEpisodes(mapped).catch(() => {});
       // [NAS] 进详情页预热整档 NAS 映射(暖主进程 episodes 缓存)→ 点哪集都秒解析。未启用则 no-op。
       prefetchNasPodcast(feedUrl);
+      // [NAS] 拉本档 NAS 已归档单集 guid 集合 → 标"NAS 上有此单集"(未连上则空、无标识)
+      nasEpisodeGuidSet(feedUrl)
+        .then(s => {
+          if (feedUrl === this.feedUrl) this.nasEpGuids = s;
+        })
+        .catch(() => {});
       if (cached) this._startHydration();
       // 命中过：仅更新数据 + 续水合，不再复位滚动位
       else this._presentEpisodes(); // 未命中：首次复位渲染量/滚顶/水合
@@ -597,6 +616,10 @@ export default {
           this.$store.state.podcastDownloads.doneIds) ||
         [];
       return ids.includes(ep.id);
+    },
+    // [NAS] 该单集在 NAS 上是否已归档(决定是否显示 wifi 标识)。
+    nasEpOn(ep) {
+      return !!(ep && ep.guid && this.nasEpGuids.has(ep.guid));
     },
     downloadPercent(ep) {
       if (!ep) return -1;
@@ -1200,6 +1223,29 @@ export default {
     font-weight: 600;
     font-size: 15px;
     margin-bottom: 4px;
+    // [NAS] "NAS 上有此单集"标识：小 wifi 图标接名字后，略低饱和绿 + 呼吸(与 navbar 同步)
+    .nas-dot {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 5px;
+      vertical-align: middle;
+      color: #3fa06a;
+      animation: nas-breathe 2.6s ease-in-out infinite;
+      .svg-icon {
+        width: 13px;
+        height: 13px;
+      }
+    }
+  }
+  // [NAS] 呼吸灯（与 navbar 状态图标 / 订阅页标识同节奏）
+  @keyframes nas-breathe {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
   }
   .ep-sub {
     font-size: 12px;
