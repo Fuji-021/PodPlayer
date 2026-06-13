@@ -674,10 +674,9 @@ export default class {
         try {
           const nasUrl = await resolveNasUrl(track);
           if (nasUrl) {
-            // [NAS·临时验证 R1] 命中 NAS 时弹一次 toast，便于无 DevTools 肉眼确认音源；
-            //   接入状态图标(router-wifi-alt)后**删除此 toast**。
+            // [NAS] 命中 NAS 时一句轻提示(简洁好听、无 emoji)；持久状态以 navbar 图标 + 单集 wifi 标识为准。
             try {
-              store.dispatch('showToast', '🛜 本集音源：NAS');
+              store.dispatch('showToast', '正在从 NAS 就近播放');
             } catch (e2) {
               /* ignore */
             }

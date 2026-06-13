@@ -183,3 +183,67 @@ export async function getNasConfig() {
     return null;
   }
 }
+
+// ===== [NAS 配置中心] 设置页用：总开关 + 多档管理 + 自动发现库 =====
+
+// 总开关：启用/停用 NAS 就近音源。
+export async function setNasEnabled(on) {
+  if (!ipcRenderer) return { ok: false };
+  try {
+    await ipcRenderer.invoke('nas:setConfig', { enabled: on === true });
+  } catch (e) {
+    return { ok: false };
+  }
+  await initNas();
+  return { ok: true };
+}
+
+// 用临时凭据列库(测试 + 自动发现库，免手填 UUID)。
+export async function listNasLibraries(baseUrl, token) {
+  if (!ipcRenderer) return { ok: false, libraries: [] };
+  try {
+    return await ipcRenderer.invoke('nas:listLibraries', { baseUrl, token });
+  } catch (e) {
+    return { ok: false, libraries: [] };
+  }
+}
+
+export async function listNasProfiles() {
+  const empty = { enabled: false, activeProfileId: '', profiles: [] };
+  if (!ipcRenderer) return empty;
+  try {
+    return await ipcRenderer.invoke('nas:listProfiles');
+  } catch (e) {
+    return empty;
+  }
+}
+
+export async function saveNasProfile(profile) {
+  if (!ipcRenderer) return { ok: false };
+  try {
+    return await ipcRenderer.invoke('nas:saveProfile', { profile });
+  } catch (e) {
+    return { ok: false };
+  }
+}
+
+export async function deleteNasProfile(id) {
+  if (!ipcRenderer) return { ok: false };
+  try {
+    return await ipcRenderer.invoke('nas:deleteProfile', { id });
+  } catch (e) {
+    return { ok: false };
+  }
+}
+
+// 一键连接：设为 active 后重读状态 + 重探。
+export async function activateNasProfile(id) {
+  if (!ipcRenderer) return { ok: false };
+  try {
+    await ipcRenderer.invoke('nas:activateProfile', { id });
+  } catch (e) {
+    return { ok: false };
+  }
+  await initNas();
+  return { ok: true };
+}

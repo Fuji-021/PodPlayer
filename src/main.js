@@ -91,26 +91,9 @@ loadAllDownloads()
   .catch(() => {});
 
 // [NAS] 启动时初始化 NAS 音源熔断器（读配置：未启用则 no-op；启用则探活 + 起心跳）。
-//   失败静默，绝不影响启动与既有播放。
-import {
-  initNas,
-  setNasConfig,
-  getNasConfig,
-  testNasConnection,
-  nasStatus,
-} from '@/utils/podcast/nasSource';
+//   失败静默，绝不影响启动与既有播放。配置已由设置页 NAS 区块接管(window.podNas 临时入口已移除)。
+import { initNas } from '@/utils/podcast/nasSource';
 initNas().catch(() => {});
-// [NAS·P1 临时调试入口] P2 设置页做好前，用 DevTools 控制台配置/开关：
-//   window.podNas.setConfig({enabled:true, baseUrl:'http://192.168.2.108:13378',
-//     token:'<你的token>', libraryId:'c4379a59-72a4-4b8f-8f89-5170602f8469'})
-//   window.podNas.test()  // 测连通   window.podNas.status()  // 看熔断状态
-//   token 只存主进程 electron-store(userData)，不入仓库。P2 完成后此入口移除。
-window.podNas = {
-  setConfig: setNasConfig,
-  getConfig: getNasConfig,
-  test: testNasConnection,
-  status: nasStatus,
-};
 
 // [F2 / B69-F2] 启动后空闲清理"预览孤儿"(发现页预览残留的 subscribed:false 零互动节目+单集)，
 //   防其长期堆积拖慢 DB。延迟到启动稳定后跑、低优先、失败静默；只删零互动的预览残留，

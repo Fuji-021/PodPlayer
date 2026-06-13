@@ -23,12 +23,65 @@ const API_TIMEOUT = 6000; // 解析类请求超时
 let itemsCache = null; // { ts, map: { normFeed: itemId } }
 const epsCache = {}; // itemId -> { ts, byGuid: {guid:ino}, byUrl: {normUrl:ino} }
 
+// [NAS 配置中心] 简易唯一 id（避免依赖 crypto.randomUUID 的 Node 版本差异）。
+function genId() {
+  return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function hostOf(url) {
+  const m = String(url || '').match(/^https?:\/\/([^/]+)/i);
+  return m ? m[1] : String(url || '');
+}
+
+// [NAS 配置中心] 向后兼容：旧的扁平配置(baseUrl/token/libraryId 在顶层) → 迁成 profiles[0]。
+function migrateIfNeeded() {
+  if (Array.isArray(store.get('profiles'))) return; // 已是新格式
+  const baseUrl = String(store.get('baseUrl') || '').replace(/\/+$/, '');
+  const token = String(store.get('token') || '');
+  const libraryId = String(store.get('libraryId') || '');
+  if (baseUrl || token || libraryId) {
+    const id = genId();
+    store.set('profiles', [
+      {
+        id,
+        name: hostOf(baseUrl),
+        baseUrl,
+        token,
+        libraryId,
+        libraryName: '',
+        lastConnectedAt: Date.now(),
+        createdAt: Date.now(),
+      },
+    ]);
+    store.set('activeProfileId', id);
+  } else {
+    store.set('profiles', []);
+  }
+  store.delete('baseUrl');
+  store.delete('token');
+  store.delete('libraryId');
+}
+
+function getProfiles() {
+  migrateIfNeeded();
+  const p = store.get('profiles');
+  return Array.isArray(p) ? p : [];
+}
+
+function getActiveProfile() {
+  const profiles = getProfiles();
+  const activeId = store.get('activeProfileId') || '';
+  return profiles.find(p => p && p.id === activeId) || profiles[0] || null;
+}
+
+// getCfg：对上层(probe/resolve/...)透明——返回当前激活档的有效配置。
 function getCfg() {
+  const p = getActiveProfile();
   return {
     enabled: store.get('enabled') === true,
-    baseUrl: String(store.get('baseUrl') || '').replace(/\/+$/, ''),
-    token: String(store.get('token') || ''),
-    libraryId: String(store.get('libraryId') || ''),
+    baseUrl: p ? String(p.baseUrl || '').replace(/\/+$/, '') : '',
+    token: p ? String(p.token || '') : '',
+    libraryId: p ? String(p.libraryId || '') : '',
   };
 }
 
@@ -122,25 +175,25 @@ async function resolveStream(c, podcastId, guid, audioUrl) {
 }
 
 export function registerNasIpc() {
-  // 状态(不回传 token，只回 hasToken)；渲染端据此判 enabled。
+  // 状态(不回传 token，只回 hasToken)；渲染端据此判 enabled + 显示当前连接名/库名。
   ipcMain.handle('nas:getStatus', () => {
     const c = getCfg();
+    const p = getActiveProfile();
     return {
       enabled: c.enabled,
       baseUrl: c.baseUrl,
       libraryId: c.libraryId,
       hasToken: !!c.token,
+      activeProfileId: (p && p.id) || '',
+      activeName: (p && p.name) || '',
+      libraryName: (p && p.libraryName) || '',
     };
   });
 
-  // 写配置（P2 设置页接此；P1 经渲染端 setNasConfig 调用）。配置变更清缓存。
+  // 总开关(启用/停用 NAS 就近音源)。配置变更清缓存。档管理走下面的 profile IPC。
   ipcMain.handle('nas:setConfig', (_e, cfg) => {
     const o = cfg || {};
     if ('enabled' in o) store.set('enabled', o.enabled === true);
-    if ('baseUrl' in o)
-      store.set('baseUrl', String(o.baseUrl || '').replace(/\/+$/, ''));
-    if ('token' in o) store.set('token', String(o.token || ''));
-    if ('libraryId' in o) store.set('libraryId', String(o.libraryId || ''));
     clearCache();
     return { ok: true };
   });
@@ -214,5 +267,106 @@ export function registerNasIpc() {
     } catch (e) {
       return { guids: [] };
     }
+  });
+
+  // [NAS 配置中心] 用临时凭据列库(测试/发现库用，未必已保存)。过滤 podcast 类型 → 免手填 UUID。
+  ipcMain.handle('nas:listLibraries', async (_e, args) => {
+    const a = args || {};
+    const base = String(a.baseUrl || '').replace(/\/+$/, '');
+    const token = String(a.token || '');
+    if (!base || !token) return { ok: false, error: '地址或 token 为空' };
+    try {
+      const res = await axios.get(base + '/api/libraries', {
+        timeout: 6000,
+        headers: {
+          Authorization: 'Bearer ' + token,
+          'User-Agent': UA,
+          Accept: 'application/json',
+        },
+        validateStatus: s => s >= 200 && s < 300,
+      });
+      const libs = (res.data && res.data.libraries) || [];
+      const out = libs
+        .filter(l => l && (l.mediaType === 'podcast' || !l.mediaType))
+        .map(l => ({ id: l.id, name: l.name, mediaType: l.mediaType || '' }));
+      return { ok: true, libraries: out };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  // [NAS 配置中心] 列出连接档(去 token，只回 hasToken)。
+  ipcMain.handle('nas:listProfiles', () => {
+    const profiles = getProfiles();
+    return {
+      enabled: store.get('enabled') === true,
+      activeProfileId: store.get('activeProfileId') || '',
+      profiles: profiles.map(p => ({
+        id: p.id,
+        name: p.name,
+        baseUrl: p.baseUrl,
+        libraryId: p.libraryId,
+        libraryName: p.libraryName || '',
+        hasToken: !!p.token,
+        lastConnectedAt: p.lastConnectedAt || 0,
+        createdAt: p.createdAt || 0,
+      })),
+    };
+  });
+
+  // [NAS 配置中心] 新增/更新一档(含 token，仅主进程存)。无 id=新增；编辑时 token 留空=沿用旧 token。
+  ipcMain.handle('nas:saveProfile', (_e, args) => {
+    const p = (args && args.profile) || {};
+    const baseUrl = String(p.baseUrl || '').replace(/\/+$/, '');
+    if (!baseUrl) return { ok: false, error: '地址为空' };
+    const profiles = getProfiles();
+    const id = p.id || '';
+    const row = {
+      id: id || genId(),
+      name: String(p.name || '').trim() || hostOf(baseUrl),
+      baseUrl,
+      token: String(p.token || ''),
+      libraryId: String(p.libraryId || ''),
+      libraryName: String(p.libraryName || ''),
+      lastConnectedAt: 0,
+      createdAt: Date.now(),
+    };
+    const idx = id ? profiles.findIndex(x => x && x.id === id) : -1;
+    if (idx >= 0) {
+      row.createdAt = profiles[idx].createdAt || row.createdAt;
+      row.lastConnectedAt = profiles[idx].lastConnectedAt || 0;
+      if (!row.token) row.token = profiles[idx].token || ''; // 编辑不重输 token
+      profiles[idx] = row;
+    } else {
+      profiles.push(row);
+    }
+    store.set('profiles', profiles);
+    clearCache();
+    return { ok: true, id: row.id };
+  });
+
+  // [NAS 配置中心] 删除一档(若删的是 active，自动切到剩余第一档)。
+  ipcMain.handle('nas:deleteProfile', (_e, args) => {
+    const id = (args && args.id) || '';
+    const profiles = getProfiles().filter(p => p && p.id !== id);
+    store.set('profiles', profiles);
+    if ((store.get('activeProfileId') || '') === id) {
+      store.set('activeProfileId', (profiles[0] && profiles[0].id) || '');
+    }
+    clearCache();
+    return { ok: true };
+  });
+
+  // [NAS 配置中心] 一键连接：设为 active + 更新 lastConnectedAt + 清缓存(渲染端随后 initNas 重探)。
+  ipcMain.handle('nas:activateProfile', (_e, args) => {
+    const id = (args && args.id) || '';
+    const profiles = getProfiles();
+    const idx = profiles.findIndex(p => p && p.id === id);
+    if (idx < 0) return { ok: false };
+    profiles[idx].lastConnectedAt = Date.now();
+    store.set('profiles', profiles);
+    store.set('activeProfileId', id);
+    clearCache();
+    return { ok: true };
   });
 }

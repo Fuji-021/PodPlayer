@@ -136,6 +136,83 @@
         </div>
       </div>
 
+      <!-- [NAS] 就近音源配置中心：总开关 + 当前连接 + 连接历史(一键切换) + 添加(自动发现库) -->
+      <h3 v-if="isElectron">NAS 就近音源</h3>
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">启用 NAS 就近音源</div>
+          <div class="description">
+            已归档的单集就近从 NAS 流式播放，更快、零流量；NAS
+            不可用时自动回落在线音源。
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="nas-enable"
+              type="checkbox"
+              :checked="nas.enabled"
+              @change="toggleNas($event)"
+            />
+            <label for="nas-enable"></label>
+          </div>
+        </div>
+      </div>
+      <div v-if="isElectron && activeProfile" class="item">
+        <div class="left">
+          <div class="title">
+            <span
+              class="nas-cfg-dot"
+              :class="nas.status.alive ? 'on' : 'off'"
+            ></span>
+            当前连接：{{ activeProfile.name }}
+          </div>
+          <div class="description">{{ activeProfileDesc }}</div>
+        </div>
+        <div class="right">
+          <button @click="testCurrentNas">测试连接</button>
+        </div>
+      </div>
+      <div v-if="isElectron && nas.profiles.length" class="item nas-history">
+        <div class="left nas-history-left">
+          <div class="title">连接历史</div>
+          <div
+            v-for="p in nas.profiles"
+            :key="p.id"
+            class="nas-profile-row"
+            :class="{ active: p.id === nas.activeProfileId }"
+          >
+            <span
+              class="nas-cfg-dot"
+              :class="
+                p.id === nas.activeProfileId && nas.status.alive ? 'on' : 'off'
+              "
+            ></span>
+            <span class="np-name">{{ p.name }}</span>
+            <span class="np-base">{{ shortHost(p.baseUrl) }}</span>
+            <span class="np-ago">{{ fmtAgo(p.lastConnectedAt) }}</span>
+            <span v-if="p.id === nas.activeProfileId" class="np-current"
+              >当前</span
+            >
+            <button v-else class="np-btn" @click="connectProfile(p.id)">
+              连接
+            </button>
+            <button class="np-btn" @click="editProfile(p)">编辑</button>
+            <button class="np-btn danger" @click="removeProfile(p)"
+              >删除</button
+            >
+          </div>
+        </div>
+      </div>
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">添加连接</div>
+        </div>
+        <div class="right">
+          <button @click="openNasDialog()">+ 添加 NAS 连接</button>
+        </div>
+      </div>
+
       <h3 v-if="isElectron">缓存</h3>
       <div v-if="isElectron" class="item">
         <div class="left">
@@ -783,6 +860,72 @@
         </a>
       </div>
     </div>
+    <!-- [NAS] 添加/编辑连接弹窗：填地址+token → 测试并发现库(免手填 UUID) → 保存 -->
+    <div
+      v-if="nasDialog.open"
+      class="nas-dialog-mask"
+      @click.self="closeNasDialog"
+    >
+      <div class="nas-dialog">
+        <div class="nd-title">
+          {{ nasDialog.editId ? '编辑 NAS 连接' : '添加 NAS 连接' }}
+        </div>
+        <label class="nd-field"
+          >名称（可选）
+          <input v-model="nasDialog.name" placeholder="如：家里飞牛" />
+        </label>
+        <label class="nd-field"
+          >地址
+          <input
+            v-model="nasDialog.baseUrl"
+            placeholder="http://192.168.2.108:13378/audiobookshelf"
+          />
+        </label>
+        <label class="nd-field"
+          >Token
+          <input
+            v-model="nasDialog.token"
+            :placeholder="
+              nasDialog.editId
+                ? '留空 = 沿用原 token'
+                : 'ABS → 设置 → 用户 → API Token'
+            "
+          />
+        </label>
+        <button
+          class="nd-test"
+          :disabled="nasDialog.testing"
+          @click="testAndDiscover"
+        >
+          {{ nasDialog.testing ? '连接中…' : '测试并发现库' }}
+        </button>
+        <div
+          v-if="nasDialog.testMsg"
+          class="nd-msg"
+          :class="{ ok: nasDialog.testOk }"
+        >
+          {{ nasDialog.testMsg }}
+        </div>
+        <label v-if="nasDialog.libraries.length" class="nd-field"
+          >库
+          <select v-model="nasDialog.libraryId">
+            <option v-for="l in nasDialog.libraries" :key="l.id" :value="l.id">
+              {{ l.name }}
+            </option>
+          </select>
+        </label>
+        <div class="nd-actions">
+          <button @click="closeNasDialog">取消</button>
+          <button
+            class="primary"
+            :disabled="!nasDialog.libraryId"
+            @click="saveNasDialog"
+          >
+            保存
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -793,6 +936,17 @@ import { auth as lastfmAuth } from '@/api/lastfm';
 import { changeAppearance, bytesToSize } from '@/utils/common';
 import { countDBSize, clearDB } from '@/utils/db';
 import pkg from '../../package.json';
+// [NAS] 配置中心：多档连接 + 自动发现库 + 一键切换（token 仅主进程）
+import {
+  listNasProfiles,
+  saveNasProfile,
+  deleteNasProfile,
+  activateNasProfile,
+  setNasEnabled,
+  listNasLibraries,
+  testNasConnection,
+  nasStatus,
+} from '@/utils/podcast/nasSource';
 
 const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
@@ -821,6 +975,25 @@ export default {
         recording: false,
       },
       recordedShortcut: [],
+      // [NAS] 配置中心状态
+      nas: {
+        enabled: false,
+        status: { enabled: false, alive: false },
+        activeProfileId: '',
+        profiles: [],
+      },
+      nasDialog: {
+        open: false,
+        editId: '',
+        name: '',
+        baseUrl: '',
+        token: '',
+        libraries: [],
+        libraryId: '',
+        testing: false,
+        testMsg: '',
+        testOk: false,
+      },
     };
   },
   computed: {
@@ -836,6 +1009,20 @@ export default {
     },
     version() {
       return pkg.version;
+    },
+    // [NAS] 当前激活连接档 + 描述
+    activeProfile() {
+      return (
+        this.nas.profiles.find(p => p.id === this.nas.activeProfileId) || null
+      );
+    },
+    activeProfileDesc() {
+      const p = this.activeProfile;
+      if (!p) return '';
+      return (
+        this.shortHost(p.baseUrl) +
+        (p.libraryName ? ' · 库：' + p.libraryName : '')
+      );
     },
     showUserInfo() {
       return isLooseLoggedIn() && this.data.user.nickname;
@@ -1311,14 +1498,160 @@ export default {
   },
   created() {
     this.countDBSize('tracks');
-    if (process.env.IS_ELECTRON) this.getAllOutputDevices();
+    if (process.env.IS_ELECTRON) {
+      this.getAllOutputDevices();
+      this.loadNas();
+      this.startNasPoll();
+    }
   },
   activated() {
     this.countDBSize('tracks');
-    if (process.env.IS_ELECTRON) this.getAllOutputDevices();
+    if (process.env.IS_ELECTRON) {
+      this.getAllOutputDevices();
+      this.loadNas();
+      this.startNasPoll();
+    }
+  },
+  deactivated() {
+    this.stopNasPoll();
+  },
+  beforeDestroy() {
+    this.stopNasPoll();
   },
   methods: {
     ...mapActions(['showToast']),
+    // ===== [NAS] 配置中心方法 =====
+    async loadNas() {
+      const r = await listNasProfiles();
+      this.nas.enabled = !!r.enabled;
+      this.nas.activeProfileId = r.activeProfileId || '';
+      this.nas.profiles = r.profiles || [];
+      this.nas.status = nasStatus();
+    },
+    startNasPoll() {
+      if (this._nasPoll) return;
+      this._nasPoll = setInterval(() => {
+        this.nas.status = nasStatus();
+      }, 2000);
+    },
+    stopNasPoll() {
+      if (this._nasPoll) {
+        clearInterval(this._nasPoll);
+        this._nasPoll = null;
+      }
+    },
+    async toggleNas(e) {
+      const on = !!(e && e.target && e.target.checked);
+      await setNasEnabled(on);
+      this.nas.enabled = on;
+      this.nas.status = nasStatus();
+    },
+    async testCurrentNas() {
+      const r = await testNasConnection();
+      this.nas.status = nasStatus();
+      this.showToast(r && r.ok ? 'NAS 连接正常' : 'NAS 暂时连不上');
+    },
+    shortHost(url) {
+      const m = String(url || '').match(/^https?:\/\/([^/]+)/i);
+      return m ? m[1] : String(url || '');
+    },
+    fmtAgo(ts) {
+      if (!ts) return '从未连接';
+      const d = Date.now() - ts;
+      if (d < 60000) return '刚刚';
+      if (d < 3600000) return Math.floor(d / 60000) + ' 分钟前';
+      if (d < 86400000) return Math.floor(d / 3600000) + ' 小时前';
+      return Math.floor(d / 86400000) + ' 天前';
+    },
+    openNasDialog(profile) {
+      const p = profile || null;
+      this.nasDialog = {
+        open: true,
+        editId: p ? p.id : '',
+        name: p ? p.name : '',
+        baseUrl: p ? p.baseUrl : '',
+        token: '',
+        libraries:
+          p && p.libraryId
+            ? [{ id: p.libraryId, name: p.libraryName || '(已选库)' }]
+            : [],
+        libraryId: p ? p.libraryId : '',
+        testing: false,
+        testMsg: '',
+        testOk: !!(p && p.libraryId),
+      };
+    },
+    closeNasDialog() {
+      this.nasDialog.open = false;
+    },
+    async testAndDiscover() {
+      const d = this.nasDialog;
+      if (!d.baseUrl) {
+        d.testMsg = '请填写地址';
+        return;
+      }
+      if (!d.token) {
+        d.testMsg = d.editId
+          ? '如需重新发现库，请重新填入 token'
+          : '请填写 token';
+        return;
+      }
+      d.testing = true;
+      d.testMsg = '正在连接…';
+      d.testOk = false;
+      const r = await listNasLibraries(d.baseUrl, d.token);
+      d.testing = false;
+      if (r && r.ok) {
+        d.libraries = r.libraries || [];
+        if (d.libraries.length && !d.libraryId) d.libraryId = d.libraries[0].id;
+        d.testOk = true;
+        d.testMsg = '连接成功，发现 ' + d.libraries.length + ' 个播客库';
+      } else {
+        d.testOk = false;
+        d.testMsg = '连接失败：' + ((r && r.error) || '检查地址 / token');
+      }
+    },
+    async saveNasDialog() {
+      const d = this.nasDialog;
+      if (!d.baseUrl) {
+        d.testMsg = '请填写地址';
+        return;
+      }
+      if (!d.libraryId) {
+        d.testMsg = '请先「测试并发现库」并选择库';
+        return;
+      }
+      const lib = d.libraries.find(l => l.id === d.libraryId);
+      const r = await saveNasProfile({
+        id: d.editId || undefined,
+        name: d.name,
+        baseUrl: d.baseUrl,
+        token: d.token,
+        libraryId: d.libraryId,
+        libraryName: lib ? lib.name : '',
+      });
+      if (r && r.ok) {
+        const hadActive = !!this.nas.activeProfileId;
+        this.closeNasDialog();
+        await this.loadNas();
+        if (!hadActive && r.id) await this.connectProfile(r.id);
+        this.showToast('已保存 NAS 连接');
+      } else {
+        d.testMsg = '保存失败：' + ((r && r.error) || '');
+      }
+    },
+    async connectProfile(id) {
+      await activateNasProfile(id);
+      await this.loadNas();
+      this.showToast('已切换 NAS 连接');
+    },
+    editProfile(p) {
+      this.openNasDialog(p);
+    },
+    async removeProfile(p) {
+      await deleteNasProfile(p.id);
+      await this.loadNas();
+    },
     getAllOutputDevices() {
       navigator.mediaDevices.enumerateDevices().then(devices => {
         this.allOutputDevices = devices.filter(device => {
@@ -1788,5 +2121,151 @@ input[type='number'] {
 }
 .toggle input:checked + label:after {
   left: 26px;
+}
+
+/* [NAS] 配置中心样式 */
+.nas-cfg-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.nas-cfg-dot.on {
+  background: #3fa06a;
+  animation: nas-cfg-breathe 2.4s ease-in-out infinite;
+}
+.nas-cfg-dot.off {
+  background: #c0392b;
+}
+@keyframes nas-cfg-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.nas-history-left {
+  width: 100%;
+}
+.nas-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 14px;
+  border-top: 1px solid var(--color-secondary-bg);
+  .np-name {
+    font-weight: 600;
+  }
+  .np-base,
+  .np-ago {
+    opacity: 0.55;
+    font-size: 12px;
+  }
+  .np-ago {
+    margin-left: auto;
+  }
+  .np-current {
+    color: #3fa06a;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .np-btn {
+    padding: 3px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+    background: var(--color-secondary-bg);
+    cursor: pointer;
+    border: none;
+    color: var(--color-text);
+    &.danger {
+      color: #c0392b;
+    }
+  }
+}
+.nas-dialog-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.nas-dialog {
+  width: 420px;
+  max-width: 90vw;
+  background: var(--color-body-bg);
+  border-radius: 14px;
+  padding: 22px 24px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+  .nd-title {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 16px;
+  }
+  .nd-field {
+    display: block;
+    font-size: 13px;
+    opacity: 0.8;
+    margin-bottom: 12px;
+    input,
+    select {
+      display: block;
+      width: 100%;
+      margin-top: 5px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--color-secondary-bg);
+      background: var(--color-secondary-bg);
+      color: var(--color-text);
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+  }
+  .nd-test {
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: none;
+    background: var(--color-secondary-bg);
+    color: var(--color-text);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .nd-msg {
+    margin: 10px 0;
+    font-size: 13px;
+    color: #c0392b;
+    &.ok {
+      color: #3fa06a;
+    }
+  }
+  .nd-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 16px;
+    button {
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background: var(--color-secondary-bg);
+      color: var(--color-text);
+      font-size: 14px;
+      &.primary {
+        background: var(--color-primary);
+        color: #fff;
+      }
+      &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    }
+  }
 }
 </style>
