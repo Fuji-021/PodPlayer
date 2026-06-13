@@ -9,6 +9,8 @@ import { isAccountLoggedIn } from '@/utils/auth';
 import { cacheTrackSource, getTrackSource } from '@/utils/db';
 // [播客改造 S-1] 单集进度按集保存：用 Dexie 的 episodeProgress 表
 import { saveEpisodeProgress, getEpisodeProgress } from '@/utils/podcast/db';
+// [NAS] 音源②级：本地未命中→NAS 在线则解析流URL，失败/不可用返回 null 直落 CDN
+import { resolveNasUrl } from '@/utils/podcast/nasSource';
 // [播客改造] 真实收听统计
 import { tickListen, resetEpisodeListening } from '@/utils/podcast/listening';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
@@ -649,12 +651,13 @@ export default class {
     const buffer = base642Buffer(retrieveSongInfo.url);
     return this._getAudioSourceBlobURL(buffer);
   }
-  _getAudioSource(track) {
+  async _getAudioSource(track) {
     // [播客改造] 播客单集自带音频直链，跳过网易云查询链。
     // [B-35] 已下载 → 同步从 store.podcastDownloads.pathMap 取本地路径返 file://。
     //   原来用动态 import('@/utils/db') 异步查，不可靠（顶部 Dexie get 报错时回退在线，
     //   而在线 url 在渲染进程走 Chromium 代理被 ERR_CONNECTION_CLOSED 拦 → 卡死）。
     //   file:// 经实测可正常播放本地文件，pathMap 在启动/下载完成时已就绪。
+    // [NAS] 三级解析链：①本地 file:// → ②NAS(新增) → ③原始 CDN。①③为现状原文不动。
     if (track && track.podcastAudioUrl) {
       if (track.podcastEpisodeId) {
         const pathMap =
@@ -664,10 +667,18 @@ export default class {
         const fp = pathMap[track.podcastEpisodeId];
         if (fp) {
           const norm = String(fp).replace(/\\/g, '/').replace(/^\/+/, '');
-          return Promise.resolve('file:///' + norm);
+          return Promise.resolve('file:///' + norm); // ① 本地已下载，最高优先级
+        }
+        // ② [NAS] 本地未命中 → NAS 启用且在线则试解析流 URL；resolveNasUrl 内含熔断
+        //    (未启用/不可用同步返回 null、零等待)，失败/查不到也返回 null → 直落 ③CDN，绝不阻断播放。
+        try {
+          const nasUrl = await resolveNasUrl(track);
+          if (nasUrl) return nasUrl;
+        } catch (e) {
+          /* 任何异常都落 CDN，保证 NAS 永不影响既有播放 */
         }
       }
-      return Promise.resolve(track.podcastAudioUrl);
+      return Promise.resolve(track.podcastAudioUrl); // ③ 原始 CDN，兜底
     }
     return this._getAudioSourceFromCache(String(track.id))
       .then(source => {

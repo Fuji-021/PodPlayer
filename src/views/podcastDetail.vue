@@ -289,6 +289,7 @@ import {
 import { stripHtmlToText } from '@/utils/podcast/sanitizeHtml';
 import { getEpisodeCache, setEpisodeCache } from '@/utils/podcast/episodeCache';
 import { prefetchShownotesForEpisodes } from '@/utils/podcast/shownotesEnrich';
+import { prefetchNasPodcast } from '@/utils/podcast/nasSource';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 export default {
@@ -490,6 +491,8 @@ export default {
       // [B-83/预取] 后台限流补全本档"被小宇宙截断"的单集完整文稿(每集一次、已补全的跳过)，
       //   使你点进单集时完整内容已在本地、秒显无闪。失败静默，不影响列表。
       prefetchShownotesForEpisodes(mapped).catch(() => {});
+      // [NAS] 进详情页预热整档 NAS 映射(暖主进程 episodes 缓存)→ 点哪集都秒解析。未启用则 no-op。
+      prefetchNasPodcast(feedUrl);
       if (cached) this._startHydration();
       // 命中过：仅更新数据 + 续水合，不再复位滚动位
       else this._presentEpisodes(); // 未命中：首次复位渲染量/滚顶/水合
