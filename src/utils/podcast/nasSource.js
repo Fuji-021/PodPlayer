@@ -12,6 +12,7 @@ const ipcRenderer =
   electron && electron.ipcRenderer ? electron.ipcRenderer : null;
 
 let enabled = false; // 配置启用 + 地址/token/库齐全
+let activeName = ''; // 当前激活连接档的名称(toast「来源于X的NAS」用)
 let nasAlive = false; // 熔断状态
 let lastProbe = 0;
 let probing = null; // 进行中的探测(去重)
@@ -23,6 +24,10 @@ export function isNasEnabled() {
 export function nasStatus() {
   return { enabled, alive: nasAlive };
 }
+// 当前激活连接档名称（toast「来源于X的NAS」用；未设/未启用为空串）。
+export function nasActiveName() {
+  return activeName;
+}
 
 // 启动/配置变更后调用：重读主进程状态，启用则探一次 + 起 5min 心跳。
 export async function initNas() {
@@ -30,8 +35,10 @@ export async function initNas() {
   try {
     const st = await ipcRenderer.invoke('nas:getStatus');
     enabled = !!(st && st.enabled && st.baseUrl && st.hasToken && st.libraryId);
+    activeName = (st && st.activeName) || '';
   } catch (e) {
     enabled = false;
+    activeName = '';
   }
   if (enabled) {
     probe();

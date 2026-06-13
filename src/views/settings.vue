@@ -359,7 +359,11 @@
 
       <div class="item">
         <div class="left">
-          <div class="title" style="transform: scaleX(-1)">🐈️ 🏳️‍🌈</div>
+          <!-- [设置] 彩虹猫=吉祥物：进度条样式开关，标题直接用吉祥物 gif(后续会加更多样式) -->
+          <div class="title nyancat-title">
+            <img src="/img/logos/nyancat.gif" alt="进度条彩虹猫样式" />
+            <span>进度条彩虹猫</span>
+          </div>
         </div>
         <div class="right">
           <div class="toggle">
@@ -520,10 +524,7 @@
       </div>
 
       <div class="footer">
-        <p class="author"
-          >MADE BY
-          <a href="http://github.com/qier222" target="_blank">QIER222</a></p
-        >
+        <p class="author">DESIGN BY FUJII</p>
         <p class="version">v{{ version }}</p>
 
         <a
@@ -1724,12 +1725,29 @@ input[type='number'] {
   color: var(--color-text);
   font-weight: 600;
   .author {
-    font-size: 0.9rem;
+    // [设置] 署名 DESIGN BY FUJII：粗衬线字体
+    font-family: Georgia, 'Times New Roman', 'Noto Serif SC', 'Songti SC', serif;
+    font-weight: 800;
+    font-size: 1.05rem;
+    letter-spacing: 1px;
   }
   .version {
     font-size: 0.88rem;
     opacity: 0.58;
     margin-top: -10px;
+  }
+}
+
+// [设置] 彩虹猫(进度条样式)项：标题用吉祥物 gif，像素图保持清晰
+.nyancat-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  img {
+    height: 24px;
+    width: auto;
+    border-radius: 4px;
+    image-rendering: pixelated;
   }
 }
 
@@ -1877,6 +1895,7 @@ input[type='number'] {
   width: 420px;
   max-width: 90vw;
   background: var(--color-body-bg);
+  color: var(--color-text);
   border-radius: 14px;
   padding: 22px 24px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);

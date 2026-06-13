@@ -10,7 +10,7 @@ import { cacheTrackSource, getTrackSource } from '@/utils/db';
 // [播客改造 S-1] 单集进度按集保存：用 Dexie 的 episodeProgress 表
 import { saveEpisodeProgress, getEpisodeProgress } from '@/utils/podcast/db';
 // [NAS] 音源②级：本地未命中→NAS 在线则解析流URL，失败/不可用返回 null 直落 CDN
-import { resolveNasUrl } from '@/utils/podcast/nasSource';
+import { resolveNasUrl, nasActiveName } from '@/utils/podcast/nasSource';
 // [播客改造] 真实收听统计
 import { tickListen, resetEpisodeListening } from '@/utils/podcast/listening';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
@@ -674,9 +674,13 @@ export default class {
         try {
           const nasUrl = await resolveNasUrl(track);
           if (nasUrl) {
-            // [NAS] 命中 NAS 时一句轻提示(简洁好听、无 emoji)；持久状态以 navbar 图标 + 单集 wifi 标识为准。
+            // [NAS] 命中 NAS 时一句轻提示，带上当前连接档名(如"来源于托尼的 NAS")；无名则通用文案。
             try {
-              store.dispatch('showToast', '正在从 NAS 就近播放');
+              const nm = nasActiveName();
+              store.dispatch(
+                'showToast',
+                nm ? '来源于' + nm + '的 NAS' : '正在从 NAS 就近播放'
+              );
             } catch (e2) {
               /* ignore */
             }

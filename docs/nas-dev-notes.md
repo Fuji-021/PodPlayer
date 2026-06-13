@@ -136,3 +136,5 @@
 | made by(Vercel 等) | **换成 `DESIGN BY FUJII`**(用户 2026-06-13 确认：是 DESIGN 不是 DESINE；签名用 Fujii 非 Fujiphotograph)，**粗衬线字体**；软件版本由开发定 |
 
 **进展（2026-06-13 本轮）**：已删 **UnblockNeteaseMusic 段 + 缓存段 + 歌词段**(模板移除，UI 已消失)。**注**：为零风险，本轮只删模板块，对应 computed/method/import(musicQuality/cacheLimit/lyric*/unm*/clearCache 等)暂留为 dormant dead code，**待一轮专门的 script 清理**(它们 unused 无 lint 错、不影响功能)。仍待办：音质 item、倒序播放、Last.fm/Discord(自定义段，含 import 级联)、启动页二选一(动 background.js showLibraryDefault，谨慎)、彩虹猫换 GIF(需 nyancat gif 资源)、made-by(待确认拼写)、快捷键改造。另：hover 预取 NAS 单集映射已加(我的订阅卡 mouseenter → 进详情秒显 wifi 标识)。
+
+**进展（2026-06-13 第二轮）**：① toast 改「来源于{档名}的 NAS」(nasSource 暴露 `nasActiveName`，无名则回落通用文案；档名默认 host:port，添加弹窗不填即用默认)。② **made-by 已改 `DESIGN BY FUJII` 粗衬线**(footer .author)。③ **彩虹猫项标题换成 nyancat.gif**(`/img/logos/nyancat.gif`，像素图 image-rendering:pixelated；开关保留)。④ 修 NAS 弹窗深色模式黑字(`.nas-dialog` 加 `color:var(--color-text)`)。⑤ **外观(深色)开关本就存在**(settings 顶部「外观」项 auto/🌞浅色/🌚深色，绑 changeAppearance)——非新增，已告知用户位置;字色自适应靠主题 var(--color-text)。仍待办(下批)：音质/倒序/Last.fm/Discord 删除、启动页二选一、快捷键、设置页死代码 script 清理。**P3(播放中途掉线续播)下一轮做。**
