@@ -443,8 +443,13 @@
           /></button-icon>
         </div>
 
-        <!-- 主体：封面 + 信息 + 进度 + 控制。点 col 外的空白区(stage padding)= 收起(P0 便捷退出) -->
-        <div class="imm-stage" @click.self="closeImmersive">
+        <!-- 主体：封面 + 信息 + 进度 + 控制。点 col 外的空白区(stage padding)= 收起(P0 便捷退出)。
+             [修冲突] 用 mousedown.self 先记弹窗状态、click.self 再决策：按下时有弹窗开着则这次只关弹窗、不退出。 -->
+        <div
+          class="imm-stage"
+          @mousedown.self="onImmStageMouseDown"
+          @click.self="onImmStageClick"
+        >
           <div class="imm-col">
             <!-- 大封面：固定方槽内 scale，播放 1 / 暂停 0.82，下方布局不跳动 -->
             <div class="imm-cover-slot">
@@ -1052,6 +1057,9 @@ export default {
     handleClick(event) {
       // [沉浸式播放页 P0] 点击 bar 空白处 → 展开沉浸页。各功能区(封面/信息/金刚/右控)均 @click.stop，
       //   故此处只在真正点到 bar 背景时触发；event.target==mouseDownTarget 确保是「点击」而非拖拽松手。
+      // [修冲突] 若按下那一刻有功能弹窗(倍速/队列/睡眠)开着 → 这次空白点击是为了关弹窗
+      //   (已由弹窗各自的 outside 监听在 mousedown 关掉)，不应被判定成「进入沉浸页」。
+      if (this._menuOpenAtDown) return;
       if (event.target === this.mouseDownTarget) {
         this.openImmersive();
       }
@@ -1435,6 +1443,18 @@ export default {
     },
     handleMouseDown(event) {
       this.mouseDownTarget = event.target;
+      // [修冲突] 记下按下瞬间是否有功能弹窗开着(此刻弹窗尚未被 outside 监听关闭：
+      //   元素冒泡监听先于 document 监听触发)。handleClick 据此区分「关弹窗」与「进沉浸页」。
+      this._menuOpenAtDown = this._anyMenuOpen();
+    },
+    // [修冲突] 是否有任一功能弹窗开着(倍速/队列/睡眠/沉浸页音量)。
+    _anyMenuOpen() {
+      return (
+        this.rateMenuOpen ||
+        this.sleepMenuOpen ||
+        this.queuePanelOpen ||
+        this.volMenuOpen
+      );
     },
     playPrevTrack() {
       this.player.playPrevTrack();
@@ -1682,6 +1702,18 @@ export default {
           if (p && this._immPaletteSrc === src) this.immPalette = p;
         })
         .catch(() => {});
+    },
+    // [修冲突] 沉浸页空白区按下：记下此刻是否有功能弹窗开着(此时弹窗尚未被 outside 监听关掉)。
+    onImmStageMouseDown() {
+      this._menuOpenAtDown = this._anyMenuOpen();
+    },
+    // [修冲突] 沉浸页空白区点击：若按下时有弹窗 → 这次点击只是关弹窗(已关)，不退出沉浸页；否则退出。
+    onImmStageClick() {
+      if (this._menuOpenAtDown) {
+        this._menuOpenAtDown = false;
+        return;
+      }
+      this.closeImmersive();
     },
     // 点单集名 → 单集详情(播客) / 列表(网易云)，并收起沉浸页(方案决策5)
     immClickTitle() {
