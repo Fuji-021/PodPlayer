@@ -178,6 +178,7 @@
             :class="{
               charging: markCharging,
               pulse: markPulse,
+              cleared: markCleared,
               rainbow: markCount > 10,
             }"
             :style="
@@ -481,9 +482,14 @@
               </div>
             </div>
 
-            <!-- 细胶囊进度条：首尾不显时间，仅 hover 浮出该点时间 -->
+            <!-- 细胶囊进度条：首尾不显时间，仅 hover 浮出该点时间。
+                 [修] 补 nyancat 彩蛋类(与 bar 一致)：彩虹猫开启时沉浸页进度条也变彩虹猫 -->
             <div
               class="imm-progress"
+              :class="{
+                nyancat: settings.nyancatStyle,
+                'nyancat-stop': settings.nyancatStyle && !player.playing,
+              }"
               @click.stop
               @mousemove="onProgressHover"
               @mouseleave="hoverTime = null"
@@ -714,6 +720,7 @@
                   :class="{
                     charging: markCharging,
                     pulse: markPulse,
+                    cleared: markCleared,
                     rainbow: markCount > 10,
                   }"
                   :style="
@@ -834,6 +841,7 @@ export default {
       markColor: '#e67e22',
       markCharging: false,
       markPulse: false,
+      markCleared: false, // [修] 长按充能满(清空标记)时给 icon 一记"清空"反馈动画(两端共用)
       markHovering: false, // [B-77] hover 标记键 → 播放头上方浮"标记此刻"提示
       // [播客改造] 单集名是否溢出（决定是否启用跑马灯）
       nameOverflow: false,
@@ -1066,9 +1074,10 @@ export default {
     // [B-46] 卸载睡眠定时器的监听与计时器
     this.closeSleepMenu();
     this.clearSleep();
-    // [B-75] 清理标记长按/pulse 计时器
+    // [B-75] 清理标记长按/pulse/清空 计时器
     clearTimeout(this._markTimer);
     clearTimeout(this._markPulseTimer);
+    clearTimeout(this._markClearTimer);
     // [沉浸式播放页 P0] 卸载时若沉浸页还开着，恢复全局滚动 + 关队列/音量面板监听(防泄漏) + 清 body 标记
     this.closeQueuePanel();
     this.closeVolMenu();
@@ -1159,12 +1168,24 @@ export default {
       this.markCharging = true;
       clearTimeout(this._markTimer);
       this._markTimer = setTimeout(() => {
-        // 长按满 3 秒 → 清空本集全部标记
+        // 长按满 3 秒 → 清空本集全部标记 + icon「清空」反馈(不能只有充能圈、icon 也要动)
         this.markCharging = false;
         this._markPressed = false;
         this._markTimer = null;
         this.clearAllMarks();
+        this.flashMarkCleared();
       }, 3000);
+    },
+    // [修] 长按充能满时给 icon 一记"清空"动画(scale 先收后弹=放电感)。两端共用 .mark-control.cleared。
+    flashMarkCleared() {
+      this.markCleared = false;
+      clearTimeout(this._markClearTimer);
+      this.$nextTick(() => {
+        this.markCleared = true;
+        this._markClearTimer = setTimeout(() => {
+          this.markCleared = false;
+        }, 460);
+      });
     },
     // 松手：未到 5 秒 = 短按 → 标记当前时间点（mouseup）
     onMarkPressEnd() {
@@ -2173,6 +2194,11 @@ export default {
   &.pulse .mark-icon {
     transform: scale(1.32);
   }
+  // [修] 长按充能满(清空标记)：图标「先收后弹」一下=放电/重置感，确认动作生效——
+  //   不能只有充能圈在攒、满了 icon 毫无反馈。bar 与沉浸页共用本规则(.mark-control)。
+  &.cleared .mark-icon {
+    animation: markClearPop 0.46s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
   // 长按充能：圈用 3 秒线性放大填满（与长按判定时长一致）
   &.charging .mark-charge {
     transform: scale(1);
@@ -2201,6 +2227,21 @@ export default {
   }
   100% {
     color: hsl(360, 80%, 56%);
+  }
+}
+// [修] 长按充能满 → icon 放电/重置反馈：先收(0.72)后弹(1.28)再回弹到 1
+@keyframes markClearPop {
+  0% {
+    transform: scale(1);
+  }
+  28% {
+    transform: scale(0.72);
+  }
+  60% {
+    transform: scale(1.28);
+  }
+  100% {
+    transform: scale(1);
   }
 }
 
@@ -2740,22 +2781,26 @@ export default {
 .imm-progress {
   position: relative;
   margin-bottom: clamp(14px, 2.4vh, 26px);
-  ::v-deep .vue-slider-rail {
-    background-color: rgba(255, 255, 255, 0.18);
-    border-radius: 999px;
-  }
-  ::v-deep .vue-slider-process {
-    background-color: rgba(255, 255, 255, 0.92);
-    border-radius: 999px;
-  }
-  ::v-deep .vue-slider-dot-handle {
-    background-color: #fff;
-    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
-    visibility: hidden; // 干净：平时藏点，hover/拖动才现
-  }
-  ::v-deep .vue-slider:hover .vue-slider-dot-handle,
-  ::v-deep .vue-slider:active .vue-slider-dot-handle {
-    visibility: visible;
+  // 白色胶囊样式：仅在「非彩虹猫」时生效。开了 nyancat 就整段让位给全局 .nyancat 彩虹猫样式
+  //   (slider.css；本组件 scoped 白色规则带 data 属性、特异性更高，会压过彩虹猫，故用 :not 排除)。
+  &:not(.nyancat) {
+    ::v-deep .vue-slider-rail {
+      background-color: rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+    }
+    ::v-deep .vue-slider-process {
+      background-color: rgba(255, 255, 255, 0.92);
+      border-radius: 999px;
+    }
+    ::v-deep .vue-slider-dot-handle {
+      background-color: #fff;
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+      visibility: hidden; // 干净：平时藏点，hover/拖动才现
+    }
+    ::v-deep .vue-slider:hover .vue-slider-dot-handle,
+    ::v-deep .vue-slider:active .vue-slider-dot-handle {
+      visibility: visible;
+    }
   }
   // [批注] 去掉黑底小弹窗(太丑/显示突兀)：纯白字 + 文字阴影，亮背景上也看得清，无方框
   .progress-hover-tip {
