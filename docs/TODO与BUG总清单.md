@@ -1,19 +1,17 @@
 # PodPlayer · TODO 与 BUG 总清单（持久·防记忆丢失）
 
-> 2026-06-14 汇总(工作流跨 known-bugs / nas-dev-notes / 主文档待办 / 功能建议 / 各记忆去重，66→53 条) + 本会话更新。
-> 单一参考清单;具体细节仍以各源文档为准。状态:🔴open / 🟡pending-verify(已做待真机验) / 🔵in-progress / 🟣paused / ✅done(本会话刚完成,留痕一轮后删)。
+> 2026-06-14 汇总 + 06-15 更新(沉浸式播放页 + 打包测试版)。
+> 单一参考清单;具体细节仍以各源文档为准。状态:🔴open / 🟡pending-verify(已做待真机验) / 🔵in-progress / 🟣paused / ✅done(留痕一轮后删)。
 > ⚠️ 用户提醒:清单部分条目与现实有出入(碰到再据实核对、勿盲信);**把基础功能做好最重要**。
 
 ---
 
-## ✅ 本会话(2026-06-14)已完成（下轮可删）
-- ✅ 事故根因(多实例抢 LevelDB 锁)根治 + 实例隔离(PODPLAYER_PROFILE) + §五真机验收 + 已并 master/push
-- ✅ 数据事故善后:relink 工具 / 自动备份(userData\backups) / resetApp 加 confirm
-- ✅ 仓库改名 Fuji-021/PodPlayer + 用户可见品牌 YesPlayMusic→PodPlayer + README 重写
-- ✅ 图标统一为 Lucide 描边(24 个)+ 点击微反馈 + viewBox 微放大;收藏 heart 同步放大
-- ✅ NAS hover 提示改自定义干净 tooltip(「NAS 已连接」去原生丑边框)
-- ✅ 进度条「标记此刻」+ hover 时间显示 贴边防越界(clamp)
-- ✅ 呼吸灯萤火虫式 v2.0(更早完成,用户明确满意——**不是待办**)
+## ✅ 近期已完成（留痕一轮后删）
+**2026-06-15 本会话（沉浸式播放页 + 打包测试版）**
+- ✅ **沉浸式播放页 P0 + 6 轮批注打磨**：背景 C 混合(coverPalette 三色)/大封面 scale/胶囊进度/三组控制(倍速·列表·睡眠 ｜ 三大金刚 ｜ 标记·收藏·音量)/音量点击弹窗/点击进退冲突修复/进度标记刻度·缓冲·长按充能反馈·彩虹猫**两端一致**。分支 `feature/immersive-player` 已 push，**待用户验收 → 进 P1**。细节见主文档「沉浸式播放页」段。
+- ✅ 打包**正式版(prod=PodPlayer 身份)** 测试包 → `D:\MyYesPlayerMusic\打包版本`(portable 免安装 + nsis 安装包)，供他人测试；与开发版(PodPlayerDev)零冲突。
+
+**2026-06-14 上会话（已稳定，下轮可删）**：实例隔离根治+验收+并 master / 数据善后(relink·备份·resetApp) / 改名+品牌+README / Lucide 图标统一+点击反馈 / NAS hover 提示 / 进度条提示防越界 / 呼吸灯 v2(已满意)。
 
 ---
 
@@ -49,6 +47,7 @@
 ## ✅ TODO
 
 ### P1
+- 🔴🔜 **NAS 订阅托管 + 智能回收（下一轮主攻 · 计划下周做）** — 声明式 + 对账模型：订阅成功自动托管到 ABS/NAS(autoDownload + 下最近100期)、6 个月未听冷藏(删 NAS 单集留最近1集+所有收藏)、取消订阅 7 天宽限后删整档、首连新 NAS 差异对账(只动我订阅过的)。**P0=订阅托管 + 无 NAS 降级**先看效果；P1=冷藏/对账/移除/差异/README 教程。执行提示词=`docs/NAS订阅托管-执行提示词.md`、设计=`docs/NAS订阅托管方案.md`；切分支 `feature/nas-handoff`。
 - 🟡 **NAS P3 中途掉线续播** — 代码已落地(并入 master 3b1db90),**待真机断网验收**(≤5s 续 CDN/误差<2s + NAS 关闭态核心回归)。
 - 🔴 桌面通知(新单集/下载完成,须合 Windows 通知框架)。
 - 🔴 托盘菜单 + 任务栏缩略图三键(上一首/暂停/下一首)。
@@ -63,7 +62,7 @@
 - 🔴 **NAS 源节目「第三大板块」** — navbar 第三板块(首页/我的订阅之外),排版区别于二者(样式未定);是 nas §10 #2「我的NAS栏」升级设想。用户 2026-06-14 提,优先级低、设计未定。
 - 🔴 NAS-在档标识(#4:单集/节目「NAS 上有」呼吸点,需设计,别复用来源点)。
 - 🔵 NAS 图标黄(慢)态 + 长断联换 wifi-password 图标 + 自动重试/原因提示(#7)。
-- 🔴 沉浸式播放页(播放 bar 展开,复用 lyrics.vue)——**下一轮主攻**。
+- 🟡 沉浸式播放页：**P0 已完成**(分支 feature/immersive-player，6 轮打磨，已 push、待用户验收)；剩 **P1**(全屏 maximize+隐顶栏 + ESC 单击退/双击最小化 + 顶部跟随鼠标退出气泡 + 快捷键)、P2 动态流体背景、P3 图标 FLIP 飞入飞出。
 - 🔴 设置页完善(导出收听数据 CSV/JSON、全局媒体热键、同时下载集数1-10 UI、键盘可达)。
 - 🔴 睡眠「本集结束」与自动续播队列边界。
 - 🟣 多源资源池·Apple 官方榜 adapter(首页板块,paused)。
@@ -85,8 +84,8 @@
 ---
 
 ## 关键状态锚点（接手先看）
-- 分支:**已统一在 `master`** 开发(feature/nas-source 已并入、可弃);master=origin=`68da99b`,仓库 `Fuji-021/PodPlayer`。
+- 分支:沉浸式在 **`feature/immersive-player`**(off master、已 push、待用户验收后并入);**下一轮 NAS 将切 `feature/nas-handoff`**;master=`c2cd29d`,仓库 `Fuji-021/PodPlayer`。
 - 实例隔离:prod=PodPlayer/10754/27232 · dev=PodPlayerDev/10755/27233/devserver20201 · sandbox=PodPlayerSandbox/10756/27234/devserver20202。启动:scripts/start-dev.bat / start-sandbox.bat。
 - 数据:用户真实数据在 dev(PodPlayerDev/20201);进度/统计/收藏曾因事故不可恢复、现有自动备份兜底。
-- 打包建议:做好后打包**正式版(prod=PodPlayer 身份)**→ 与 dev-serve 零冲突;**勿打包成 dev 身份**(同身份冲突)。
+- 打包:**正式版(prod=PodPlayer 身份)** 与 dev-serve 零冲突;**勿打包 dev 身份**。2026-06-15 已打 0.4.10 测试包(portable 免安装 + nsis 安装版)→ `D:\MyYesPlayerMusic\打包版本`;命令 `vue-cli-service electron:build -p never -w`(Node16 路径、**不带** NODE_OPTIONS=--openssl-legacy-provider，Node16 不认会 exit 9)。
 - 关联记忆:[[known-bugs]] [[nas-feature-branch]] [[perf-optimization-goal]] [[dev-environment]] [[versioning-rules]] [[resource-pool-plan-status]] [[discover-redesign-spec]]。
