@@ -44,6 +44,20 @@ const log = text => {
   console.log(`${clc.blueBright('[background.js]')} ${text}`);
 };
 
+// [审P1-1 兜底] 主进程最后一道防线：任何未捕获异常 / 未处理 Promise 拒绝只记录、不让整个 app 崩溃。
+//   配合 podcastDownload.js 已给下载写入流补 'error' 监听（首要修复），这里再兜底其它意外路径
+//   —— Node 默认对未捕获 'error'/rejection 会直接终止主进程，对桌面 app 是灾难。
+//   只 log、不退出、不弹窗，避免打断正在进行的播放 / 下载。
+process.on('uncaughtException', err => {
+  console.error(
+    '[background.js] uncaughtException:',
+    (err && err.stack) || err
+  );
+});
+process.on('unhandledRejection', reason => {
+  console.error('[background.js] unhandledRejection:', reason);
+});
+
 // [事故根治·实例隔离] 用环境变量 PODPLAYER_PROFILE 驱动「身份 → userData → IndexedDB」
 //   与端口三件套，让 正式版 / 开发版 / 测试床 各自拥有独立 app name → 独立 userData 目录
 //   → 独立 LevelDB，三者可同时运行、永不抢同一个 LOCK（本次 backing store 打不开的根因）。

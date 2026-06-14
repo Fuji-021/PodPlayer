@@ -144,8 +144,53 @@ export function registerPodcastDownloadIpc(getWindow) {
       const filePath = path.join(dir, safeFileName(guid) + ext);
       const total = Number(res.headers['content-length']) || 0;
       const writeStream = fs.createWriteStream(filePath);
-      const task = { res, writeStream, filePath, canceled: false };
+      const task = {
+        res,
+        writeStream,
+        filePath,
+        canceled: false,
+        settled: false,
+      };
       activeTasks.set(episodeId, task);
+
+      // [审P1-1 修] 统一失败收尾：去重(settled) + 停两端流 + 删半成品 + 上报 error(单集不再卡"下载中")。
+      //   核心：writeStream 的 'error'(磁盘满 ENOSPC / 目录被删/只读 ENOENT·EACCES)此前无监听，
+      //   Node 对未监听的 stream 'error' 会直接 throw → **整个 Electron 主进程崩溃**。这里补上兜底。
+      const failDownload = (err, where) => {
+        if (task.settled) return;
+        task.settled = true;
+        activeTasks.delete(episodeId);
+        try {
+          res.destroy();
+        } catch (e) {
+          // ignore
+        }
+        try {
+          writeStream.destroy();
+        } catch (e) {
+          // ignore
+        }
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch (e) {
+          // ignore
+        }
+        if (task.canceled) return;
+        console.error(
+          '[download]',
+          where,
+          'error',
+          episodeId,
+          err && (err.message || err)
+        );
+        const w = getWindow && getWindow();
+        if (w && !w.isDestroyed()) {
+          w.webContents.send('podcast:download:error', {
+            episodeId,
+            error: String((err && err.message) || err),
+          });
+        }
+      };
 
       let done = 0;
       let lastSent = 0;
@@ -166,8 +211,14 @@ export function registerPodcastDownloadIpc(getWindow) {
           });
         }
       });
-      res.on('end', () => {
-        if (task.canceled) return;
+      res.on('error', err => failDownload(err, 'response'));
+      // [审P1-1] 写入流出错(磁盘满/目录不可写)兜底——缺这条会崩主进程
+      writeStream.on('error', err => failDownload(err, 'write'));
+      // 完成信号挂 writeStream 'finish'(文件真正落盘后)而非 res 'end'(读完即触发、可能尚未写完)：
+      //   更准确，且与 failDownload 的 settled 天然互斥，避免"写失败却报完成"留坏文件。
+      writeStream.on('finish', () => {
+        if (task.settled || task.canceled) return;
+        task.settled = true;
         activeTasks.delete(episodeId);
         console.log('[download] done', episodeId, done, 'bytes');
         const w = getWindow && getWindow();
@@ -176,24 +227,6 @@ export function registerPodcastDownloadIpc(getWindow) {
             episodeId,
             filePath,
             bytesTotal: done,
-          });
-        }
-      });
-      res.on('error', err => {
-        activeTasks.delete(episodeId);
-        try {
-          writeStream.destroy();
-          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        } catch (e) {
-          // ignore
-        }
-        if (task.canceled) return;
-        console.error('[download] stream error', err && err.message);
-        const w = getWindow && getWindow();
-        if (w && !w.isDestroyed()) {
-          w.webContents.send('podcast:download:error', {
-            episodeId,
-            error: String((err && err.message) || err),
           });
         }
       });
@@ -211,6 +244,7 @@ export function registerPodcastDownloadIpc(getWindow) {
     const task = activeTasks.get(episodeId);
     if (!task) return { ok: false, error: '没有正在进行的下载' };
     task.canceled = true;
+    task.settled = true; // [审P1-1] 取消即定锚：destroy 触发的 error/finish 全部短路、不误报
     try {
       task.res.destroy();
     } catch (e) {
