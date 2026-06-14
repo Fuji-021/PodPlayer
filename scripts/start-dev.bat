@@ -1,35 +1,35 @@
 @echo off
-title YesPlayMusic Podcast - Dev
+title PodPlayer Dev (profile=dev)
 echo ============================================================
-echo  YesPlayMusic Podcast (fork) - Dev Mode
+echo  PodPlayer - DEV instance (profile=dev)
+echo  name=PodPlayerDev  devserver=20201  neapi=10755  express=27233
 echo ============================================================
 echo.
+
+REM [事故根治] 实例隔离：本脚本只启动 / 只清理「开发版(dev)」这一个实例。
+REM   身份 PodPlayerDev -> %APPDATA%\PodPlayerDev\ -> 独立 IndexedDB，永不与
+REM   正式版(PodPlayer)/测试床(PodPlayerSandbox) 抢同一个 LevelDB 锁。
+REM   详见 docs/实例隔离规范.md。
+
+REM 0) 实例三件套（端口）+ profile。这些环境变量会被 electron 主进程与 vue-cli 继承，
+REM    且 vue-cli(4.5) 的 dotenv 不会覆盖已存在的 process.env，故此处设置优先于 .env。
+set "PODPLAYER_PROFILE=dev"
+set "DEV_SERVER_PORT=20201"
+set "VUE_APP_ELECTRON_API_URL_DEV=http://127.0.0.1:10755"
 
 REM 1) Switch to Node 16
 set "PATH=C:\nvm4w\nodejs;%PATH%"
 
-REM 2) Kill stale electron processes
-echo [1/5] Killing stale electron processes...
-taskkill /F /IM electron.exe /T >nul 2>&1
-
-REM 3) IMPORTANT: Release port 20201 (used by webpack-dev-server, a node process).
-REM     If port 20201 stays occupied, webpack will silently switch to 20202,
-REM     and IndexedDB (per-origin) on the new port will show no podcasts.
-echo [2/5] Releasing port 20201 (webpack-dev-server)...
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20201" ^| findstr "LISTENING"') do (
-    taskkill /F /PID %%P >nul 2>&1
-)
-REM Also release port 10755 (NetEase API embedded server) and 27233 (express)
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":10755" ^| findstr "LISTENING"') do (
-    taskkill /F /PID %%P >nul 2>&1
-)
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":27233" ^| findstr "LISTENING"') do (
-    taskkill /F /PID %%P >nul 2>&1
-)
+REM 2) 只释放「本实例(dev)」占用的端口，绝不再 taskkill /IM electron.exe 一锅端
+REM    （那会误杀测试床/其它实例）。按端口精确清理：20201(webpack) 10755(neapi) 27233(express)。
+echo [1/4] Releasing DEV ports 20201 / 10755 / 27233 ...
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20201" ^| findstr "LISTENING"') do taskkill /F /PID %%P >nul 2>&1
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":10755" ^| findstr "LISTENING"') do taskkill /F /PID %%P >nul 2>&1
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":27233" ^| findstr "LISTENING"') do taskkill /F /PID %%P >nul 2>&1
 timeout /t 1 /nobreak >nul
 
-REM 4) Enter project dir
-echo [3/5] Entering project dir...
+REM 3) Enter project dir
+echo [2/4] Entering project dir...
 cd /d "D:\MyYesPlayerMusic\YesPlayMusic"
 if errorlevel 1 (
     echo *** ERROR: cd to project failed ***
@@ -37,8 +37,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM 5) Verify Node available
-echo [4/5] Checking Node...
+REM 4) Verify Node available
+echo [3/4] Checking Node...
 node -v
 if errorlevel 1 (
     echo *** ERROR: node not on PATH. Check nvm-windows install. ***
@@ -47,8 +47,8 @@ if errorlevel 1 (
 )
 echo.
 
-REM 6) Run dev
-echo [5/5] yarn electron:serve ...
+REM 5) Run dev
+echo [4/4] yarn electron:serve (profile=dev) ...
 echo ------------------------------------------------------------
 echo  Closing this window = stopping the whole dev (webpack + electron)
 echo ------------------------------------------------------------

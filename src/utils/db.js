@@ -235,3 +235,94 @@ export function clearDB() {
     resolve();
   });
 }
+
+// [事故根治] IndexedDB backing-store 兜底
+// ----------------------------------------------------------------------------
+// 当多个同身份实例抢同一个 LevelDB LOCK，或磁盘库损坏时，db.open() 会抛
+// UnknownError / InvalidStateError（"Internal error opening backing store
+// for indexedDB.open."）。Dexie 默认惰性打开、抛错后整页白屏。这里主动 open，
+// 失败时弹出明确的全屏提示 + 重试/自救引导，而不是静默白屏。
+// 详见 docs/调查报告-IndexedDB无法打开.md 与 docs/实例隔离规范.md。
+
+// 另一个连接要升级 schema 却被本连接挡住（极少见，正常会自动协商）→ 提示用户关闭多余窗口。
+db.on('blocked', () => {
+  console.warn(
+    '[db] open blocked：另一个连接正在升级数据库，请关闭其它 PodPlayer 窗口后重试。'
+  );
+});
+
+// 别的连接升级了版本 → 主动关闭本连接，避免把对方卡死（IndexedDB 标准做法）。
+db.on('versionchange', () => {
+  console.warn('[db] versionchange：另一实例升级了数据库，关闭本连接。');
+  db.close();
+});
+
+function showDbFatalOverlay(err) {
+  if (typeof document === 'undefined') return;
+  const render = () => {
+    if (!document.body || document.getElementById('db-fatal-overlay')) return;
+    const name = (err && err.name) || 'Error';
+    const msg = (err && err.message) || String(err);
+    const el = document.createElement('div');
+    el.id = 'db-fatal-overlay';
+    el.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'z-index:2147483647',
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'background:rgba(0,0,0,.55)',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      '-webkit-app-region:no-drag',
+    ].join(';');
+    el.innerHTML =
+      '<div style="max-width:520px;background:#1f1f22;color:#eee;border-radius:16px;' +
+      'padding:28px 30px;box-shadow:0 20px 60px rgba(0,0,0,.5);line-height:1.6">' +
+      '<div style="font-size:18px;font-weight:600;margin-bottom:10px">本地数据库无法打开</div>' +
+      '<div style="font-size:13px;color:#bbb;margin-bottom:14px">' +
+      '错误：<code style="color:#ff8a8a">' +
+      name +
+      '</code> — ' +
+      msg +
+      '</div>' +
+      '<div style="font-size:13px;color:#ccc;margin-bottom:8px">最可能的原因：' +
+      '<b>同时打开了多个 PodPlayer 实例</b>，抢占同一个数据库文件锁；或磁盘库损坏。</div>' +
+      '<ul style="font-size:13px;color:#ccc;margin:0 0 18px 18px;padding:0">' +
+      '<li>关闭其它 PodPlayer 窗口/实例后点「重试」。</li>' +
+      '<li>任务管理器结束多余的 PodPlayer*.exe / electron.exe 进程后重试。</li>' +
+      '<li>仍失败可能是磁盘库损坏，参考 docs/调查报告-IndexedDB无法打开.md（§6.2 自救）。</li>' +
+      '</ul>' +
+      '<div style="text-align:right">' +
+      '<button id="db-fatal-retry" style="background:#1db954;color:#fff;border:0;' +
+      'border-radius:10px;padding:9px 18px;font-size:14px;font-weight:600;cursor:pointer">重试</button>' +
+      '</div></div>';
+    document.body.appendChild(el);
+    const btn = document.getElementById('db-fatal-retry');
+    if (btn) btn.addEventListener('click', () => window.location.reload());
+  };
+  if (document.body) render();
+  else window.addEventListener('DOMContentLoaded', render);
+}
+
+// 主动打开数据库；失败按错误类型决定是否弹兜底层。供启动期与按需调用。
+export function openDatabase() {
+  return db.open().catch(err => {
+    const name = err && err.name;
+    console.error('[db] open failed:', name, err && err.message);
+    if (
+      name === 'UnknownError' ||
+      name === 'InvalidStateError' ||
+      name === 'VersionError'
+    ) {
+      showDbFatalOverlay(err);
+    }
+    throw err;
+  });
+}
+
+// 应用启动即尝试打开，第一时间暴露 backing-store 故障（而非等首次查询才白屏）。
+// 仅在 Electron 渲染端执行（磁盘 LevelDB 才有锁/损坏问题；纯 web 构建跳过）。
+if (typeof window !== 'undefined' && process.env.IS_ELECTRON) {
+  openDatabase().catch(() => {});
+}

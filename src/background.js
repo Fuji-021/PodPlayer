@@ -44,6 +44,33 @@ const log = text => {
   console.log(`${clc.blueBright('[background.js]')} ${text}`);
 };
 
+// [事故根治·实例隔离] 用环境变量 PODPLAYER_PROFILE 驱动「身份 → userData → IndexedDB」
+//   与端口三件套，让 正式版 / 开发版 / 测试床 各自拥有独立 app name → 独立 userData 目录
+//   → 独立 LevelDB，三者可同时运行、永不抢同一个 LOCK（本次 backing store 打不开的根因）。
+//   未设置时默认 prod（打包安装版）。详见 docs/实例隔离规范.md。
+const PODPLAYER_PROFILE = process.env.PODPLAYER_PROFILE || 'prod';
+const PODPLAYER_PROFILES = {
+  prod: { name: 'PodPlayer', title: 'PodPlayer', neapi: 10754, express: 27232 },
+  dev: {
+    name: 'PodPlayerDev',
+    title: 'PodPlayer Dev',
+    neapi: 10755,
+    express: 27233,
+  },
+  sandbox: {
+    name: 'PodPlayerSandbox',
+    title: 'PodPlayer 测试床',
+    neapi: 10756,
+    express: 27234,
+  },
+};
+const PROFILE =
+  PODPLAYER_PROFILES[PODPLAYER_PROFILE] || PODPLAYER_PROFILES.prod;
+log(
+  `instance profile = ${PODPLAYER_PROFILE} ` +
+    `(name=${PROFILE.name}, neapi=${PROFILE.neapi}, express=${PROFILE.express})`
+);
+
 const closeOnLinux = (e, win, store) => {
   let closeOpt = store.get('settings.closeAppOption');
   if (closeOpt !== 'exit') {
@@ -107,20 +134,20 @@ class Background {
   init() {
     log('initializing');
 
-    // [播客改造] 让本 fork 作为独立应用运行：使用独立的应用名与用户数据目录，
-    // 避免与已安装的 YesPlayMusic 正式版共用单实例锁和本地数据，
-    // 从而允许两者同时运行、互不干扰（正式版作为对照组保留）。
-    app.setName('YesPlayMusicPodcast');
+    // [事故根治·实例隔离] 身份由 PODPLAYER_PROFILE 决定（见文件顶部 PROFILE）。
+    //   app.setName(X) 决定 userData = %APPDATA%\X\ 决定 IndexedDB 物理位置 …\X\IndexedDB\。
+    //   name 唯一 → 库物理隔离 → 多实例永不抢同一 LevelDB LOCK。详见 docs/实例隔离规范.md。
+    app.setName(PROFILE.name);
     app.setPath(
       'userData',
-      require('path').join(app.getPath('appData'), 'YesPlayMusicPodcast')
+      require('path').join(app.getPath('appData'), PROFILE.name)
     );
 
     // Make sure the app is singleton.
     if (!app.requestSingleInstanceLock()) return app.quit();
 
-    // start netease music api
-    this.neteaseMusicAPI = startNeteaseMusicApi();
+    // start netease music api（端口随 PROFILE，避免多实例 EADDRINUSE）
+    this.neteaseMusicAPI = startNeteaseMusicApi(PROFILE.neapi);
 
     // create Express app
     this.createExpressApp();
@@ -169,7 +196,7 @@ class Background {
 
     const expressApp = express();
     expressApp.use('/', express.static(__dirname + '/'));
-    expressApp.use('/api', expressProxy('http://127.0.0.1:10755'));
+    expressApp.use('/api', expressProxy('http://127.0.0.1:' + PROFILE.neapi));
     expressApp.use('/player', (req, res) => {
       this.window.webContents
         .executeJavaScript('window.yesplaymusic.player')
@@ -182,7 +209,7 @@ class Background {
           });
         });
     });
-    this.expressApp = expressApp.listen(27233, '127.0.0.1');
+    this.expressApp = expressApp.listen(PROFILE.express, '127.0.0.1');
   }
 
   createWindow() {
@@ -204,7 +231,7 @@ class Background {
         isWindows ||
         (isLinux && this.store.get('settings.linuxEnableCustomTitlebar'))
       ),
-      title: 'YesPlayMusic',
+      title: PROFILE.title,
       show: false,
       webPreferences: {
         webSecurity: false,
@@ -278,8 +305,8 @@ class Background {
       createProtocol('app');
       this.window.loadURL(
         showLibraryDefault
-          ? 'http://localhost:27233/#/library'
-          : 'http://localhost:27233'
+          ? 'http://localhost:' + PROFILE.express + '/#/library'
+          : 'http://localhost:' + PROFILE.express
       );
     }
   }
