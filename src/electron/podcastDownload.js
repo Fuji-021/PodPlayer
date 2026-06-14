@@ -249,6 +249,10 @@ export function registerPodcastDownloadIpc(getWindow) {
     return { ok: true, exists: fs.existsSync(filePath) };
   });
 
+  // [事故恢复] 返回当前实例 userData 目录：供渲染端做"按当前身份"的下载路径迁移，
+  //   避免硬编码身份名把非 dev 实例(测试床/正式版)的下载路径错改。
+  ipcMain.handle('podcast:userDataDir', () => app.getPath('userData'));
+
   // [事故恢复] 下载重挂：清库后下载记录丢失但音频文件还在磁盘(孤儿)。
   //   按与下载端完全相同的命名规则 podcastHashOf(feedUrl)/safeFileName(guid) 反查磁盘文件，
   //   返回匹配到的 { id, podcastId, filePath, bytesTotal }，由渲染端写回 episodeDownloads。

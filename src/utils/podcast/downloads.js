@@ -312,14 +312,21 @@ export async function relinkDownloads() {
   let relinked = 0;
   for (const m of res.matched) {
     const existed = await db.episodeDownloads.get(m.id);
-    if (existed && existed.status === 'done') continue;
+    // 已是 done 且路径正确 → 跳过；路径不符(如迁移后失准)→ 仍以磁盘实测路径纠正。
+    if (
+      existed &&
+      existed.status === 'done' &&
+      existed.filePath === m.filePath
+    ) {
+      continue;
+    }
     await db.episodeDownloads.put({
       id: m.id,
       podcastId: m.podcastId,
       filePath: m.filePath,
       bytesTotal: m.bytesTotal || 0,
       status: 'done',
-      addedAt: Date.now(),
+      addedAt: (existed && existed.addedAt) || Date.now(),
     });
     store.commit('addDownloadedEpisode', { id: m.id, filePath: m.filePath });
     relinked++;
@@ -330,4 +337,49 @@ export async function relinkDownloads() {
     scanned: eps.length,
     matched: res.matched.length,
   };
+}
+
+// [事故恢复·一次性] 实例改名后（YesPlayMusicPodcast → 当前身份）的下载恢复：
+//   ① 把 episodeDownloads 里旧绝对前缀 \YesPlayMusicPodcast\ 改成「当前实例」目录
+//      （basename 来自主进程 app.getPath('userData')，绝不硬编码 PodPlayerDev，
+//      避免测试床/正式版首启被错改）；② 若确有记录被改写，再跑一次 relinkDownloads()
+//      用 sha1 反查兜底（覆盖"前缀改了但文件没搬/路径仍不符"的情况）。
+//   localStorage FLAG 只跑一次；空库/无旧前缀记录自然 no-op。由 main.js 启动期调用。
+export async function recoverDownloadsOnce() {
+  if (!ipcRenderer) return;
+  try {
+    const FLAG = 'podplayer_dlpath_migrated_v1';
+    if (window.localStorage.getItem(FLAG)) return;
+    const userData = await ipcRenderer.invoke('podcast:userDataDir');
+    const cur = String(userData || '')
+      .replace(/[\\/]+$/, '')
+      .split(/[\\/]/)
+      .pop();
+    let migrated = 0;
+    if (cur && cur !== 'YesPlayMusicPodcast') {
+      const OLD = '\\YesPlayMusicPodcast\\';
+      const NEW = '\\' + cur + '\\';
+      const rows = await db.episodeDownloads.toArray();
+      for (const r of rows) {
+        if (r && r.filePath && r.filePath.indexOf(OLD) !== -1) {
+          await db.episodeDownloads.update(r.id, {
+            filePath: r.filePath.split(OLD).join(NEW),
+          });
+          migrated++;
+        }
+      }
+    }
+    // 仅当确有旧前缀记录被改写时，才用 sha1 反查兜底（避免对空库做无谓全盘扫描）。
+    if (migrated > 0) {
+      try {
+        await relinkDownloads();
+      } catch (e) {
+        // ignore
+      }
+      console.log(`[downloads] 已迁移 ${migrated} 条下载路径 → ${cur}`);
+    }
+    window.localStorage.setItem(FLAG, '1');
+  } catch (e) {
+    console.warn('[downloads] recoverDownloadsOnce 失败', e);
+  }
 }

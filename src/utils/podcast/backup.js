@@ -15,9 +15,10 @@ const ipcRenderer = window.require
 export async function runBackup() {
   if (!ipcRenderer) return { ok: false, reason: 'not-electron' };
   try {
+    // [瘦身] 不存 episodes 全表（最大、且可由 OPML 重订阅后重抓）。只存不可再生/难再生的：
+    //   订阅元数据 + 收藏 + 收听进度/统计 + 下载记录。
     const [
       podcasts,
-      episodes,
       favorites,
       episodeProgress,
       episodeListenStats,
@@ -25,7 +26,6 @@ export async function runBackup() {
       episodeDownloads,
     ] = await Promise.all([
       db.podcasts.toArray(),
-      db.episodes.toArray(),
       db.favorites.toArray(),
       db.episodeProgress.toArray(),
       db.episodeListenStats.toArray(),
@@ -39,9 +39,13 @@ export async function runBackup() {
     }
 
     const json = JSON.stringify({
-      _meta: { app: 'PodPlayer', at: Date.now(), v: 1 },
+      _meta: {
+        app: 'PodPlayer',
+        at: Date.now(),
+        v: 1,
+        note: 'episodes 表未含，靠 OPML 重抓',
+      },
       podcasts,
-      episodes,
       favorites,
       episodeProgress,
       episodeListenStats,

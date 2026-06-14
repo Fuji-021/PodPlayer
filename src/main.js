@@ -50,39 +50,18 @@ dailyTask();
 // [播客改造 A-7.1] 启动时同步本地收藏 id 列表到 vuex
 store.dispatch('fetchPodcastFavorites');
 
-// [播客改造 诊断] 启动时直接用原生 IndexedDB API 检查 podcasts/episodes 表的真实行数。
-// 用户报告"节目丢失"——这个日志会立即告诉我们：① 表是否还存在；② 真实节目/单集行数。
-// F12 → Console 看 [DB Health] 那行。
-setTimeout(() => {
-  try {
-    const req = indexedDB.open('yesplaymusic');
-    req.onsuccess = e => {
-      const idb = e.target.result;
-      const tables = Array.from(idb.objectStoreNames);
-      console.log('[DB Health] tables:', tables, 'version:', idb.version);
-      ['podcasts', 'episodes', 'favorites', 'episodeProgress'].forEach(t => {
-        if (!tables.includes(t)) {
-          console.warn(`[DB Health] table "${t}" MISSING`);
-          return;
-        }
-        const tx = idb.transaction(t, 'readonly');
-        const req2 = tx.objectStore(t).count();
-        req2.onsuccess = () =>
-          console.log(`[DB Health] ${t} rows:`, req2.result);
-      });
-    };
-    req.onerror = () => console.warn('[DB Health] open failed');
-  } catch (e) {
-    console.warn('[DB Health] error', e);
-  }
-}, 800);
+// [事故善后] 原 [DB Health] 裸 indexedDB.open 诊断探针已移除（事故已定位，见
+//   docs/实例隔离规范.md；少一次每启动的裸开库）。需要时看「我的订阅」或控制台 db 查询。
 
 // [B-31] 注册下载 IPC 监听 + 加载已下载列表灌入 store
 import {
   registerDownloadListeners,
   loadAllDownloads,
+  recoverDownloadsOnce,
 } from '@/utils/podcast/downloads';
 registerDownloadListeners();
+// [事故恢复·一次性] 实例改名后按"当前身份"修正下载绝对路径 + sha1 反查兜底（只跑一次）。
+recoverDownloadsOnce();
 loadAllDownloads()
   .then(rows => {
     // [B-35] 灌入 { id, filePath }，让 pathMap 就绪 → Player 能同步取 file:// 离线播放

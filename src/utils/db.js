@@ -324,38 +324,10 @@ export function openDatabase() {
   });
 }
 
-// [事故根治·一次性数据迁移] 实例改名 YesPlayMusicPodcast → PodPlayerDev 后，
-//   episodeDownloads 里旧的绝对 filePath 仍指向旧身份目录、离线播放会失效。
-//   这里在 PodPlayerDev 首启时把路径前缀一次性改到新身份目录（localStorage 标记只跑一次；
-//   字符串不匹配的库自然 no-op，安全幂等）。详见 docs/实例隔离规范.md 迁移记录。
-async function migrateDownloadPathsOnce() {
-  try {
-    if (typeof window === 'undefined' || !process.env.IS_ELECTRON) return;
-    const FLAG = 'podplayer_dlpath_migrated_v1';
-    if (window.localStorage.getItem(FLAG)) return;
-    const OLD = '\\YesPlayMusicPodcast\\';
-    const NEW = '\\PodPlayerDev\\';
-    const rows = await db.episodeDownloads.toArray();
-    let n = 0;
-    for (const r of rows) {
-      if (r && r.filePath && r.filePath.indexOf(OLD) !== -1) {
-        await db.episodeDownloads.update(r.id, {
-          filePath: r.filePath.split(OLD).join(NEW),
-        });
-        n++;
-      }
-    }
-    window.localStorage.setItem(FLAG, '1');
-    if (n) console.log(`[db] 已迁移 ${n} 条下载路径 → PodPlayerDev`);
-  } catch (e) {
-    console.warn('[db] 下载路径迁移失败', e);
-  }
-}
-
 // 应用启动即尝试打开，第一时间暴露 backing-store 故障（而非等首次查询才白屏）。
 // 仅在 Electron 渲染端执行（磁盘 LevelDB 才有锁/损坏问题；纯 web 构建跳过）。
+// 下载路径迁移/重挂的一次性恢复见 utils/podcast/downloads.js recoverDownloadsOnce()
+// （由 main.js 启动期调用，避免 db.js ↔ downloads.js 循环依赖）。
 if (typeof window !== 'undefined' && process.env.IS_ELECTRON) {
-  openDatabase()
-    .then(() => migrateDownloadPathsOnce())
-    .catch(() => {});
+  openDatabase().catch(() => {});
 }
