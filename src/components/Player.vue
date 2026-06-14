@@ -2153,7 +2153,8 @@ export default {
     inset: 2px;
     border-radius: 50%;
     background: currentColor;
-    opacity: 0.18;
+    // [修] 0.18→0.26：长按充能圈在播放 bar 上更明显一点(沉浸页另有更高 opacity 覆盖，见 .imm-mark)
+    opacity: 0.26;
     transform: scale(0);
     transform-origin: center;
     transition: transform 0.2s ease;
@@ -2829,6 +2830,11 @@ export default {
   .mark-icon {
     width: 20px;
     height: 20px;
+  }
+  // [修] 长按充能圈在深色沉浸页上需更高 opacity 才看得清(覆盖 .mark-control 的 0.26)；
+  //   3 秒线性放大填满的动画本身复用 .mark-control.charging，无需重写。
+  .mark-charge {
+    opacity: 0.45;
   }
 }
 // 音量：点击弹出滑条弹窗(沉浸页专用，区别于 bar 常驻滑条)
