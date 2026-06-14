@@ -1,411 +1,728 @@
 <template>
-  <div class="player" @click="handleClick" @mousedown="handleMouseDown">
-    <!-- [播客改造 A-7.8] 进度条 hover 时间预览：鼠标在任意位置浮动时显示对应时间 -->
-    <div
-      class="progress-bar"
-      :class="{
-        nyancat: settings.nyancatStyle,
-        'nyancat-stop': settings.nyancatStyle && !player.playing,
-      }"
-      @click.stop
-      @mousemove="onProgressHover"
-      @mouseleave="hoverTime = null"
-    >
-      <!-- [播客改造] 关掉 vue-slider 自带的 tooltip（与下方 .progress-hover-tip 重叠）；
-           dot 默认放大效果在 CSS 里抑制（见下方 .progress-bar .vue-slider-dot） -->
-      <vue-slider
-        v-model="player.progress"
-        :min="0"
-        :max="player.currentTrackDuration"
-        :interval="1"
-        :drag-on-click="true"
-        :duration="0"
-        :dot-size="12"
-        :height="2"
-        tooltip="none"
-        :lazy="true"
-        :silent="true"
-      ></vue-slider>
+  <!-- [沉浸式播放页 P0] display:contents 包一层：原 .player bar 的盒子/定位/层叠完全不变(零回归)，
+       只是多出一个全屏 overlay 兄弟节点。沉浸页是「叠加皮肤」——复用本组件全部播放状态与方法
+       (同一 howler 实例、同一份 Vuex)，严禁另起播放逻辑或复制状态。详见 docs/沉浸式播放页方案.md。 -->
+  <div class="player-root">
+    <div class="player" @click="handleClick" @mousedown="handleMouseDown">
+      <!-- [播客改造 A-7.8] 进度条 hover 时间预览：鼠标在任意位置浮动时显示对应时间 -->
       <div
-        v-if="hoverTime !== null"
-        class="progress-hover-tip"
-        :style="{ left: 'clamp(32px, ' + hoverX + 'px, calc(100% - 32px))' }"
-      >
-        {{ formatTrackTime(hoverTime) }}
-      </div>
-      <!-- [C-14 bug-2] 加载中：从当前进度位置开始往右移动的小条 -->
-      <div
-        v-if="audioBuffering"
-        class="buffering-bar"
-        :style="{ left: bufferingLeftPercent + '%' }"
-      ></div>
-      <!-- [B-75] 标记位置：进度条上每个标记一条细蓝标(封面主色)，纯展示、点击无反馈(pointer-events:none) -->
-      <div
-        v-for="(mk, i) in currentMarks"
-        :key="'mk' + i"
-        class="prog-mark"
-        :style="{ left: markPct(mk) + '%', background: markColor }"
-      ></div>
-      <!-- [B-77] 标记提示：hover 标记键时在**播放头正上方**浮出"标记此刻"(随进度跟着走)，
-           替代原来贴在按钮上、又方又带异色描边的原生 title。 -->
-      <div
-        v-if="markHovering"
-        class="mark-hint-tip"
-        :style="{
-          left: 'clamp(32px, ' + progressPercent + '%, calc(100% - 32px))',
+        class="progress-bar"
+        :class="{
+          nyancat: settings.nyancatStyle,
+          'nyancat-stop': settings.nyancatStyle && !player.playing,
         }"
+        @click.stop
+        @mousemove="onProgressHover"
+        @mouseleave="hoverTime = null"
       >
-        标记此刻
-      </div>
-    </div>
-    <div class="controls">
-      <div class="playing">
-        <div class="container" @click.stop>
-          <!-- [B-63] 播放栏封面：小幅 hover 微动+光晕（力度/光晕比首页小一档） -->
-          <div class="cover-box">
-            <div
-              class="cover-glow"
-              :style="{ backgroundImage: `url(${coverSrc})` }"
-            ></div>
-            <img
-              class="cover-img"
-              :class="{ 'cover-loaded': coverLoaded }"
-              :src="coverSrc"
-              @load="coverLoaded = true"
-              @error="coverLoaded = true"
-              @click="goToAlbumOrPodcast"
-            />
-          </div>
-          <div class="track-info" :title="audioSource">
-            <!-- [播客改造] 单集名：超出容器宽度时 hover 跑马灯滚动；
-                 内层 span 用 transform 平移实现，需配合 JS 检测溢出 -->
-            <!-- [B-31] 点击单集名：网易云 → 跳列表；播客 → 跳单集详情 -->
-            <div
-              ref="nameWrap"
-              :class="[
-                'name',
-                {
-                  'has-list': hasList() || isPodcastTrack,
-                  marquee: nameOverflow,
-                },
-              ]"
-              @click="onClickName"
-              @mouseenter="checkNameOverflow"
-            >
-              <span ref="nameText" class="name-text">{{
-                currentTrack.name
-              }}</span>
-            </div>
-            <!-- [播客改造] artist 行同时展示节目名和"已播/总时长"，时间字号与节目名一致 -->
-            <!-- [B-31] 点击节目名（播客）→ 跳节目详情 -->
-            <div class="artist">
-              <!-- [B-34] 节目名可省略，时间进度 flex-shrink:0 永不截断 → 保证时间看全 -->
-              <span class="ar-names">
-                <span
-                  v-for="(ar, index) in currentTrack.ar"
-                  :key="ar.id"
-                  @click="onClickArtist(ar)"
-                >
-                  <span :class="{ ar: ar.id || isPodcastTrack }">
-                    {{ ar.name }} </span
-                  ><span v-if="index !== currentTrack.ar.length - 1">, </span>
-                </span>
-              </span>
-              <span v-if="currentTrack.name" class="time">
-                · {{ playedTimeText }} / {{ totalTimeText }}
-              </span>
-            </div>
-          </div>
-          <!-- [播客改造 A-7.1] 爱心收藏：当前播放是播客则走本地收藏，否则保留原网易云逻辑 -->
-          <div class="like-button" :class="{ favorited: isFavorited }">
-            <button-icon
-              :title="isFavorited ? '取消收藏' : '收藏'"
-              @click.native="toggleFavorite"
-            >
-              <svg-icon v-show="!isFavorited" icon-class="heart"></svg-icon>
-              <svg-icon
-                v-show="isFavorited"
-                icon-class="heart-solid"
-              ></svg-icon>
-            </button-icon>
-          </div>
+        <!-- [播客改造] 关掉 vue-slider 自带的 tooltip（与下方 .progress-hover-tip 重叠）；
+           dot 默认放大效果在 CSS 里抑制（见下方 .progress-bar .vue-slider-dot） -->
+        <vue-slider
+          v-model="player.progress"
+          :min="0"
+          :max="player.currentTrackDuration"
+          :interval="1"
+          :drag-on-click="true"
+          :duration="0"
+          :dot-size="12"
+          :height="2"
+          tooltip="none"
+          :lazy="true"
+          :silent="true"
+        ></vue-slider>
+        <div
+          v-if="hoverTime !== null"
+          class="progress-hover-tip"
+          :style="{ left: 'clamp(32px, ' + hoverX + 'px, calc(100% - 32px))' }"
+        >
+          {{ formatTrackTime(hoverTime) }}
         </div>
-        <!-- [B-36] 删掉 .playing 里的 blank：它和 container 都 flex-grow:1 平分左列，
+        <!-- [C-14 bug-2] 加载中：从当前进度位置开始往右移动的小条 -->
+        <div
+          v-if="audioBuffering"
+          class="buffering-bar"
+          :style="{ left: bufferingLeftPercent + '%' }"
+        ></div>
+        <!-- [B-75] 标记位置：进度条上每个标记一条细蓝标(封面主色)，纯展示、点击无反馈(pointer-events:none) -->
+        <div
+          v-for="(mk, i) in currentMarks"
+          :key="'mk' + i"
+          class="prog-mark"
+          :style="{ left: markPct(mk) + '%', background: markColor }"
+        ></div>
+        <!-- [B-77] 标记提示：hover 标记键时在**播放头正上方**浮出"标记此刻"(随进度跟着走)，
+           替代原来贴在按钮上、又方又带异色描边的原生 title。 -->
+        <div
+          v-if="markHovering"
+          class="mark-hint-tip"
+          :style="{
+            left: 'clamp(32px, ' + progressPercent + '%, calc(100% - 32px))',
+          }"
+        >
+          标记此刻
+        </div>
+      </div>
+      <div class="controls">
+        <div class="playing">
+          <div class="container" @click.stop>
+            <!-- [B-63] 播放栏封面：小幅 hover 微动+光晕（力度/光晕比首页小一档） -->
+            <div class="cover-box">
+              <div
+                class="cover-glow"
+                :style="{ backgroundImage: `url(${coverSrc})` }"
+              ></div>
+              <img
+                class="cover-img"
+                :class="{ 'cover-loaded': coverLoaded }"
+                :src="coverSrc"
+                @load="coverLoaded = true"
+                @error="coverLoaded = true"
+                @click="goToAlbumOrPodcast"
+              />
+            </div>
+            <div class="track-info" :title="audioSource">
+              <!-- [播客改造] 单集名：超出容器宽度时 hover 跑马灯滚动；
+                 内层 span 用 transform 平移实现，需配合 JS 检测溢出 -->
+              <!-- [B-31] 点击单集名：网易云 → 跳列表；播客 → 跳单集详情 -->
+              <div
+                ref="nameWrap"
+                :class="[
+                  'name',
+                  {
+                    'has-list': hasList() || isPodcastTrack,
+                    marquee: nameOverflow,
+                  },
+                ]"
+                @click="onClickName"
+                @mouseenter="checkNameOverflow"
+              >
+                <span ref="nameText" class="name-text">{{
+                  currentTrack.name
+                }}</span>
+              </div>
+              <!-- [播客改造] artist 行同时展示节目名和"已播/总时长"，时间字号与节目名一致 -->
+              <!-- [B-31] 点击节目名（播客）→ 跳节目详情 -->
+              <div class="artist">
+                <!-- [B-34] 节目名可省略，时间进度 flex-shrink:0 永不截断 → 保证时间看全 -->
+                <span class="ar-names">
+                  <span
+                    v-for="(ar, index) in currentTrack.ar"
+                    :key="ar.id"
+                    @click="onClickArtist(ar)"
+                  >
+                    <span :class="{ ar: ar.id || isPodcastTrack }">
+                      {{ ar.name }} </span
+                    ><span v-if="index !== currentTrack.ar.length - 1">, </span>
+                  </span>
+                </span>
+                <span v-if="currentTrack.name" class="time">
+                  · {{ playedTimeText }} / {{ totalTimeText }}
+                </span>
+              </div>
+            </div>
+            <!-- [播客改造 A-7.1] 爱心收藏：当前播放是播客则走本地收藏，否则保留原网易云逻辑 -->
+            <div class="like-button" :class="{ favorited: isFavorited }">
+              <button-icon
+                :title="isFavorited ? '取消收藏' : '收藏'"
+                @click.native="toggleFavorite"
+              >
+                <svg-icon v-show="!isFavorited" icon-class="heart"></svg-icon>
+                <svg-icon
+                  v-show="isFavorited"
+                  icon-class="heart-solid"
+                ></svg-icon>
+              </button-icon>
+            </div>
+          </div>
+          <!-- [B-36] 删掉 .playing 里的 blank：它和 container 都 flex-grow:1 平分左列，
              导致 container 只占一半、右侧一大块空白。删后 container 撑满左列，
              节目名+时间获得全部宽度，离三大金刚更近。 -->
-      </div>
-      <div class="middle-control-buttons">
-        <div class="blank"></div>
-        <div class="container" @click.stop>
-          <!-- [播客改造 A-7.7] 中间控制：功能是播客标准的"后退15秒/前进30秒"；
-               图标暂用原项目的 previous/next（自绘 SVG 风格不一致，暂缓） -->
-          <button-icon
-            v-show="!player.isPersonalFM"
-            title="后退 15 秒"
-            @click.native="seekBackward15"
-            ><svg-icon icon-class="previous"
-          /></button-icon>
-          <button-icon
-            v-show="player.isPersonalFM"
-            title="不喜欢"
-            @click.native="moveToFMTrash"
-            ><svg-icon icon-class="thumbs-down"
-          /></button-icon>
-          <button-icon
-            class="play"
-            :title="$t(player.playing ? 'player.pause' : 'player.play')"
-            @click.native="playOrPause"
-          >
-            <svg-icon :icon-class="player.playing ? 'pause' : 'play'"
-          /></button-icon>
-          <button-icon title="前进 30 秒" @click.native="seekForward30"
-            ><svg-icon icon-class="next"
-          /></button-icon>
         </div>
-        <div class="blank"></div>
-      </div>
-      <div class="right-control-buttons">
-        <!-- [B-76] 标记位置键：放在右列**最左**(blank 之前) → 紧贴金刚键"前进30秒"右侧、
+        <div class="middle-control-buttons">
+          <div class="blank"></div>
+          <div class="container" @click.stop>
+            <!-- [播客改造 A-7.7] 中间控制：功能是播客标准的"后退15秒/前进30秒"；
+               图标暂用原项目的 previous/next（自绘 SVG 风格不一致，暂缓） -->
+            <button-icon
+              v-show="!player.isPersonalFM"
+              title="后退 15 秒"
+              @click.native="seekBackward15"
+              ><svg-icon icon-class="previous"
+            /></button-icon>
+            <button-icon
+              v-show="player.isPersonalFM"
+              title="不喜欢"
+              @click.native="moveToFMTrash"
+              ><svg-icon icon-class="thumbs-down"
+            /></button-icon>
+            <button-icon
+              class="play"
+              :title="$t(player.playing ? 'player.pause' : 'player.play')"
+              @click.native="playOrPause"
+            >
+              <svg-icon :icon-class="player.playing ? 'pause' : 'play'"
+            /></button-icon>
+            <button-icon title="前进 30 秒" @click.native="seekForward30"
+              ><svg-icon icon-class="next"
+            /></button-icon>
+          </div>
+          <div class="blank"></div>
+        </div>
+        <div class="right-control-buttons">
+          <!-- [B-76] 标记位置键：放在右列**最左**(blank 之前) → 紧贴金刚键"前进30秒"右侧、
              与左侧"收藏"以播放为对称中心；blank 把倍速等推到右边、自然拉开距离(不再贴倍速)。
              短按=标记此刻(图标轻弹、不变色)；长按 3 秒=清空本集全部标记；标记 >5 变封面主色、>10 彩虹(彩蛋)。 -->
-        <div
-          v-if="isPodcastTrack"
-          class="mark-control"
-          :class="{
-            charging: markCharging,
-            pulse: markPulse,
-            rainbow: markCount > 10,
-          }"
-          :style="
-            markCount > 5 && markCount <= 10 ? { color: markColor } : null
-          "
-          @click.stop
-          @mouseenter="markHovering = true"
-          @mousedown.stop="onMarkPressStart"
-          @mouseup="onMarkPressEnd"
-          @mouseleave="onMarkLeave"
-        >
-          <span class="mark-charge"></span>
-          <svg-icon class="mark-icon" icon-class="social-network" />
-        </div>
-        <div class="blank"></div>
-        <div class="container" @click.stop>
-          <!-- [播客改造 A-6] 倍速按钮：右侧按钮区第一个，紧贴中间播放控制 -->
-          <div ref="rateControl" class="rate-control" @click.stop>
-            <button
-              class="rate-button"
-              :class="{ active: playbackRate !== 1 }"
-              @click="toggleRateMenu"
-            >
-              {{ rateButtonText }}
-            </button>
-            <transition name="fade">
-              <!-- [播客改造 A-21] 倍速重做：去预设档位，只留滑条，0.5–3，步进 0.1
+          <div
+            v-if="isPodcastTrack"
+            class="mark-control"
+            :class="{
+              charging: markCharging,
+              pulse: markPulse,
+              rainbow: markCount > 10,
+            }"
+            :style="
+              markCount > 5 && markCount <= 10 ? { color: markColor } : null
+            "
+            @click.stop
+            @mouseenter="markHovering = true"
+            @mousedown.stop="onMarkPressStart"
+            @mouseup="onMarkPressEnd"
+            @mouseleave="onMarkLeave"
+          >
+            <span class="mark-charge"></span>
+            <svg-icon class="mark-icon" icon-class="social-network" />
+          </div>
+          <div class="blank"></div>
+          <div class="container" @click.stop>
+            <!-- [播客改造 A-6] 倍速按钮：右侧按钮区第一个，紧贴中间播放控制 -->
+            <div ref="rateControl" class="rate-control" @click.stop>
+              <button
+                class="rate-button"
+                :class="{ active: playbackRate !== 1 }"
+                @click="toggleRateMenu"
+              >
+                {{ rateButtonText }}
+              </button>
+              <transition name="fade">
+                <!-- [播客改造 A-21] 倍速重做：去预设档位，只留滑条，0.5–3，步进 0.1
                    滚轮调节：在面板任意位置滚动即可调整 -->
-              <div
-                v-if="rateMenuOpen"
-                class="rate-menu"
-                @click.stop
-                @wheel.prevent="onRateWheel"
-              >
-                <div class="rate-slider">
-                  <span class="r-label">{{ rateLabel }}x</span>
-                  <vue-slider
-                    :value="playbackRate"
-                    :min="0.5"
-                    :max="3"
-                    :interval="0.1"
-                    :drag-on-click="true"
-                    :duration="0"
-                    tooltip="none"
-                    :dot-size="12"
-                    @change="setRate"
-                  ></vue-slider>
-                </div>
-              </div>
-            </transition>
-          </div>
-          <!-- [A-24] 播放队列按钮：弹原位小弹窗显示队列（非全屏） -->
-          <div ref="queueControl" class="queue-control" @click.stop>
-            <button-icon
-              :class="{ active: queuePanelOpen }"
-              @click.native="toggleQueuePanel"
-              ><svg-icon icon-class="queue"
-            /></button-icon>
-            <transition name="queue-pop">
-              <div v-if="queuePanelOpen" class="queue-panel" @click.stop>
-                <div class="qp-head">
-                  <span>播放列表 ({{ podcastQueue.length }})</span>
-                  <button
-                    v-if="podcastQueue.length"
-                    class="qp-clear"
-                    @click="clearQueue"
-                  >
-                    清空
-                  </button>
-                </div>
-                <div v-if="!podcastQueue.length" class="qp-empty">
-                  队列空空。在节目里加入单集后会出现在这里。
-                </div>
-                <div v-else class="qp-list">
-                  <div
-                    v-for="(item, idx) in podcastQueue.slice(0, 10)"
-                    :key="item.id"
-                    class="qp-item"
-                    :class="{ 'drag-over': dragOverIdx === idx }"
-                    draggable="true"
-                    @click="playFromQueue(item)"
-                    @dragstart="onQueueDragStart($event, idx)"
-                    @dragover.prevent="onQueueDragOver(idx)"
-                    @dragleave="onQueueDragLeave(idx)"
-                    @drop="onQueueDrop(idx)"
-                    @dragend="onQueueDragEnd"
-                  >
-                    <!-- [A-24 拖动] 左侧拖动点 -->
-                    <div class="qp-handle">⋮⋮</div>
-                    <PodImage
-                      v-if="item.coverUrl"
-                      class="qp-cover"
-                      :src="item.coverUrl"
-                    />
-                    <div class="qp-meta">
-                      <div class="qp-title">{{ item.title }}</div>
-                      <div class="qp-sub">{{ item.podcastTitle }}</div>
-                    </div>
-                    <button class="qp-del" @click.stop="removeFromQueue(item)">
-                      ×
-                    </button>
-                  </div>
-                  <div v-if="podcastQueue.length > 10" class="qp-more">
-                    还有 {{ podcastQueue.length - 10 }} 项 …
-                  </div>
-                </div>
-              </div>
-            </transition>
-          </div>
-          <!-- [B-46] 睡眠定时器：原位弹窗（X 分钟后 / 本集结束后暂停） -->
-          <div ref="sleepControl" class="sleep-control" @click.stop>
-            <button-icon
-              :class="{ active: sleepMode !== 'off' }"
-              @click.native="toggleSleepMenu"
-              ><svg-icon icon-class="moon"
-            /></button-icon>
-            <transition name="fade">
-              <!-- [B-47] 借鉴倍速弹窗：滑条(分钟，拖动+滚轮)，设置后随倒计时自缩 -->
-              <div
-                v-if="sleepMenuOpen"
-                class="sleep-menu"
-                @click.stop
-                @wheel.prevent="onSleepWheel"
-              >
-                <div class="sleep-slider">
-                  <span class="sl-label">{{ sleepLabel }}</span>
-                  <!-- [B-63] 单滑条：拖到最左=睡眠(关)；蓝色细标=本集结束(拖到此=本集结束后暂停)。
-                       max 按单集剩余时间动态算(开菜单瞬时计算)，蓝标位置随之变化。 -->
-                  <div class="sl-track">
-                    <!-- [B-73] "本集结束"蓝标：可点(=直接设本集结束)，hover 内条轻微放大 + 冒出小提示 -->
-                    <div
-                      v-if="sleepMarkerPct != null"
-                      class="sl-end-marker"
-                      :style="{ left: sleepMarkerPct + '%' }"
-                      @click.stop="onMarkerClick"
-                    >
-                      <i
-                        class="sl-end-bar"
-                        :style="{ background: sleepMarkerColor }"
-                      ></i>
-                      <span class="sl-end-tip">本集结束</span>
-                    </div>
+                <div
+                  v-if="rateMenuOpen"
+                  class="rate-menu"
+                  @click.stop
+                  @wheel.prevent="onRateWheel"
+                >
+                  <div class="rate-slider">
+                    <span class="r-label">{{ rateLabel }}x</span>
                     <vue-slider
-                      :value="sleepSliderVal"
-                      :min="0"
-                      :max="sleepMaxMin"
-                      :interval="sleepStep"
-                      :height="4"
+                      :value="playbackRate"
+                      :min="0.5"
+                      :max="3"
+                      :interval="0.1"
                       :drag-on-click="true"
                       :duration="0"
                       tooltip="none"
                       :dot-size="12"
-                      @change="onSleepChange"
-                      @drag-end="onSleepCommit"
+                      @change="setRate"
+                    ></vue-slider>
+                  </div>
+                </div>
+              </transition>
+            </div>
+            <!-- [A-24] 播放队列按钮：弹原位小弹窗显示队列（非全屏） -->
+            <div ref="queueControl" class="queue-control" @click.stop>
+              <button-icon
+                :class="{ active: queuePanelOpen }"
+                @click.native="toggleQueuePanel"
+                ><svg-icon icon-class="queue"
+              /></button-icon>
+              <transition name="queue-pop">
+                <div v-if="queuePanelOpen" class="queue-panel" @click.stop>
+                  <div class="qp-head">
+                    <span>播放列表 ({{ podcastQueue.length }})</span>
+                    <button
+                      v-if="podcastQueue.length"
+                      class="qp-clear"
+                      @click="clearQueue"
+                    >
+                      清空
+                    </button>
+                  </div>
+                  <div v-if="!podcastQueue.length" class="qp-empty">
+                    队列空空。在节目里加入单集后会出现在这里。
+                  </div>
+                  <div v-else class="qp-list">
+                    <div
+                      v-for="(item, idx) in podcastQueue.slice(0, 10)"
+                      :key="item.id"
+                      class="qp-item"
+                      :class="{ 'drag-over': dragOverIdx === idx }"
+                      draggable="true"
+                      @click="playFromQueue(item)"
+                      @dragstart="onQueueDragStart($event, idx)"
+                      @dragover.prevent="onQueueDragOver(idx)"
+                      @dragleave="onQueueDragLeave(idx)"
+                      @drop="onQueueDrop(idx)"
+                      @dragend="onQueueDragEnd"
+                    >
+                      <!-- [A-24 拖动] 左侧拖动点 -->
+                      <div class="qp-handle">⋮⋮</div>
+                      <PodImage
+                        v-if="item.coverUrl"
+                        class="qp-cover"
+                        :src="item.coverUrl"
+                      />
+                      <div class="qp-meta">
+                        <div class="qp-title">{{ item.title }}</div>
+                        <div class="qp-sub">{{ item.podcastTitle }}</div>
+                      </div>
+                      <button
+                        class="qp-del"
+                        @click.stop="removeFromQueue(item)"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div v-if="podcastQueue.length > 10" class="qp-more">
+                      还有 {{ podcastQueue.length - 10 }} 项 …
+                    </div>
+                  </div>
+                </div>
+              </transition>
+            </div>
+            <!-- [B-46] 睡眠定时器：原位弹窗（X 分钟后 / 本集结束后暂停） -->
+            <div ref="sleepControl" class="sleep-control" @click.stop>
+              <button-icon
+                :class="{ active: sleepMode !== 'off' }"
+                @click.native="toggleSleepMenu"
+                ><svg-icon icon-class="moon"
+              /></button-icon>
+              <transition name="fade">
+                <!-- [B-47] 借鉴倍速弹窗：滑条(分钟，拖动+滚轮)，设置后随倒计时自缩 -->
+                <div
+                  v-if="sleepMenuOpen"
+                  class="sleep-menu"
+                  @click.stop
+                  @wheel.prevent="onSleepWheel"
+                >
+                  <div class="sleep-slider">
+                    <span class="sl-label">{{ sleepLabel }}</span>
+                    <!-- [B-63] 单滑条：拖到最左=睡眠(关)；蓝色细标=本集结束(拖到此=本集结束后暂停)。
+                       max 按单集剩余时间动态算(开菜单瞬时计算)，蓝标位置随之变化。 -->
+                    <div class="sl-track">
+                      <!-- [B-73] "本集结束"蓝标：可点(=直接设本集结束)，hover 内条轻微放大 + 冒出小提示 -->
+                      <div
+                        v-if="sleepMarkerPct != null"
+                        class="sl-end-marker"
+                        :style="{ left: sleepMarkerPct + '%' }"
+                        @click.stop="onMarkerClick"
+                      >
+                        <i
+                          class="sl-end-bar"
+                          :style="{ background: sleepMarkerColor }"
+                        ></i>
+                        <span class="sl-end-tip">本集结束</span>
+                      </div>
+                      <vue-slider
+                        :value="sleepSliderVal"
+                        :min="0"
+                        :max="sleepMaxMin"
+                        :interval="sleepStep"
+                        :height="4"
+                        :drag-on-click="true"
+                        :duration="0"
+                        tooltip="none"
+                        :dot-size="12"
+                        @change="onSleepChange"
+                        @drag-end="onSleepCommit"
+                      ></vue-slider>
+                    </div>
+                  </div>
+                </div>
+              </transition>
+            </div>
+            <button-icon
+              :class="{
+                active: player.repeatMode !== 'off',
+                disabled: player.isPersonalFM,
+              }"
+              :title="
+                player.repeatMode === 'one'
+                  ? $t('player.repeatTrack')
+                  : $t('player.repeat')
+              "
+              @click.native="switchRepeatMode"
+            >
+              <svg-icon
+                v-show="player.repeatMode !== 'one'"
+                icon-class="repeat"
+              />
+              <svg-icon
+                v-show="player.repeatMode === 'one'"
+                icon-class="repeat-1"
+              />
+            </button-icon>
+            <!-- [播客改造 A-7.2] 删除随机播放按钮（播客不需要，源码保留） -->
+            <button-icon
+              v-if="false"
+              :class="{ active: player.shuffle, disabled: player.isPersonalFM }"
+              :title="$t('player.shuffle')"
+              @click.native="switchShuffle"
+              ><svg-icon icon-class="shuffle"
+            /></button-icon>
+            <button-icon
+              v-if="settings.enableReversedMode"
+              :class="{
+                active: player.reversed,
+                disabled: player.isPersonalFM,
+              }"
+              :title="$t('player.reversed')"
+              @click.native="switchReversed"
+              ><svg-icon icon-class="sort-up"
+            /></button-icon>
+            <!-- [播客改造 A-7.4] 滚轮调音量：在音量按钮或音量条上滚动均可 -->
+            <div class="volume-control" @wheel.prevent="onVolumeWheel">
+              <button-icon :title="$t('player.mute')" @click.native="mute">
+                <svg-icon v-show="volume > 0.5" icon-class="volume" />
+                <svg-icon v-show="volume === 0" icon-class="volume-mute" />
+                <svg-icon
+                  v-show="volume <= 0.5 && volume !== 0"
+                  icon-class="volume-half"
+                />
+              </button-icon>
+              <div class="volume-bar">
+                <vue-slider
+                  v-model="volume"
+                  :min="0"
+                  :max="1"
+                  :interval="0.01"
+                  :drag-on-click="true"
+                  :duration="0"
+                  tooltip="none"
+                  :dot-size="12"
+                ></vue-slider>
+              </div>
+            </div>
+
+            <!-- [沉浸式播放页 P0] 展开沉浸页按钮：arrow-up = 向上展开全屏沉浸页。
+               原 toggleLyrics(老网易云歌词页)已不适用播客，改调 toggleImmersive；歌词代码原样保留(可逆)。 -->
+            <button-icon
+              class="lyrics-button"
+              title="沉浸页"
+              style="margin-left: 12px"
+              @click.native="toggleImmersive"
+              ><svg-icon icon-class="arrow-up"
+            /></button-icon>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- ============ [沉浸式播放页 P0] 全屏沉浸 overlay ============
+         背景=C 混合(模糊封面打底 + 三色柔和径向渐变 + 磨砂层，静态)；大封面居中 + 细胶囊进度条 +
+         一行控制(三大金刚居中、倍速/队列/睡眠在左、音量在右)。所有控制复用本组件方法与状态。
+         P1 再做：全屏 maximize/ESC 退出/顶部 hover 提示；P2 动态背景。 -->
+    <transition name="imm-fade">
+      <div v-if="immersiveOpen" class="immersive">
+        <!-- 背景三层(静态) -->
+        <div class="imm-bg">
+          <div
+            class="imm-bg-cover"
+            :style="{ backgroundImage: `url(${coverSrc})` }"
+          ></div>
+          <div class="imm-bg-tint" :style="{ background: immBg }"></div>
+          <div class="imm-bg-frost"></div>
+        </div>
+
+        <!-- 顶部：收起按钮(P1 会加 ESC/顶部 hover 提示) -->
+        <div class="imm-top">
+          <button-icon
+            class="imm-collapse"
+            title="收起"
+            @click.native="closeImmersive"
+            ><svg-icon icon-class="arrow-down"
+          /></button-icon>
+        </div>
+
+        <!-- 主体：封面 + 信息 + 进度 + 控制。点 col 外的空白区(stage padding)= 收起(P0 便捷退出) -->
+        <div class="imm-stage" @click.self="closeImmersive">
+          <div class="imm-col">
+            <!-- 大封面：固定方槽内 scale，播放 1 / 暂停 0.82，下方布局不跳动 -->
+            <div class="imm-cover-slot">
+              <img
+                class="imm-cover"
+                :class="{ paused: !playing }"
+                :src="coverSrc"
+              />
+            </div>
+
+            <!-- 节目名+单集名(左，可点击跳详情) | 收藏(右) -->
+            <div class="imm-meta">
+              <div class="imm-text">
+                <div
+                  class="imm-ep"
+                  :title="currentTrack.name"
+                  @click="immClickTitle"
+                >
+                  {{ currentTrack.name }}
+                </div>
+                <div
+                  v-if="podcastName"
+                  class="imm-pod"
+                  :title="podcastName"
+                  @click="immClickPodcast"
+                >
+                  {{ podcastName }}
+                </div>
+              </div>
+              <div class="imm-like" :class="{ favorited: isFavorited }">
+                <button-icon
+                  :title="isFavorited ? '取消收藏' : '收藏'"
+                  @click.native="toggleFavorite"
+                >
+                  <svg-icon v-show="!isFavorited" icon-class="heart"></svg-icon>
+                  <svg-icon
+                    v-show="isFavorited"
+                    icon-class="heart-solid"
+                  ></svg-icon>
+                </button-icon>
+              </div>
+            </div>
+
+            <!-- 细胶囊进度条：首尾不显时间，仅 hover 浮出该点时间 -->
+            <div
+              class="imm-progress"
+              @click.stop
+              @mousemove="onProgressHover"
+              @mouseleave="hoverTime = null"
+            >
+              <vue-slider
+                v-model="player.progress"
+                :min="0"
+                :max="player.currentTrackDuration"
+                :interval="1"
+                :drag-on-click="true"
+                :duration="0"
+                :dot-size="14"
+                :height="4"
+                tooltip="none"
+                :lazy="true"
+                :silent="true"
+              ></vue-slider>
+              <div
+                v-if="hoverTime !== null"
+                class="progress-hover-tip"
+                :style="{
+                  left: 'clamp(28px, ' + hoverX + 'px, calc(100% - 28px))',
+                }"
+              >
+                {{ formatTrackTime(hoverTime) }}
+              </div>
+            </div>
+
+            <!-- 一行控制：左=倍速/队列/睡眠 中=三大金刚 右=音量 -->
+            <div class="imm-controls">
+              <div class="imm-side imm-side-left">
+                <!-- 倍速(复用 rateMenuOpen/toggleRateMenu/setRate) -->
+                <div
+                  ref="rateControlImm"
+                  class="rate-control imm-rate"
+                  @click.stop
+                >
+                  <button
+                    class="rate-button"
+                    :class="{ active: playbackRate !== 1 }"
+                    @click="toggleRateMenu"
+                  >
+                    {{ rateButtonText }}
+                  </button>
+                  <transition name="fade">
+                    <div
+                      v-if="rateMenuOpen"
+                      class="rate-menu"
+                      @click.stop
+                      @wheel.prevent="onRateWheel"
+                    >
+                      <div class="rate-slider">
+                        <span class="r-label">{{ rateLabel }}x</span>
+                        <vue-slider
+                          :value="playbackRate"
+                          :min="0.5"
+                          :max="3"
+                          :interval="0.1"
+                          :drag-on-click="true"
+                          :duration="0"
+                          tooltip="none"
+                          :dot-size="12"
+                          @change="setRate"
+                        ></vue-slider>
+                      </div>
+                    </div>
+                  </transition>
+                </div>
+                <!-- 播放列表(复用 queuePanelOpen/toggleQueuePanel + 队列状态/方法) -->
+                <div ref="queueControlImm" class="queue-control" @click.stop>
+                  <button-icon
+                    :class="{ active: queuePanelOpen }"
+                    @click.native="toggleQueuePanel"
+                    ><svg-icon icon-class="queue"
+                  /></button-icon>
+                  <transition name="queue-pop">
+                    <div v-if="queuePanelOpen" class="queue-panel" @click.stop>
+                      <div class="qp-head">
+                        <span>播放列表 ({{ podcastQueue.length }})</span>
+                        <button
+                          v-if="podcastQueue.length"
+                          class="qp-clear"
+                          @click="clearQueue"
+                        >
+                          清空
+                        </button>
+                      </div>
+                      <div v-if="!podcastQueue.length" class="qp-empty">
+                        队列空空。在节目里加入单集后会出现在这里。
+                      </div>
+                      <div v-else class="qp-list">
+                        <div
+                          v-for="(item, idx) in podcastQueue.slice(0, 10)"
+                          :key="item.id"
+                          class="qp-item"
+                          :class="{ 'drag-over': dragOverIdx === idx }"
+                          draggable="true"
+                          @click="playFromQueue(item)"
+                          @dragstart="onQueueDragStart($event, idx)"
+                          @dragover.prevent="onQueueDragOver(idx)"
+                          @dragleave="onQueueDragLeave(idx)"
+                          @drop="onQueueDrop(idx)"
+                          @dragend="onQueueDragEnd"
+                        >
+                          <div class="qp-handle">⋮⋮</div>
+                          <PodImage
+                            v-if="item.coverUrl"
+                            class="qp-cover"
+                            :src="item.coverUrl"
+                          />
+                          <div class="qp-meta">
+                            <div class="qp-title">{{ item.title }}</div>
+                            <div class="qp-sub">{{ item.podcastTitle }}</div>
+                          </div>
+                          <button
+                            class="qp-del"
+                            @click.stop="removeFromQueue(item)"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div v-if="podcastQueue.length > 10" class="qp-more">
+                          还有 {{ podcastQueue.length - 10 }} 项 …
+                        </div>
+                      </div>
+                    </div>
+                  </transition>
+                </div>
+                <!-- 睡眠(复用 sleepMenuOpen/toggleSleepMenu + 睡眠状态/方法) -->
+                <div ref="sleepControlImm" class="sleep-control" @click.stop>
+                  <button-icon
+                    :class="{ active: sleepMode !== 'off' }"
+                    @click.native="toggleSleepMenu"
+                    ><svg-icon icon-class="moon"
+                  /></button-icon>
+                  <transition name="fade">
+                    <div
+                      v-if="sleepMenuOpen"
+                      class="sleep-menu"
+                      @click.stop
+                      @wheel.prevent="onSleepWheel"
+                    >
+                      <div class="sleep-slider">
+                        <span class="sl-label">{{ sleepLabel }}</span>
+                        <div class="sl-track">
+                          <div
+                            v-if="sleepMarkerPct != null"
+                            class="sl-end-marker"
+                            :style="{ left: sleepMarkerPct + '%' }"
+                            @click.stop="onMarkerClick"
+                          >
+                            <i
+                              class="sl-end-bar"
+                              :style="{ background: sleepMarkerColor }"
+                            ></i>
+                            <span class="sl-end-tip">本集结束</span>
+                          </div>
+                          <vue-slider
+                            :value="sleepSliderVal"
+                            :min="0"
+                            :max="sleepMaxMin"
+                            :interval="sleepStep"
+                            :height="4"
+                            :drag-on-click="true"
+                            :duration="0"
+                            tooltip="none"
+                            :dot-size="12"
+                            @change="onSleepChange"
+                            @drag-end="onSleepCommit"
+                          ></vue-slider>
+                        </div>
+                      </div>
+                    </div>
+                  </transition>
+                </div>
+              </div>
+
+              <!-- 三大金刚：后退15 / 播放暂停(无圈) / 前进30 -->
+              <div class="imm-king">
+                <button-icon
+                  class="imm-seek"
+                  title="后退 15 秒"
+                  @click.native="seekBackward15"
+                  ><svg-icon icon-class="previous"
+                /></button-icon>
+                <button-icon
+                  class="imm-play"
+                  :title="$t(player.playing ? 'player.pause' : 'player.play')"
+                  @click.native="playOrPause"
+                  ><svg-icon :icon-class="player.playing ? 'pause' : 'play'"
+                /></button-icon>
+                <button-icon
+                  class="imm-seek"
+                  title="前进 30 秒"
+                  @click.native="seekForward30"
+                  ><svg-icon icon-class="next"
+                /></button-icon>
+              </div>
+
+              <!-- 音量(右，复用 volume/mute/onVolumeWheel) -->
+              <div class="imm-side imm-side-right">
+                <div
+                  class="volume-control imm-volume"
+                  @wheel.prevent="onVolumeWheel"
+                >
+                  <button-icon :title="$t('player.mute')" @click.native="mute">
+                    <svg-icon v-show="volume > 0.5" icon-class="volume" />
+                    <svg-icon v-show="volume === 0" icon-class="volume-mute" />
+                    <svg-icon
+                      v-show="volume <= 0.5 && volume !== 0"
+                      icon-class="volume-half"
+                    />
+                  </button-icon>
+                  <div class="volume-bar">
+                    <vue-slider
+                      v-model="volume"
+                      :min="0"
+                      :max="1"
+                      :interval="0.01"
+                      :drag-on-click="true"
+                      :duration="0"
+                      tooltip="none"
+                      :dot-size="12"
                     ></vue-slider>
                   </div>
                 </div>
               </div>
-            </transition>
-          </div>
-          <button-icon
-            :class="{
-              active: player.repeatMode !== 'off',
-              disabled: player.isPersonalFM,
-            }"
-            :title="
-              player.repeatMode === 'one'
-                ? $t('player.repeatTrack')
-                : $t('player.repeat')
-            "
-            @click.native="switchRepeatMode"
-          >
-            <svg-icon
-              v-show="player.repeatMode !== 'one'"
-              icon-class="repeat"
-            />
-            <svg-icon
-              v-show="player.repeatMode === 'one'"
-              icon-class="repeat-1"
-            />
-          </button-icon>
-          <!-- [播客改造 A-7.2] 删除随机播放按钮（播客不需要，源码保留） -->
-          <button-icon
-            v-if="false"
-            :class="{ active: player.shuffle, disabled: player.isPersonalFM }"
-            :title="$t('player.shuffle')"
-            @click.native="switchShuffle"
-            ><svg-icon icon-class="shuffle"
-          /></button-icon>
-          <button-icon
-            v-if="settings.enableReversedMode"
-            :class="{ active: player.reversed, disabled: player.isPersonalFM }"
-            :title="$t('player.reversed')"
-            @click.native="switchReversed"
-            ><svg-icon icon-class="sort-up"
-          /></button-icon>
-          <!-- [播客改造 A-7.4] 滚轮调音量：在音量按钮或音量条上滚动均可 -->
-          <div class="volume-control" @wheel.prevent="onVolumeWheel">
-            <button-icon :title="$t('player.mute')" @click.native="mute">
-              <svg-icon v-show="volume > 0.5" icon-class="volume" />
-              <svg-icon v-show="volume === 0" icon-class="volume-mute" />
-              <svg-icon
-                v-show="volume <= 0.5 && volume !== 0"
-                icon-class="volume-half"
-              />
-            </button-icon>
-            <div class="volume-bar">
-              <vue-slider
-                v-model="volume"
-                :min="0"
-                :max="1"
-                :interval="0.01"
-                :drag-on-click="true"
-                :duration="0"
-                tooltip="none"
-                :dot-size="12"
-              ></vue-slider>
             </div>
           </div>
-
-          <!-- [播客改造] 展开沉浸页按钮：title 已在 ButtonIcon 层屏蔽；
-               文案"歌词" → "沉浸页"作为后续解开屏蔽时的预备文案 -->
-          <button-icon
-            class="lyrics-button"
-            title="沉浸页"
-            style="margin-left: 12px"
-            @click.native="toggleLyrics"
-            ><svg-icon icon-class="arrow-up"
-          /></button-icon>
         </div>
       </div>
-    </div>
+    </transition>
   </div>
 </template>
 
@@ -419,6 +736,8 @@ import { goToListSource, hasListSource } from '@/utils/playList';
 import { formatTrackTime } from '@/utils/common';
 // [B-63] 睡眠定时"本集结束"小蓝标改用当前封面主色调（记忆点 + 与定位本集结束呼应）
 import { getCoverColor } from '@/utils/podcast/coverColor';
+// [沉浸式播放页 P0] 封面 3 色调色板（沉浸页中层三色柔和径向渐变背景用）
+import { getCoverPalette } from '@/utils/podcast/coverPalette';
 
 export default {
   name: 'Player',
@@ -470,6 +789,9 @@ export default {
       sleepEpisodeRemainMin: 0, // 当前单集剩余分钟(用于贴近标记时识别为"本集结束")
       sleepMarkerColor: '#e67e22', // [B-63]"本集结束"标记色=封面主色调(默认暖橙，区别于蓝色进度条)
       sleepColorSrc: '', // 已取色的封面 url（避免重复取色）
+      // [沉浸式播放页 P0] 全屏沉浸 overlay 开关 + 封面 3 色调色板(切歌取一次、缓存)
+      immersiveOpen: false,
+      immPalette: null,
     };
   },
   computed: {
@@ -587,6 +909,38 @@ export default {
     markCount() {
       return this.currentMarks.length;
     },
+    // [沉浸式播放页 P0] 节目名(播客=ar 数组拼接；用于沉浸页第二行可点击跳节目详情)
+    podcastName() {
+      const ar = this.currentTrack && this.currentTrack.ar;
+      if (!ar || !ar.length) return '';
+      return ar.map(a => a.name).join(', ');
+    },
+    // [沉浸式播放页 P0] 中层三色柔和径向渐变(忠实封面冷暖分布、已降饱和)；
+    //   取色未就绪/失败 → 中性深色兜底，保证不空。
+    immBg() {
+      const p = this.immPalette;
+      const hsla = (c, a) => `hsla(${c[0]}, ${c[1]}%, ${c[2]}%, ${a})`;
+      if (!p || !p.hsl || !p.hsl.length) {
+        return 'radial-gradient(80% 80% at 50% 30%, hsla(220, 12%, 30%, 0.6), transparent 70%)';
+      }
+      const a = p.hsl[0];
+      const b = p.hsl[1] || p.hsl[0];
+      const c = p.hsl[2] || p.hsl[0];
+      return [
+        `radial-gradient(62% 80% at 16% 12%, ${hsla(
+          a,
+          0.85
+        )}, transparent 66%)`,
+        `radial-gradient(60% 74% at 86% 20%, ${hsla(
+          b,
+          0.72
+        )}, transparent 70%)`,
+        `radial-gradient(82% 72% at 50% 104%, ${hsla(
+          c,
+          0.66
+        )}, transparent 76%)`,
+      ].join(', ');
+    },
   },
   mounted() {
     this.setupMediaControls();
@@ -606,6 +960,8 @@ export default {
       src => {
         this.coverLoaded = false;
         this.refreshMarkColor(src); // [B-75] 换封面 → 刷新标记主色
+        // [沉浸式播放页 P0] 沉浸页开着时换歌 → 刷新背景三色(关着时不算，省一次 worker 取色)
+        if (this.immersiveOpen) this.refreshImmPalette(src);
         this.$nextTick(() => {
           const img = this.$el && this.$el.querySelector('.cover-img');
           if (img && img.complete && img.naturalWidth > 0) {
@@ -632,18 +988,19 @@ export default {
     // [B-75] 清理标记长按/pulse 计时器
     clearTimeout(this._markTimer);
     clearTimeout(this._markPulseTimer);
+    // [沉浸式播放页 P0] 卸载时若沉浸页还开着，恢复全局滚动 + 关队列面板监听(防泄漏)
+    this.closeQueuePanel();
+    if (this.immersiveOpen) this.$store.commit('enableScrolling', true);
   },
   methods: {
     ...mapMutations(['toggleLyrics']),
     ...mapActions(['showToast', 'likeATrack']),
     handleClick(event) {
-      // [播客改造] 屏蔽"点 bar 空白处展开沉浸式播放页"——播客不是高频操作，
-      // 用户后续可能加回。右下角"展开"按钮（lyrics-button）仍可用。
-      // 改回逻辑：把下方 if 块的注释去掉即可。
-      // if (event.target == this.mouseDownTarget) {
-      //   this.toggleLyrics();
-      // }
-      void event;
+      // [沉浸式播放页 P0] 点击 bar 空白处 → 展开沉浸页。各功能区(封面/信息/金刚/右控)均 @click.stop，
+      //   故此处只在真正点到 bar 背景时触发；event.target==mouseDownTarget 确保是「点击」而非拖拽松手。
+      if (event.target === this.mouseDownTarget) {
+        this.openImmersive();
+      }
     },
     // [播客改造] 检测单集名是否溢出，决定是否启用跑马灯
     checkNameOverflow() {
@@ -769,6 +1126,15 @@ export default {
       this.playbackRate = r;
       this.player.playbackRate = r;
     },
+    // [沉浸式播放页 P0] 点击是否落在「任一指定 ref 子树」内。bar 与沉浸页各有一套
+    //   倍速/队列/睡眠控件，复用同一份 open 状态；点进其中任一个都算「内部」、不误关。
+    //   沉浸页未渲染时 -imm ref 为 undefined、被 filter 掉 → 行为与改前完全一致(零回归)。
+    _insideAnyRef(refNames, target) {
+      return refNames.some(n => {
+        const el = this.$refs[n];
+        return el && el.contains && el.contains(target);
+      });
+    },
     // [播客改造 A-6] 倍速面板开关与关闭策略（点击外部关闭，而非 mouseleave）
     toggleRateMenu() {
       if (this.rateMenuOpen) {
@@ -782,8 +1148,9 @@ export default {
       // 下一帧挂监听，避免捕获到当前的"打开"点击事件本身导致立即关闭
       this.$nextTick(() => {
         this.rateOutsideListener = ev => {
-          const root = this.$refs.rateControl;
-          if (root && !root.contains(ev.target)) {
+          if (
+            !this._insideAnyRef(['rateControl', 'rateControlImm'], ev.target)
+          ) {
             this.closeRateMenu();
           }
         };
@@ -808,8 +1175,10 @@ export default {
       this.sleepMenuOpen = true;
       this.$nextTick(() => {
         this.sleepOutsideListener = ev => {
-          const root = this.$refs.sleepControl;
-          if (root && !root.contains(ev.target)) this.closeSleepMenu();
+          if (
+            !this._insideAnyRef(['sleepControl', 'sleepControlImm'], ev.target)
+          )
+            this.closeSleepMenu();
         };
         document.addEventListener('mousedown', this.sleepOutsideListener);
       });
@@ -1056,8 +1425,10 @@ export default {
       this.queuePanelOpen = true;
       this.$nextTick(() => {
         this.queueOutsideListener = ev => {
-          const root = this.$refs.queueControl;
-          if (root && !root.contains(ev.target)) this.closeQueuePanel();
+          if (
+            !this._insideAnyRef(['queueControl', 'queueControlImm'], ev.target)
+          )
+            this.closeQueuePanel();
         };
         document.addEventListener('mousedown', this.queueOutsideListener);
       });
@@ -1205,6 +1576,48 @@ export default {
       this.player.mute();
     },
 
+    // ===== [沉浸式播放页 P0] =====
+    toggleImmersive() {
+      this.immersiveOpen ? this.closeImmersive() : this.openImmersive();
+    },
+    openImmersive() {
+      if (this.immersiveOpen) return;
+      this.immersiveOpen = true;
+      this.refreshImmPalette(this.coverSrc); // 进入时取一次背景三色
+      // 锁主区滚动(与歌词页一致)，overlay 之下不再误滚
+      this.$store.commit('enableScrolling', false);
+    },
+    closeImmersive() {
+      if (!this.immersiveOpen) return;
+      this.immersiveOpen = false;
+      this.$store.commit('enableScrolling', true);
+      // 顺手收起可能开着的功能面板，避免下次进来残留
+      this.closeRateMenu();
+      this.closeSleepMenu();
+      this.closeQueuePanel();
+    },
+    // 取封面 3 色(切歌一次、缓存)；竞态保护：仅当仍是同一 src 才落定
+    refreshImmPalette(src) {
+      if (!src || src === this._immPaletteSrc) return;
+      this._immPaletteSrc = src;
+      getCoverPalette(src)
+        .then(p => {
+          if (p && this._immPaletteSrc === src) this.immPalette = p;
+        })
+        .catch(() => {});
+    },
+    // 点单集名 → 单集详情(播客) / 列表(网易云)，并收起沉浸页(方案决策5)
+    immClickTitle() {
+      if (this.isPodcastTrack) this.goToEpisodeDetail();
+      else if (this.hasList()) this.goToList();
+      this.closeImmersive();
+    },
+    // 点节目名 → 节目详情，并收起沉浸页
+    immClickPodcast() {
+      if (this.isPodcastTrack) this.goToPodcastDetail();
+      this.closeImmersive();
+    },
+
     setupMediaControls() {
       if ('mediaSession' in navigator) {
         navigator.mediaSession.setActionHandler('play', () => {
@@ -1242,6 +1655,11 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+// [沉浸式播放页 P0] 包裹层不生成盒子：原 .player bar 与全屏 .immersive overlay 都作为
+//   #app 直接子节点参与布局/定位/层叠 → bar 的一切(position/z-index/transition)零变化。
+.player-root {
+  display: contents;
+}
 .player {
   position: fixed;
   // [B-30 bar 修] 之前为了底部 Win32 resize 边留 4px 透明，
@@ -2005,5 +2423,279 @@ export default {
 .fade-leave-to {
   opacity: 0;
   transform: translateX(-50%) translateY(4px);
+}
+
+// ============ [沉浸式播放页 P0] 全屏沉浸 overlay ============
+// 主题隔离：固定深色底 + 浅色文字，不随系统深/浅色切换(方案 §3.3)。
+.immersive {
+  position: fixed;
+  inset: 0;
+  z-index: 190; // 盖住 navbar/bar(100)，低于 toast/modal(1000+)
+  background: #0e0f13;
+  color: rgba(255, 255, 255, 0.92);
+  overflow: hidden;
+  user-select: none;
+  // 复用的功能键(倍速文字/队列/睡眠/音量/收藏)统一浅色，覆盖全局主题 var(--color-text)
+  ::v-deep .button-icon .svg-icon {
+    color: rgba(255, 255, 255, 0.85);
+  }
+  ::v-deep .button-icon:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+.imm-fade-enter-active,
+.imm-fade-leave-active {
+  transition: opacity 0.32s ease, transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.imm-fade-enter,
+.imm-fade-leave-to {
+  opacity: 0;
+  transform: translateY(24px);
+}
+
+// ---- 背景三层(静态)：模糊封面打底 + 三色柔和渐变 + 磨砂噪点 ----
+.imm-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.imm-bg-cover {
+  position: absolute;
+  inset: -12%; // ≈124% 覆盖，大半径 blur 边缘不露空
+  background-size: cover;
+  background-position: center;
+  filter: blur(64px) saturate(1.15);
+  transform: scale(1.15);
+  opacity: 0.5;
+}
+.imm-bg-tint {
+  position: absolute;
+  inset: 0;
+  // background 由 inline :style="immBg"(三色径向渐变)注入
+}
+.imm-bg-frost {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 11, 14, 0.34);
+  backdrop-filter: blur(24px) saturate(1.05);
+  // 极轻噪点：内联 svg feTurbulence(高级磨砂感)
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='110' height='110'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.04;
+    mix-blend-mode: overlay;
+  }
+}
+
+// ---- 顶部收起(P1 再加 ESC/顶部 hover 提示) ----
+.imm-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 clamp(12px, 2vw, 28px);
+  z-index: 4;
+  .imm-collapse .svg-icon {
+    width: 22px;
+    height: 22px;
+    color: rgba(255, 255, 255, 0.86);
+  }
+}
+
+// ---- 主体 ----
+.imm-stage {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 16px 30px;
+  box-sizing: border-box;
+}
+.imm-col {
+  // 封面=方形；列宽同时受视口高/宽与上限约束 → 封面、信息、进度、控制天然「与封面同宽」
+  width: min(58vh, 86vw, 620px);
+  display: flex;
+  flex-direction: column;
+}
+
+// 大封面：方槽内 scale，播放 1 / 暂停 0.82，下方布局不跳动
+.imm-cover-slot {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: clamp(14px, 2.2vh, 26px);
+}
+.imm-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: clamp(12px, 1.4vw, 16px);
+  box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+  transition: transform 0.45s cubic-bezier(0.2, 0.7, 0.2, 1),
+    box-shadow 0.45s ease;
+  transform: scale(1);
+  &.paused {
+    transform: scale(0.82);
+    box-shadow: 0 16px 34px -14px rgba(0, 0, 0, 0.5);
+  }
+}
+
+// 节目名/单集名(左可点) + 收藏(右)
+.imm-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: clamp(10px, 1.6vh, 18px);
+  .imm-text {
+    min-width: 0;
+    flex: 1;
+  }
+  .imm-ep {
+    font-size: clamp(16px, 1.5vw, 22px);
+    font-weight: 700;
+    line-height: 1.25;
+    color: #fff;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+  .imm-pod {
+    margin-top: 4px;
+    font-size: clamp(12px, 1vw, 14px);
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    &:hover {
+      text-decoration: underline;
+      color: rgba(255, 255, 255, 0.85);
+    }
+  }
+  .imm-like {
+    flex-shrink: 0;
+    ::v-deep .svg-icon {
+      width: 22px;
+      height: 22px;
+    }
+    &.favorited ::v-deep .svg-icon {
+      color: #e74c3c;
+    }
+  }
+}
+
+// 进度条：细胶囊、首尾不显时间(仅 hover 浮出)
+.imm-progress {
+  position: relative;
+  margin-bottom: clamp(12px, 2vh, 22px);
+  ::v-deep .vue-slider-rail {
+    background-color: rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+  }
+  ::v-deep .vue-slider-process {
+    background-color: rgba(255, 255, 255, 0.92);
+    border-radius: 999px;
+  }
+  ::v-deep .vue-slider-dot-handle {
+    background-color: #fff;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+    visibility: hidden; // 干净：平时藏点，hover/拖动才现
+  }
+  ::v-deep .vue-slider:hover .vue-slider-dot-handle,
+  ::v-deep .vue-slider:active .vue-slider-dot-handle {
+    visibility: visible;
+  }
+  .progress-hover-tip {
+    bottom: calc(100% + 6px);
+    background: rgba(20, 20, 24, 0.92);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+}
+
+// 一行控制：左=倍速/队列/睡眠 中=三大金刚 右=音量
+.imm-controls {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.imm-side {
+  display: flex;
+  align-items: center;
+}
+.imm-side-left {
+  justify-content: flex-end;
+  gap: 2px;
+}
+.imm-side-right {
+  justify-content: flex-end;
+}
+// 倍速文字键浅色
+.immersive .rate-button {
+  color: rgba(255, 255, 255, 0.85);
+  &:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  &.active {
+    color: #fff;
+  }
+}
+// 队列/睡眠激活态
+.imm-side ::v-deep .button-icon.active .svg-icon {
+  color: var(--color-primary);
+}
+// 三大金刚：无圆圈、播放键更大、居中紧凑
+.imm-king {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(8px, 1.2vw, 18px);
+  .imm-seek ::v-deep .svg-icon {
+    width: clamp(20px, 2vw, 26px);
+    height: clamp(20px, 2vw, 26px);
+    color: rgba(255, 255, 255, 0.9);
+  }
+  .imm-play ::v-deep .svg-icon {
+    width: clamp(30px, 3.2vw, 42px);
+    height: clamp(30px, 3.2vw, 42px);
+    color: #fff;
+  }
+}
+// 音量：浅色滑条，靠右
+.imm-volume {
+  margin-left: 4px;
+  ::v-deep .vue-slider-rail {
+    background-color: rgba(255, 255, 255, 0.2);
+  }
+  ::v-deep .vue-slider-process {
+    background-color: rgba(255, 255, 255, 0.85);
+  }
+  ::v-deep .vue-slider-dot-handle {
+    background-color: #fff;
+  }
+  .volume-bar {
+    width: clamp(70px, 7vw, 110px);
+  }
 }
 </style>
