@@ -37,10 +37,10 @@
             v-if="nasState.enabled"
             class="nas-status"
             :class="nasStateClass"
-            :title="nasTitle"
             @click="onNasClick"
           >
             <svg-icon icon-class="router-wifi-alt" />
+            <span class="nas-tip">{{ nasTitle }}</span>
           </div>
         </transition>
       </div>
@@ -229,10 +229,9 @@ export default {
     nasStateClass() {
       return this.nasState.alive ? 'online' : 'offline';
     },
+    // [NAS] 自定义 hover tooltip 文案（替代原生 title 的丑边框框）。
     nasTitle() {
-      return this.nasState.alive
-        ? 'NAS 已连接 · 音源就近（点击重新检测）'
-        : 'NAS 未连接 · 使用在线音源（点击重连）';
+      return this.nasState.alive ? 'NAS 已连接' : 'NAS 未连接';
     },
   },
   watch: {
@@ -620,6 +619,7 @@ nav.has-custom-titlebar {
 // [NAS] 连接状态图标：放「我的订阅」旁(navigation-links 内)，绿(在线·呼吸)/红(断联·静止)
 .nas-status {
   -webkit-app-region: no-drag;
+  position: relative;
   display: inline-flex;
   align-items: center;
   cursor: pointer;
@@ -629,15 +629,44 @@ nav.has-custom-titlebar {
     width: 18px;
     height: 18px;
   }
+  // 呼吸/hover 只作用在图标本身，不波及下方的 tooltip（否则 tooltip 会跟着呼吸忽明忽暗）。
+  &.online .svg-icon {
+    animation: nas-breathe 3.6s ease-in-out infinite;
+  }
   &.online {
     color: #1db954;
-    animation: nas-breathe 3.6s ease-in-out infinite;
   }
   &.offline {
     color: #e74c3c;
   }
-  &:hover {
+  &:hover .svg-icon {
     filter: brightness(1.15);
+  }
+  // [NAS] 自定义连接提示，替代丑的原生 title：干净深色胶囊、无边框、hover 淡入下滑。
+  .nas-tip {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(-2px);
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    color: #fff;
+    background: rgba(38, 38, 42, 0.94);
+    padding: 6px 10px;
+    border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 100;
+  }
+  &:hover .nas-tip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
   }
 }
 // [NAS] 启停过渡：图标宽度/外边距/透明度一起渐变 → 绝对居中的 nav-links 跟着缓缓归位，
