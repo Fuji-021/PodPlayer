@@ -29,7 +29,7 @@
       <div
         v-if="hoverTime !== null"
         class="progress-hover-tip"
-        :style="{ left: hoverX + 'px' }"
+        :style="{ left: 'clamp(32px, ' + hoverX + 'px, calc(100% - 32px))' }"
       >
         {{ formatTrackTime(hoverTime) }}
       </div>
@@ -51,7 +51,9 @@
       <div
         v-if="markHovering"
         class="mark-hint-tip"
-        :style="{ left: progressPercent + '%' }"
+        :style="{
+          left: 'clamp(32px, ' + progressPercent + '%, calc(100% - 32px))',
+        }"
       >
         标记此刻
       </div>
