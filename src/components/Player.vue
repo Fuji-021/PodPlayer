@@ -455,7 +455,7 @@
               />
             </div>
 
-            <!-- 节目名+单集名(左，可点击跳详情) | 收藏(右) -->
+            <!-- 节目名+单集名(整行可点击跳详情)；收藏已移到下方控制行右组 -->
             <div class="imm-meta">
               <div class="imm-text">
                 <div
@@ -473,18 +473,6 @@
                 >
                   {{ podcastName }}
                 </div>
-              </div>
-              <div class="imm-like" :class="{ favorited: isFavorited }">
-                <button-icon
-                  :title="isFavorited ? '取消收藏' : '收藏'"
-                  @click.native="toggleFavorite"
-                >
-                  <svg-icon v-show="!isFavorited" icon-class="heart"></svg-icon>
-                  <svg-icon
-                    v-show="isFavorited"
-                    icon-class="heart-solid"
-                  ></svg-icon>
-                </button-icon>
               </div>
             </div>
 
@@ -690,12 +678,48 @@
                 /></button-icon>
               </div>
 
-              <!-- 音量(右，复用 volume/mute/onVolumeWheel) -->
+              <!-- 右组：标记 / 收藏 / 音量(以三大金刚为对称中心、与左组对称) -->
               <div class="imm-side imm-side-right">
+                <!-- 标记此刻：复用 bar 标记逻辑(短按标记/长按3秒清空/封面主色/彩蛋#2) -->
                 <div
-                  class="volume-control imm-volume"
-                  @wheel.prevent="onVolumeWheel"
+                  v-if="isPodcastTrack"
+                  class="mark-control imm-mark"
+                  :class="{
+                    charging: markCharging,
+                    pulse: markPulse,
+                    rainbow: markCount > 10,
+                  }"
+                  :style="
+                    markCount > 5 && markCount <= 10
+                      ? { color: markColor }
+                      : null
+                  "
+                  @click.stop
+                  @mousedown.stop="onMarkPressStart"
+                  @mouseup="onMarkPressEnd"
+                  @mouseleave="onMarkLeave"
                 >
+                  <span class="mark-charge"></span>
+                  <svg-icon class="mark-icon" icon-class="social-network" />
+                </div>
+                <!-- 收藏 -->
+                <div class="imm-like" :class="{ favorited: isFavorited }">
+                  <button-icon
+                    :title="isFavorited ? '取消收藏' : '收藏'"
+                    @click.native="toggleFavorite"
+                  >
+                    <svg-icon
+                      v-show="!isFavorited"
+                      icon-class="heart"
+                    ></svg-icon>
+                    <svg-icon
+                      v-show="isFavorited"
+                      icon-class="heart-solid"
+                    ></svg-icon>
+                  </button-icon>
+                </div>
+                <!-- 音量：单图标，点=静音、滚轮=调节(同 bar 音量键)，不常驻进度条 -->
+                <div class="imm-vol" @wheel.prevent="onVolumeWheel">
                   <button-icon :title="$t('player.mute')" @click.native="mute">
                     <svg-icon v-show="volume > 0.5" icon-class="volume" />
                     <svg-icon v-show="volume === 0" icon-class="volume-mute" />
@@ -704,18 +728,6 @@
                       icon-class="volume-half"
                     />
                   </button-icon>
-                  <div class="volume-bar">
-                    <vue-slider
-                      v-model="volume"
-                      :min="0"
-                      :max="1"
-                      :interval="0.01"
-                      :drag-on-click="true"
-                      :duration="0"
-                      tooltip="none"
-                      :dot-size="12"
-                    ></vue-slider>
-                  </div>
                 </div>
               </div>
             </div>
@@ -2535,7 +2547,8 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: clamp(14px, 2.2vh, 26px);
+  // [批注] 加大封面↔下方块间距 → 「节目名+进度条+控制」整块下移、封面上提，呼吸更足
+  margin-bottom: clamp(28px, 5vh, 58px);
 }
 .imm-cover {
   width: 100%;
@@ -2553,16 +2566,11 @@ export default {
   }
 }
 
-// 节目名/单集名(左可点) + 收藏(右)
+// 节目名/单集名(整行可点击)；收藏已移到下方控制行
 .imm-meta {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: clamp(10px, 1.6vh, 18px);
+  margin-bottom: clamp(12px, 2vh, 22px);
   .imm-text {
     min-width: 0;
-    flex: 1;
   }
   .imm-ep {
     font-size: clamp(16px, 1.5vw, 22px);
@@ -2592,22 +2600,12 @@ export default {
       color: rgba(255, 255, 255, 0.85);
     }
   }
-  .imm-like {
-    flex-shrink: 0;
-    ::v-deep .svg-icon {
-      width: 22px;
-      height: 22px;
-    }
-    &.favorited ::v-deep .svg-icon {
-      color: #e74c3c;
-    }
-  }
 }
 
 // 进度条：细胶囊、首尾不显时间(仅 hover 浮出)
 .imm-progress {
   position: relative;
-  margin-bottom: clamp(12px, 2vh, 22px);
+  margin-bottom: clamp(14px, 2.4vh, 26px);
   ::v-deep .vue-slider-rail {
     background-color: rgba(255, 255, 255, 0.18);
     border-radius: 999px;
@@ -2633,7 +2631,8 @@ export default {
   }
 }
 
-// 一行控制：左=倍速/队列/睡眠 中=三大金刚 右=音量
+// 一行控制：整行铺满(与进度条/节目名等宽)。左组(倍速/列表/睡眠) | 中三大金刚 | 右组(标记/收藏/音量)，
+//   左右两组各自贴边、以金刚为对称中心；组内稍疏。
 .imm-controls {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -2643,13 +2642,22 @@ export default {
 .imm-side {
   display: flex;
   align-items: center;
+  gap: clamp(4px, 0.9vw, 14px); // 疏一点
 }
 .imm-side-left {
-  justify-content: flex-end;
-  gap: 2px;
+  justify-content: flex-start; // 贴左缘
 }
 .imm-side-right {
-  justify-content: flex-end;
+  justify-content: flex-end; // 贴右缘
+}
+// 左右两组功能图标统一尺寸(队列/睡眠/收藏/音量)
+.imm-side ::v-deep .button-icon .svg-icon {
+  width: 20px;
+  height: 20px;
+}
+// 去掉 button-icon 自带 margin:4px → 组内间距只由 gap 控制，与 div 型控件(倍速/标记)对齐均匀
+.imm-side ::v-deep .button-icon {
+  margin: 0;
 }
 // 倍速文字键浅色
 .immersive .rate-button {
@@ -2665,12 +2673,33 @@ export default {
 .imm-side ::v-deep .button-icon.active .svg-icon {
   color: var(--color-primary);
 }
-// 三大金刚：无圆圈、播放键更大、居中紧凑
+// 收藏：已收藏变红(覆盖通用浅色)
+.imm-like.favorited ::v-deep .svg-icon {
+  color: #e74c3c;
+}
+// 标记键：浅色 + hover 底；尺寸/充能圈/彩蛋复用 .mark-control，仅去默认左右 margin(间距交给组 gap)
+.imm-mark {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.85);
+  &:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .mark-icon {
+    width: 20px;
+    height: 20px;
+  }
+}
+// 音量单图标：仅图标(点静音/滚轮调)，不常驻进度条
+.imm-vol {
+  display: flex;
+  align-items: center;
+}
+// 三大金刚：无圆圈、播放键更大、居中、组内稍疏
 .imm-king {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(8px, 1.2vw, 18px);
+  gap: clamp(10px, 1.8vw, 24px);
   .imm-seek ::v-deep .svg-icon {
     width: clamp(20px, 2vw, 26px);
     height: clamp(20px, 2vw, 26px);
@@ -2680,22 +2709,6 @@ export default {
     width: clamp(30px, 3.2vw, 42px);
     height: clamp(30px, 3.2vw, 42px);
     color: #fff;
-  }
-}
-// 音量：浅色滑条，靠右
-.imm-volume {
-  margin-left: 4px;
-  ::v-deep .vue-slider-rail {
-    background-color: rgba(255, 255, 255, 0.2);
-  }
-  ::v-deep .vue-slider-process {
-    background-color: rgba(255, 255, 255, 0.85);
-  }
-  ::v-deep .vue-slider-dot-handle {
-    background-color: #fff;
-  }
-  .volume-bar {
-    width: clamp(70px, 7vw, 110px);
   }
 }
 </style>
