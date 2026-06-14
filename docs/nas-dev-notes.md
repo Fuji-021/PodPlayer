@@ -55,7 +55,7 @@
 
 - **P1** 解析链 + 熔断 + ②级注入（~150 行 / +反代 ~40）→ 断联语义表前 4 行过。
 - **P2** 设置页（~80 行）→ 配置→生效→关闭→回现状，全程无重启。
-- **P3** 中途断联：NAS 源 howler 错误 → CDN 重建 + seek 续播（~60 行，**仅 NAS 源激活**）→ 播放中停 ABS，5s 内续播、进度误差 <2s。
+- **P3** 中途断联：NAS 源 howler 错误 → CDN 重建 + seek 续播（~60 行，**仅 NAS 源激活**）→ 播放中停 ABS，5s 内续播、进度误差 <2s。**✅ 代码已落地（见 §13），待真机（真 NAS + 主动断网）验收出口。**
 - **P4** 合并验收：禁碰清单 + 双态回归全过 → 合并 master，开关仍默认关。
 
 ## 7. UI：NAS 连接状态图标（用户 2026-06-13 规格，**功能跑通后再实现**）
@@ -140,3 +140,16 @@
 **进展（2026-06-13 第二轮）**：① toast 改「来源于{档名}的 NAS」(nasSource 暴露 `nasActiveName`，无名则回落通用文案；档名默认 host:port，添加弹窗不填即用默认)。② **made-by 已改 `DESIGN BY FUJII` 粗衬线**(footer .author)。③ **彩虹猫项标题换成 nyancat.gif**(`/img/logos/nyancat.gif`，像素图 image-rendering:pixelated；开关保留)。④ 修 NAS 弹窗深色模式黑字(`.nas-dialog` 加 `color:var(--color-text)`)。⑤ **外观(深色)开关本就存在**(settings 顶部「外观」项 auto/🌞浅色/🌚深色，绑 changeAppearance)——非新增，已告知用户位置;字色自适应靠主题 var(--color-text)。仍待办(下批)：音质/倒序/Last.fm/Discord 删除、启动页二选一、快捷键、设置页死代码 script 清理。**P3(播放中途掉线续播)下一轮做。**
 
 **进展（2026-06-13 第三轮·polish）**：① **导航栏 NAS 图标点击 toast** 文案改「{档名}的 NAS 已连接」/「…暂时连不上，已用在线音源」(Navbar 引入 `nasActiveName`，随用户改名实时变；与播放 toast 同口径)。② **Toast 组件去丑边框**(Toast.vue 删 `border:1px solid rgba(0,0,0,.06)` 及深色那条，改纯阴影浮起胶囊：双层 box-shadow + 半透白底 + saturate blur，圆角 8→10、padding 6/12→8/16、字重 500；全局 toast 一并受益)。③ **关闭 NAS 时导航栏不再生切**：`.nas-status` 外包 `<transition name="nas-collapse">`，启停时 `max-width(28↔0)+margin-left(10↔0)+opacity+scale` 一起 0.35s 渐变 → 绝对居中的 nav-links 跟着缓缓归位；收起期间 `animation:none !important` 停呼吸灯避免与 opacity 打架。④ **默认关做成显式保证**：`nasBridge` Store 加 `defaults:{enabled:false}`(仅 key 缺失时生效，用户已存的档/已开状态原样保留、不被覆盖)。**注**：代码本来就默认关(`store.get('enabled')===true`，未配置=false；新增/激活档都不自动开，只设置页开关会开)，此改为铁律加显式锚点。
+
+## 13. P3 中途掉线续播 —— 已落地（2026-06-14，代码完成 / 待真机验收）
+
+> 事故善后(实例隔离)收尾 + 合并 master + push 后，本轮接 P3。约 +70 行，**仅 NAS 源激活**，本地/CDN 播放零影响(低耦合铁律)。
+
+- **源类型标记**(`Player._getAudioSource`)：函数入口默认 `this._nasSourceActive=false`，仅②NAS 命中(`return nasUrl` 前)翻 `true` → 看门狗据此判定是否介入。①本地 file:// / ③CDN / 网易云分支全不设 true。
+- **中途掉线看门狗**(`Player._setIntervals` 的 1s 进度轮询内)：`_nasSourceActive && howler.playing()` 时，位置连续 **3 次(≈3s)** 前进 <0.25s = 流停滞(NAS 断网/ABS 冻结)→ `_failoverNasToCdn()`。暂停/缓冲态(`!playing()`/未 loaded)自然不计。
+- **加载期失败**(`Player._playAudioSource` 的 `loaderror`)：当前是 NAS 源(任意 errCode)→ 直接 `_failoverNasToCdn()`，**不再 re-resolve 又试 NAS**(避免循环)；非 NAS 源走原 3/4/else 逻辑(字节不动)。
+- **`_failoverNasToCdn()`**：取掉线位置 `howler.seek()` → `_nasSourceActive=false`(防重入) → `markNasDown()`(nasSource 新增：熔断 nasAlive=false + lastProbe=now，30s 内 resolveNasUrl 直返 null=落 CDN，30s 后自动重探恢复) → toast「NAS 连接中断，已切到在线音源继续播放」→ `_playAudioSource(track.podcastAudioUrl, true, pos)` 用③CDN 直链重建 + seek 回掉线位置续播。
+- **自愈**：下一集/30s 后 NAS 探活恢复 → 解析自然回到 NAS。
+- **改动文件**：`utils/podcast/nasSource.js`(+markNasDown)、`utils/Player.js`(import + _getAudioSource 标记 + 看门狗 + loaderror 分支 + _failoverNasToCdn)。**禁碰清单未碰**(①③原文、下载/统计/睡眠/refreshAll 未动)。prettier/esbuild/eslint 全绿。
+- **⚠️ 待真机验收(P3 出口)**：真 NAS 放一集 → 播放中拔网/停 ABS → 应 **≤5s 自动续 CDN、进度误差 <2s、无需手动**；并在 NAS 关闭态跑核心回归证明现状不变。需用户配合(真 NAS + 主动断网)。
+- **后续(未做)**：状态图标黄(慢)态/长断联换图标/自动重试原因提示(§10 #7)；「我的NAS」栏(#2)；NAS-在档单集标识(#4)。

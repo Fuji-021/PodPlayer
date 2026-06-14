@@ -29,6 +29,14 @@ export function nasActiveName() {
   return activeName;
 }
 
+// [P3] 播放中途 NAS 掉线时由 Player 调用：立即熔断。置 nasAlive=false + 重置 lastProbe，
+//   使其后 30s 内 resolveNasUrl 直返 null（直落 CDN、零等待）；30s 后 ensureProbed/心跳
+//   自动重探，NAS 恢复则下一集/下次解析自然回到 NAS。不发网络、纯本地状态翻转。
+export function markNasDown() {
+  nasAlive = false;
+  lastProbe = Date.now();
+}
+
 // 启动/配置变更后调用：重读主进程状态，启用则探一次 + 起 5min 心跳。
 export async function initNas() {
   if (!ipcRenderer) return;

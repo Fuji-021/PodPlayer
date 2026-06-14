@@ -10,7 +10,11 @@ import { cacheTrackSource, getTrackSource } from '@/utils/db';
 // [播客改造 S-1] 单集进度按集保存：用 Dexie 的 episodeProgress 表
 import { saveEpisodeProgress, getEpisodeProgress } from '@/utils/podcast/db';
 // [NAS] 音源②级：本地未命中→NAS 在线则解析流URL，失败/不可用返回 null 直落 CDN
-import { resolveNasUrl, nasActiveName } from '@/utils/podcast/nasSource';
+import {
+  resolveNasUrl,
+  nasActiveName,
+  markNasDown,
+} from '@/utils/podcast/nasSource';
 // [播客改造] 真实收听统计
 import { tickListen, resetEpisodeListening } from '@/utils/podcast/listening';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
@@ -306,6 +310,25 @@ export default class {
         this._progress = cur;
       }
       localStorage.setItem('playerCurrentTrackTime', this._progress);
+      // [P3] NAS 源中途掉线看门狗（本 interval 周期 1s）：howler 自认在播(playing())
+      //   但位置连续 ~3s 不前进 = 流停滞(NAS 断网/ABS 冻结)→ 切 CDN 重建 + seek 续播。
+      //   仅 NAS 源激活(_nasSourceActive)；本地 file:// / CDN 播放 _nasSourceActive=false 不受影响。
+      if (this._nasSourceActive && this._howler.playing()) {
+        if (
+          this._nasLastPos != null &&
+          Math.abs(this._progress - this._nasLastPos) < 0.25
+        ) {
+          this._nasStallSec = (this._nasStallSec || 0) + 1;
+          if (this._nasStallSec >= 3) {
+            this._nasStallSec = 0;
+            this._failoverNasToCdn();
+            return;
+          }
+        } else {
+          this._nasStallSec = 0;
+        }
+        this._nasLastPos = this._progress;
+      }
       const t = this._currentTrack;
       if (
         t &&
@@ -451,6 +474,10 @@ export default class {
     // 旧的就此返回，避免两个 howler 同时创建/播放（用户报告"两条音频在响"的根因）
     const myToken = ++this._playSourceToken;
 
+    // [P3] 新一轮播放：重置 NAS 中途掉线看门狗计数（上一集/上次失败的残留清零）。
+    this._nasLastPos = null;
+    this._nasStallSec = 0;
+
     // [播客改造 C-14] 标记进入加载态，让 UI 显示缓冲条
     store.commit('setAudioBuffering', true);
     // [播客改造 A-7.10] 切集淡入淡出：若旧 howler 还在播，先做 ~180ms 淡出再 unload，
@@ -511,6 +538,11 @@ export default class {
       }
     }
     this._howler.on('loaderror', (_, errCode) => {
+      // [P3] 当前是 NAS 源且加载失败(任意 code) → 切 CDN 续播，绝不因 NAS 跳过用户想听的集。
+      if (this._nasSourceActive) {
+        this._failoverNasToCdn();
+        return;
+      }
       // https://developer.mozilla.org/en-US/docs/Web/API/MediaError/code
       // code 3: MEDIA_ERR_DECODE
       if (errCode === 3) {
@@ -541,6 +573,33 @@ export default class {
       setTrayLikeState(store.state.liked.songs.includes(this.currentTrack.id));
     }
     this.setOutputDevice();
+  }
+  // [P3] NAS 源播放中途掉线 → 切 CDN 续播：取掉线位置 → 熔断 NAS → 用原始 CDN 直链
+  //   重建 howler 并 seek 回该位置。仅由看门狗 / NAS loaderror 在 _nasSourceActive 时调用。
+  _failoverNasToCdn() {
+    const track = this._currentTrack;
+    if (!track || !track.podcastAudioUrl) return;
+    // 防重入：切换中关掉看门狗判定（CDN 重建走 _playAudioSource 不经②，不会再设回 true）。
+    this._nasSourceActive = false;
+    let pos = 0;
+    try {
+      const s = this._howler && this._howler.seek();
+      pos = Math.floor((typeof s === 'number' ? s : this._progress) || 0);
+    } catch (e) {
+      pos = Math.floor(this._progress || 0);
+    }
+    try {
+      markNasDown(); // 熔断：30s 内 resolveNasUrl 直返 null → 解析落 CDN；之后自动重探恢复
+    } catch (e) {
+      /* ignore */
+    }
+    try {
+      store.dispatch('showToast', 'NAS 连接中断，已切到在线音源继续播放');
+    } catch (e) {
+      /* ignore */
+    }
+    // 直接用 ③CDN 直链重建（绕过 _getAudioSource 的②NAS）+ seek 回掉线位置续播。
+    this._playAudioSource(track.podcastAudioUrl, true, pos);
   }
   _getAudioSourceBlobURL(data) {
     // Create a new object URL.
@@ -652,6 +711,8 @@ export default class {
     return this._getAudioSourceBlobURL(buffer);
   }
   async _getAudioSource(track) {
+    // [P3] 默认标记"当前源非 NAS"；仅②NAS 命中时翻 true，供中途掉线看门狗判定是否介入。
+    this._nasSourceActive = false;
     // [播客改造] 播客单集自带音频直链，跳过网易云查询链。
     // [B-35] 已下载 → 同步从 store.podcastDownloads.pathMap 取本地路径返 file://。
     //   原来用动态 import('@/utils/db') 异步查，不可靠（顶部 Dexie get 报错时回退在线，
@@ -674,6 +735,7 @@ export default class {
         try {
           const nasUrl = await resolveNasUrl(track);
           if (nasUrl) {
+            this._nasSourceActive = true; // [P3] 本集走 NAS → 启用中途掉线看门狗
             // [NAS] 命中 NAS 时一句轻提示，带上当前连接档名(如"来源于托尼的 NAS")；无名则通用文案。
             try {
               const nm = nasActiveName();
