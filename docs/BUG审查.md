@@ -829,3 +829,50 @@ onCardHover(p) {
 ## 五、方法论小结
 
 L2 意图预取的**全部价值在"节流"二字**：预取是用"空闲时提前做一点"换"点击时快"，一旦没有 dwell/scroll/并发 三道闸，它就从"提前一点"退化成"滑过即全量并发"，把本该加速的瓶颈反向灌爆。dedup ≠ 节流——dedup 防的是"重复"，节流防的是"突发密度"，本案缺的是后者。这与 B-71 当时给的 H2（滚动禁 hover 过渡）是同一类"滚动放大 hover 成本"的问题，只是这次放大的是 IPC/网络而非光栅化。
+
+---
+---
+
+# 追加 · R12（2026-06-13）：IndexedDB 打不开 / 数据丢失 —— 四代理并行取证 + 联网确证
+
+> 用户报告：数据库内容清零（`[DB Health]` podcasts/episodes/favorites 全 0，仅 episodeProgress 残 2 行），随后恶化为订阅/导入全失败 `UnknownError: Internal error opening backing store for indexedDB.open`、`indexedDB.databases()` 也 reject。要求"全面排查 + 力求复现 + 不口说无凭"。本轮启 4 个并行子代理（读码 / 多实例锁 / 文档时间线 / 沙箱复现）+ WebSearch 交叉验证。
+
+## 一、结论：不是业务代码 / Dexie / prune，是 Chromium LevelDB 文件锁/损坏层；最可能"多个同身份 app 共开同一库"
+
+`Internal error opening backing store for indexedDB.open` 是 Chromium IndexedDB 后端 **LevelDB 打开磁盘 backing store 失败**抛的底层错（联网确证：electron#39132/#42645、chromium#340398745），与 JS 业务逻辑无关。已**双重排除**代码侧：
+
+- **读码（子代理A）**：全项目唯一 `new Dexie('yesplaymusic')`（`db.js:7`）；版本链 v1–v9 单调、无重复、无"同表改主键"故不会删表重建；主进程（`electron/`、`background.js`）**完全不碰 IndexedDB**（只用 electron-store JSON）；无 sqlite/leveldb 依赖。`prunePreviewOrphans` 是普通 `delete` 且**当前无任何调用方**——不可能损坏 backing store。
+- **沙箱实测（子代理D，fake-indexeddb 真跑）**：逐行照抄 db.js 版本链，全新打开稳定到 v9、读写正常；Dexie 4 对"代码版本<磁盘版本"会 SchemaDiff **静默兼容而非抛错**；并发升级默认自动关旧连接、不卡死。**Dexie 配置层健康，非真凶。** （诚实边界：fake-indexeddb 是逻辑层，无法复现真实磁盘 backing store 错，那必须真 Electron。）
+
+## 二、两个重大发现（之前无人注意，是埋雷的根因放大器）
+
+**发现 1 —— `src/background.js` 源码被截断/损坏（子代理B 实证）**：文件仅 504 行，末尾停在 `globalShortcut.unregiste`（半行、无闭合分号）；`new Background()` 实例化、`will-quit`、**`app.on('second-instance')`** 全部缺失（grep 全 src 无 `new Background`/`second-instance`）。对比旧构建 `dist_electron/bundled/background.js` 是**有** second-instance 的——说明后来回退/损坏丢了。**后果**：① 这份源码无法正常构建/运行；② `requestSingleInstanceLock()`(:120) 实际跑不到、单实例保护形同虚设；③ 没有 second-instance 把已有窗口前置。
+
+**发现 2 —— 三套同身份应用共用同一 LevelDB + 身份隔离被回退（子代理B 实证）**：`background.js:113-117` 把 userData 重定向到 `%APPDATA%\YesPlayMusicPodcast\`，IndexedDB 落在 `…\YesPlayMusicPodcast\IndexedDB\http_localhost_27233.indexeddb.leveldb`。本机至少三个入口都以 `setName('YesPlayMusicPodcast')` + 端口 27233 写同一库：① dev-serve；② 正式版安装包 `PodPlayer Setup 0.4.10.exe`（productName=PodPlayer 只改安装名、**不改 userData**）；③ 最新主构建 `dist_electron/index.js`(6/13)。**而曾为隔离把开发版改成独立身份 `PodPlayerDev`/10766/27244（见主文档 :2433-2435 实测双重独立），当前源码与最新构建已回退成同身份同端口** → 隔离失效。`start-dev.bat:13` 只 `taskkill electron.exe`，杀不掉正式版 `PodPlayer.exe`。
+
+→ **多个同身份进程同时打开同一 `…indexeddb.leveldb` → LevelDB 独占 LOCK 争用 → 后开者 backing store 打不开**。这正是该 UnknownError 的教科书成因（WebSearch 印证：Chromium 建议用 requestSingleInstanceLock 缓解多实例）。
+
+## 三、根因分级
+
+| 级别 | 判断 | 证据 |
+|---|---|---|
+| 确证·排除 | 业务代码 / Dexie 版本链 / prune / upsert **不是元凶** | 子代理 A 读码 + D 沙箱实测 |
+| **最可能根因** | 多个同身份 app（dev/正式/构建，皆 `YesPlayMusicPodcast`+27233）共开同一 LevelDB → LOCK 争用；或残留进程占锁；background.js 损坏使单实例保护失效、放大此雷 | 子代理 B + WebSearch |
+| 未排除（需真机查） | LevelDB 文件物理损坏（断电/强杀/同步盘 OneDrive 占用/杀软扫描）、磁盘满、userData 权限 | WebSearch 列为高频诱因；现场未查 |
+
+## 四、可复现（真机确定步骤，不口说无凭）
+
+沙箱无法复现磁盘层（子代理D 已诚实声明），但给出**用户机器可执行的确定复现**：
+
+- **复现 A（正式版 × dev-serve 共库）**：先运行已装的 PodPlayer 正式版（持 `…YesPlayMusicPodcast\IndexedDB\…27233…leveldb` 的 LOCK）→ 不关，再跑 `scripts\start-dev.bat`（同身份同端口同库）→ 第二个 `indexedDB.open` 抢不到 LOCK → 报 backing store。`start-dev.bat` 杀不掉正式版进程，故二者真并存。
+- **复现 C（残留进程，最日常）**：关窗口但 `electron.exe`/`PodPlayer*.exe` 没退干净（残留持 LOCK）→ 立刻再启 → 同错。**清干净所有相关进程后再启动若恢复正常 = 坐实锁冲突。**
+
+## 五、修复建议（交主 session，按急→缓）
+
+1. **紧急：修复 `src/background.js` 截断损坏**——补回 `new Background()`/`will-quit`/`second-instance`，否则当前源码无法正常构建运行（头等）。
+2. **恢复开发/正式身份+端口隔离**：开发版用独立 `PodPlayerDev` + 10766/27244（主文档 :2433-2435 原方案），保证 dev 与正式版/构建产物**永不共库**。
+3. **加 backing-store 兜底**：`db.open().catch()` 检测 `UnknownError`/`InvalidStateError` → 给用户明确提示与"重建库"引导（别白屏卡死）；并补 `db.on('blocked'/'versionchange')`。
+4. **`start-dev.bat` 清进程要含 `PodPlayer*.exe`**（不只 electron.exe）；userData 切勿置于 OneDrive/同步盘。
+5. 数据备份缺口：app 的 Dexie（订阅/收藏/进度/统计）**一直无任何备份**——建议加定期自动导出（OPML + JSON）。本次订阅可从 NAS 的 ABS 导 OPML 重灌，进度/统计/收藏若无备份不可追回。
+
+> 方法论：四代理并行（读码×2 + 文档 + 沙箱实测）+ 联网，各自独立取证再交叉——子代理C 凭文档曾怀疑"B-85 prune 删库"，被 A（prune 无调用方、是普通 delete）与 D（Dexie 层健康）证否；这正是多代理交叉的价值：单一视角的"看起来可疑"经实证被推翻，根因收敛到无人留意的 background.js 损坏 + 共库锁争用。
