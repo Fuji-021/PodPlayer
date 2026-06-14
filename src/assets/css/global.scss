@@ -141,3 +141,34 @@ a {
 .user-select-none {
   user-select: none;
 }
+
+/* ════════ 图标点击微反馈（统一·克制 · 审查 session 交付 tap-feedback.css 并入） ════════ */
+/* 图标本身静态，仅在「点击」时给一次轻微按压回弹：只缩放、无位移、无变色；尊重「减弱动画」。 */
+/* 显式用法：给可点击图标载体加 class="tap"。另：button 内的 .svg-icon 全局自动生效（图标级缩放，
+   与按钮自身的 :active 反馈互不冲突）；纯展示图标（不在 button 内）不受影响；呼吸灯/转圈用 animation
+   关键帧、不受本 transition 影响。 */
+.tap,
+button .svg-icon {
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.tap:active,
+button:active .svg-icon {
+  transform: scale(0.88);
+}
+.tap svg,
+svg.tap {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tap,
+  button .svg-icon {
+    transition: none;
+  }
+  .tap:active,
+  button:active .svg-icon {
+    transform: none;
+  }
+}

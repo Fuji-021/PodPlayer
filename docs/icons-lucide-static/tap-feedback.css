@@ -1,0 +1,42 @@
+/* PodPlayer 图标点击微反馈 —— 统一、克制（审查 session 交付） */
+/* 设计：图标本身静态，仅在「点击」时给一次轻微的按压回弹，提供触感。 */
+/* 原则：只缩放、无位移、无变色；幅度小、时长短；尊重系统「减弱动画」。 */
+/* 用法：给「可点击的图标载体」加 class="tap"（svg-icon 本身，或包裹它的 button/a/div）。 */
+
+.tap {
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 按下即缩小、松开自动弹回 —— 零 JS，最稳，覆盖所有点击 */
+.tap:active {
+  transform: scale(0.88);
+}
+
+/* svg 缩放以自身几何中心为基准（避免偏移） */
+.tap svg,
+svg.tap {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* 可选：点完「回弹一次」（比 :active 略活泼，仍克制）。 */
+/* 用法：JS 在点击时 el.classList.add('tap-bounce')，animationend 后移除。 */
+@keyframes icon-tap-bounce {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.85); }
+  100% { transform: scale(1); }
+}
+.tap-bounce {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: icon-tap-bounce 0.18s ease-out;
+}
+
+/* 无障碍：系统开启「减弱动画」时，关闭一切反馈 */
+@media (prefers-reduced-motion: reduce) {
+  .tap { transition: none; }
+  .tap:active { transform: none; }
+  .tap-bounce { animation: none; }
+}
