@@ -281,10 +281,8 @@ function showDbFatalOverlay(err) {
       'padding:28px 30px;box-shadow:0 20px 60px rgba(0,0,0,.5);line-height:1.6">' +
       '<div style="font-size:18px;font-weight:600;margin-bottom:10px">本地数据库无法打开</div>' +
       '<div style="font-size:13px;color:#bbb;margin-bottom:14px">' +
-      '错误：<code style="color:#ff8a8a">' +
-      name +
-      '</code> — ' +
-      msg +
+      '错误：<code id="db-fatal-name" style="color:#ff8a8a"></code> ' +
+      '<span id="db-fatal-msg"></span>' +
       '</div>' +
       '<div style="font-size:13px;color:#ccc;margin-bottom:8px">最可能的原因：' +
       '<b>同时打开了多个 PodPlayer 实例</b>，抢占同一个数据库文件锁；或磁盘库损坏。</div>' +
@@ -298,6 +296,11 @@ function showDbFatalOverlay(err) {
       'border-radius:10px;padding:9px 18px;font-size:14px;font-weight:600;cursor:pointer">重试</button>' +
       '</div></div>';
     document.body.appendChild(el);
+    // [事故根治·加固] 变量部分用 textContent 注入，避免 err.message 含标记时破坏 DOM。
+    const nameEl = document.getElementById('db-fatal-name');
+    if (nameEl) nameEl.textContent = name;
+    const msgEl = document.getElementById('db-fatal-msg');
+    if (msgEl) msgEl.textContent = '— ' + msg;
     const btn = document.getElementById('db-fatal-retry');
     if (btn) btn.addEventListener('click', () => window.location.reload());
   };

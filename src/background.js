@@ -47,8 +47,12 @@ const log = text => {
 // [事故根治·实例隔离] 用环境变量 PODPLAYER_PROFILE 驱动「身份 → userData → IndexedDB」
 //   与端口三件套，让 正式版 / 开发版 / 测试床 各自拥有独立 app name → 独立 userData 目录
 //   → 独立 LevelDB，三者可同时运行、永不抢同一个 LOCK（本次 backing store 打不开的根因）。
-//   未设置时默认 prod（打包安装版）。详见 docs/实例隔离规范.md。
-const PODPLAYER_PROFILE = process.env.PODPLAYER_PROFILE || 'prod';
+//   未设置时：dev-serve(有 WEBPACK_DEV_SERVER_URL)默认 dev、打包默认 prod，
+//   保证裸跑 `yarn electron:serve` 时 neapi 与 .env 烘焙的 dev API 端口(10755)一致、不 ECONNREFUSED。
+//   详见 docs/实例隔离规范.md。
+const PODPLAYER_PROFILE =
+  process.env.PODPLAYER_PROFILE ||
+  (process.env.WEBPACK_DEV_SERVER_URL ? 'dev' : 'prod');
 const PODPLAYER_PROFILES = {
   prod: { name: 'PodPlayer', title: 'PodPlayer', neapi: 10754, express: 27232 },
   dev: {
@@ -148,6 +152,12 @@ class Background {
 
     // start netease music api（端口随 PROFILE，避免多实例 EADDRINUSE）
     this.neteaseMusicAPI = startNeteaseMusicApi(PROFILE.neapi);
+    // [事故根治] 端口被占时吞掉 promise 拒绝、不崩主进程（仅影响网易云音乐，不影响播客）。
+    if (this.neteaseMusicAPI && this.neteaseMusicAPI.catch) {
+      this.neteaseMusicAPI.catch(e =>
+        log('netease api start failed: ' + (e && e.message))
+      );
+    }
 
     // create Express app
     this.createExpressApp();
@@ -210,6 +220,10 @@ class Background {
         });
     });
     this.expressApp = expressApp.listen(PROFILE.express, '127.0.0.1');
+    // [事故根治] 端口被占(EADDRINUSE)时优雅记录，而非抛未捕获 'error' 事件崩溃整个主进程。
+    this.expressApp.on('error', err => {
+      log(`express listen error on :${PROFILE.express} — ${err && err.code}`);
+    });
   }
 
   createWindow() {
@@ -398,7 +412,7 @@ class Background {
           width: 800,
           height: 600,
           titleBarStyle: 'default',
-          title: 'YesPlayMusic',
+          title: PROFILE.title,
           webPreferences: {
             webSecurity: false,
             nodeIntegration: true,
