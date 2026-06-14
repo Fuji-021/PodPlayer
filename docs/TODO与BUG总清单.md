@@ -49,7 +49,7 @@
 > 来源 `docs/审查报告-周末稳定性专项.md`(对抗 session，4 子 agent 找 buglist 之外的新问题)。本 session 用 **24 个核验 agent 逐条对照真实代码核实 → 24 条全部 confirmed**(0 refuted/0 partial)，每条证据(file:line)见核验记录。**本轮按用户要求只记录、不修**。标 **[待真机]** 者=代码事实已确认、实际用户影响待真机验证。修复性价比序见报告 §三：**P1-1 / P1-2 成本极低收益极高，可任意一轮顺手修**。
 
 ### 🔴 P1（8 条，全部确认）
-- 🔴 **[审P1-1]** 下载 `writeStream` 无 `.on('error')` + 主进程无 `uncaughtException` 兜底 → 磁盘满(ENOSPC)/目录不可写(EACCES)时崩**整个主进程**，该集永久卡 downloading 留孤儿。`podcastDownload.js:146`。[待真机] ★最该先修
+- ✅ **[审P1-1]**（2026-06-15 已修，提交 `ecd422f`）下载 `writeStream` 补 `.on('error')` + 统一失败收尾 `failDownload`(settled 去重 + 停 res/writeStream 两端流 + 删半成品 + 上报 download:error) + 完成信号改挂 `writeStream 'finish'` + 主进程 `uncaughtException`/`unhandledRejection` 兜底(只 log)→ 磁盘满(ENOSPC)/目录不可写(EACCES/ENOENT)不再崩主进程、单集不再卡 downloading。原 `podcastDownload.js:146`。electron:build 通过 + 对抗审查无回归。
 - 🔴 **[审P1-2]** 每秒 `saveEpisodeProgress` 裸 promise 无 `.catch` + 全工程无 `unhandledrejection` → IndexedDB 异常态(锁争用/损坏/配额)时**每秒一条未捕获 rejection**。`Player.js:339`(对照紧邻 tickListen().catch())。★最该先修·落在事故同故障域
 - 🔴 **[审P1-3]** 全工程无 `powerMonitor`(suspend/resume) + 无 `mediaDevices.devicechange` → 睡眠唤醒本地/CDN 源可能卡死、下载卡死无重试、拔输出设备(蓝牙断)不回落默认。`src` 全工程零命中。
 - 🔴 **[审P1-4]** 退出钩子不通知渲染端 flush + 无 `beforeunload`/`pagehide`；`app.exit()` 立即终止 → in-flight Dexie 写(进度/统计)可能半途夭折。`background.js:536-547`；`ipcMain.js:32/66/210` app.exit。**呼应数据丢失事故**。
