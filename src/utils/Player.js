@@ -51,11 +51,11 @@ function setTitle(track) {
   // [B-32] 播客单集：标题栏只显示单集名（不带节目名/app 后缀，
   // 标题栏左侧已有 PodPlayer 品牌区，无需重复）。网易云保持原格式。
   if (!track) {
-    document.title = 'YesPlayMusic';
+    document.title = 'PodPlayer';
   } else if (track.podcastEpisodeId) {
     document.title = track.name;
   } else {
-    document.title = `${track.name} · ${track.ar[0].name} - YesPlayMusic`;
+    document.title = `${track.name} · ${track.ar[0].name} - PodPlayer`;
   }
   if (isCreateTray) {
     ipcRenderer?.send('updateTrayTooltip', document.title);
@@ -1395,7 +1395,7 @@ export default class {
     if (!track || !track.podcastAudioUrl) return false;
 
     // [播客改造 progress-bug] 立即调 setTitle 让 document.title 含节目名
-    // → state.title 一定与原默认值"YesPlayMusic"不同 → Vue 重渲染读到正确 _progress
+    // → state.title 一定与原默认值"PodPlayer"不同 → Vue 重渲染读到正确 _progress
     // 之前用 commit('updateTitle', document.title) 不工作的原因：重启时 title 没变化
     if (track.name) setTitle(track);
 

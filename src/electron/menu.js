@@ -150,7 +150,7 @@ export function createMenu(win, store) {
               {
                 role: 'window',
                 id: 'window',
-                label: 'YesPlayMusic',
+                label: 'PodPlayer',
                 type: 'checkbox',
                 checked: true,
                 click: () => {

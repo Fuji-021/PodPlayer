@@ -25,7 +25,7 @@ module.exports = {
     },
   },
   pwa: {
-    name: 'YesPlayMusic',
+    name: 'PodPlayer',
     iconPaths: {
       favicon32: 'img/icons/favicon-32x32.png',
     },
@@ -42,7 +42,7 @@ module.exports = {
       entry: 'src/main.js',
       template: 'public/index.html',
       filename: 'index.html',
-      title: 'YesPlayMusic',
+      title: 'PodPlayer',
       chunks: ['main', 'chunk-vendors', 'chunk-common', 'index'],
     },
   },
@@ -74,7 +74,7 @@ module.exports = {
       .end()
       .use('esbuild-loader')
       .loader('esbuild-loader')
-      .options({ target: 'es2015', format: "cjs" })
+      .options({ target: 'es2015', format: 'cjs' })
       .end();
 
     // LimitChunkCountPlugin 可以通过合并块来对块进行后期处理。用以解决 chunk 包太多的问题
@@ -192,7 +192,7 @@ module.exports = {
           .end()
           .use('esbuild-loader')
           .loader('esbuild-loader')
-          .options({ target: 'es2015', format: "cjs" })
+          .options({ target: 'es2015', format: 'cjs' })
           .end();
       },
       // 渲染线程的配置文件

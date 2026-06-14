@@ -259,7 +259,7 @@ export function createTray(win, eventEmitter, store) {
     });
 
   let tray = new Tray(icon);
-  tray.setToolTip('YesPlayMusic');
+  tray.setToolTip('PodPlayer');
 
   return isLinux
     ? new YPMTrayLinuxImpl(tray, win, eventEmitter, store)
