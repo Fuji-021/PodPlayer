@@ -355,23 +355,32 @@ export default {
       if (sec.actionType === 'page') {
         this.$router.push({ name: 'discover', params: { type: sec.key } });
       } else if (sec.actionType === 'reroll') {
-        // [B-43] 排除已订阅 + [B-47] 再排除当前热门/寻宝已显示项（三栏不重复）+ 按分类加权
-        const exclude = new Set(Object.keys(this.subscribedMap));
+        // [P2 修] 硬排除已订阅(绝不显示)；软排除 当前热门/寻宝/新上线 + **上一批 forYou**。
+        //   排上一批 forYou = 真"换一批"；软排除后池不足时 buildForYou 从非订阅全池回填，不再只剩两三个。
+        const hardExclude = new Set(Object.keys(this.subscribedMap));
+        const softExclude = new Set();
         (this.sections.hot || []).forEach(p =>
-          exclude.add((p.name || '').trim())
+          softExclude.add((p.name || '').trim())
         );
         (this.sections.treasure || []).forEach(p =>
-          exclude.add((p.name || '').trim())
+          softExclude.add((p.name || '').trim())
         );
-        // [审操作#5] reroll 也排除「新上线」(this.newItems)，否则 forYou 可能与新上线撞车(违"各栏不重复"承诺)。
-        (this.newItems || []).forEach(p => exclude.add((p.name || '').trim()));
+        // [审操作#5] 排除「新上线」(this.newItems)，避免 forYou 与新上线撞车(各栏不重复)。
+        (this.newItems || []).forEach(p =>
+          softExclude.add((p.name || '').trim())
+        );
+        // [P2 修「reroll 不换」] 排除上一批 forYou，强制换新。
+        (this.sections.forYou || []).forEach(p =>
+          softExclude.add((p.name || '').trim())
+        );
         this.forYouSeq++; // [B-47] 变 key 触发卡片淡入过渡（不硬切）
         this.sections = {
           ...this.sections,
           forYou: reshuffleSection(
             this.allItems,
             'forYou',
-            exclude,
+            hardExclude,
+            softExclude,
             this.preferredGenres
           ),
         };

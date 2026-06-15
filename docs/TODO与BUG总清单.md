@@ -23,10 +23,10 @@
 
 ### P2
 - ✅ **统计「最近一周」>「全部」(如岩中花述)**（2026-06-15 修·分支 `feature/perf` round2）— 根因坐实:`resetEpisodeListening`(重播已听完单集)清 `episodeListenStats.bits/listenedSec` 却不动 `listenDaily` → 听完重听后「全部」(读 listenedSec)被清零重数、「周」(读 listenDaily.listenedSec)仍含旧值 → 周>全部。**修**(终极):「全部」= `max(Σ episodeListenStats.totalPlayContentSec, Σ listenDaily.contentSec 全天)`,「周」= listenDaily 7 天。因周⊆全天⊆全部 → **数学保证 全部≥周**(与两表是否一致无关),取 max 还兜住两表漂移。**已用用户真实备份模拟验证:旧口径 2 档违例→纯 contentSec 1 档→本方案 0 档**;另确认 totalPlayContentSec 历史一直在填、数据未丢。**待真机最终确认**。[listening.js getListenStatsByPodcast]
-- 🔴 《思文，败类》首页封面 ≠ 详情页封面 — 疑 name≠RSS title→subscribedMap 查不到 feedUrl→回落旧 logo。
+- ✅ 《思文，败类》首页封面 ≠ 详情页封面（2026-06-15 修·`fix/buglist`）— 根因 name≠RSS title→subscribedMap 查不到。**修**:DiscoverCard 新增 `coverFeedUrl=feedUrl||podcast.feedUrl`，用它(feedUrl 主键)查本地真实封面，不依赖 name 匹配(不触 B56-5)。边界:纯榜单卡(无 feedUrl)仍回落 logo。**待真机**。
 - ✅ 头像二级菜单弹出锁全局滚动（2026-06-15 修·`fix/buglist`）— `ContextMenu.openMenu` 加 `lockScrolling=true` 默认开关、头像菜单传 false 不锁；其余右键菜单默认锁、行为不变。**待真机**。
 - 🔴 单集列表全量渲染无虚拟化(与机核同源,大档建数百行 DOM)。
-- 🔴 「为你推荐」reroll 不换/池只剩 3 — reshuffle 没排除上一批 forYou。
+- ✅ 「为你推荐」reroll 不换/池只剩 3（2026-06-15 修·`fix/buglist`）— 排除拆 hardExclude(已订阅)/softExclude(其它栏+**上一批 forYou**)，池不足从非订阅全池回填。reroll 真换一批 + 不再只剩三个。与操作#5 不同问题。**待真机**。
 - ✅ 单集详情「加入播放列表」按钮加入后图标过大 + 不能再点移出 [B67-BUG-5]（2026-06-15 修·`fix/buglist`）— 改 `isQueued`(真实队列成员)驱动的持久 toggle + `check-circle` 图标(有边界);点击可移出。**待真机**。
 - ✅ last.fm 子窗 nodeIntegration+webSecurity:false 历史高危（2026-06-15 修·`fix/buglist`）— `background.js` new-window 删整段 last.fm 高危内嵌子窗死分支，统一 `shell.openExternal` 走系统浏览器。behaviorChange=false。**待真机**(scrobble 仍正常)。
 

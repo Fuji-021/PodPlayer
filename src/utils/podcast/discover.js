@@ -116,20 +116,36 @@ export function preferredGenresFrom(items, subscribedNames) {
 // [B-43] "为你推荐"：偏好分类优先 + 随机填充。
 //   有偏好分类 → 同分类节目随机排前，不足 12 个再用其它随机补足（保证板块不空）。
 //   无偏好分类 → 纯随机（与旧行为一致）。每次调用都重洗 → "再推荐一次"有变化。
-function buildForYou(items, excludeNames, preferredGenres) {
-  const fresh = excludeSubbed(items, excludeNames);
+//   [P2 修] hardExclude=绝不显示(已订阅)；softExclude=尽量避开(其它栏/上一批 reroll)，
+//   但软排除后池不足一整行时允许从非订阅全池回填，避免 reroll 后 forYou 只剩两三个。
+function buildForYou(items, hardExclude, softExclude, preferredGenres) {
+  const nonSub = excludeSubbed(items, hardExclude); // 非订阅全池(硬排除已订阅)
+  const soft = softExclude || new Set();
+  const fresh = nonSub.filter(p => !soft.has((p.name || '').trim())); // 优先：不在其它栏/上一批
+  let result;
   if (!preferredGenres || !preferredGenres.size) {
-    return shuffle(fresh).slice(0, 16);
+    result = shuffle(fresh).slice(0, 16);
+  } else {
+    const matched = [];
+    const others = [];
+    for (const p of fresh) {
+      if (preferredGenres.has((p.primaryGenreName || '').trim()))
+        matched.push(p);
+      else others.push(p);
+    }
+    result = shuffle(matched).slice(0, 16);
+    if (result.length < 16) {
+      result.push(...shuffle(others).slice(0, 16 - result.length));
+    }
   }
-  const matched = [];
-  const others = [];
-  for (const p of fresh) {
-    if (preferredGenres.has((p.primaryGenreName || '').trim())) matched.push(p);
-    else others.push(p);
-  }
-  const result = shuffle(matched).slice(0, 16);
+  // [P2 修「reroll 不换 / 池只剩 3」] 避开软排除后不够一整行(16)时，从非订阅全池回填
+  //   (允许与其它栏/上批重叠，但**绝不显示已订阅**) → 既保证真换一批、又不至于只剩两三个。
   if (result.length < 16) {
-    result.push(...shuffle(others).slice(0, 16 - result.length));
+    const picked = new Set(result.map(p => (p.name || '').trim()));
+    const refill = shuffle(nonSub).filter(
+      p => !picked.has((p.name || '').trim())
+    );
+    result.push(...refill.slice(0, 16 - result.length));
   }
   return result;
 }
@@ -142,27 +158,43 @@ export function splitSections(items, excludeNames, preferredGenres) {
   // [B-44] 取够 2 行所需量（宽屏列数多）：热门 20 / 寻宝 16 / 推荐 16
   // [B-47 第1点] 除热门外三栏互不重复：热门固定(榜单序)，寻宝排除热门+已订阅，推荐再排除寻宝
   const hot = items.slice(0, 20);
-  const used = new Set(excludeNames || []);
-  hot.forEach(p => used.add((p.name || '').trim()));
+  const used = new Set(excludeNames || []); // 已订阅+热门：供寻宝池过滤
+  const sectionNames = new Set(); // [P2] 其它栏占用名(软排除，**不含已订阅**)：热门+寻宝
+  hot.forEach(p => {
+    const n = (p.name || '').trim();
+    used.add(n);
+    sectionNames.add(n);
+  });
   const treasurePool = items
     .slice(TREASURE_START)
     .filter(p => !used.has((p.name || '').trim()));
   const treasure = shuffle(treasurePool).slice(0, 16);
-  treasure.forEach(p => used.add((p.name || '').trim()));
-  // 推荐排除 热门+寻宝+已订阅，按订阅分类加权
-  const forYou = buildForYou(items, used, preferredGenres);
+  treasure.forEach(p => sectionNames.add((p.name || '').trim()));
+  // 推荐：硬排除已订阅(excludeNames)，软排除 热门+寻宝(sectionNames)，按订阅分类加权
+  const forYou = buildForYou(
+    items,
+    excludeNames,
+    sectionNames,
+    preferredGenres
+  );
   return { hot, treasure, forYou };
 }
 
 // [B-42] 再随机一批（"再找一找" / "再推荐一次"）。
 // [B-43] forYou 走分类加权 buildForYou。
-export function reshuffleSection(items, type, excludeNames, preferredGenres) {
+export function reshuffleSection(
+  items,
+  type,
+  hardExclude,
+  softExclude,
+  preferredGenres
+) {
   if (type === 'treasure') {
     return shuffle(
-      excludeSubbed(items, excludeNames).slice(TREASURE_START)
+      excludeSubbed(items, hardExclude).slice(TREASURE_START)
     ).slice(0, 16);
   }
-  return buildForYou(items, excludeNames, preferredGenres);
+  return buildForYou(items, hardExclude, softExclude, preferredGenres);
 }
 
 // [B-42] 二级页全量：hot=全部榜单（榜单序）；treasure=腰部及以后（排除已订阅）

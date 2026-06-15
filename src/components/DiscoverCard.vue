@@ -112,22 +112,28 @@ export default {
       if (feed && Object.values(this.subscribedMap).includes(feed)) return feed;
       return '';
     },
+    // [思文败类 修] 拉本地封面用的 feedUrl：优先 subscribedMap 解析出的(已订阅)，否则用卡片自带的
+    //   feedUrl(搜索结果/部分目录卡带 feedUrl)。根治"目录名≠RSS title→subscribedMap 查不到→回落旧 logo"
+    //   (《思文，败类》)：只要本地库(订阅/预览过)有该 feedUrl 的真实封面就用，不再依赖 name 匹配。
+    coverFeedUrl() {
+      return this.feedUrl || (this.podcast && this.podcast.feedUrl) || '';
+    },
     cover() {
-      // 已订阅节目优先用本地(DB)封面，与详情/我的订阅一致；否则用目录 logo。
+      // 已入库节目优先用本地(DB)封面，与详情/我的订阅一致；否则用目录 logo。
       //   目录源 logoURL 可能是旧封面（节目换封面后），会与详情页对不上（实测《思文，败类》）。
       return this.dbCover || hiResLogo(this.podcast.logoURL);
     },
   },
   watch: {
-    // 已订阅时拉本地封面覆盖目录 logo（feedUrl 由 subscribedMap 响应式解析；订阅/取消即时跟随）
-    feedUrl: {
+    // 已入库(订阅/预览过)时拉本地封面覆盖目录 logo（coverFeedUrl 响应式解析；订阅/取消即时跟随）
+    coverFeedUrl: {
       immediate: true,
       handler(f) {
         this.dbCover = '';
         if (!f) return;
         getPodcast(f)
           .then(p => {
-            if (p && p.coverUrl && f === this.feedUrl)
+            if (p && p.coverUrl && f === this.coverFeedUrl)
               this.dbCover = p.coverUrl;
           })
           .catch(() => {});
