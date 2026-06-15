@@ -38,63 +38,72 @@ export async function tickListen(
   { recordBit = true, wallDeltaSec = 1, contentDeltaSec = 1 } = {}
 ) {
   if (!id || !totalSec || totalSec <= 0) return null;
-  const row = (await db.episodeListenStats.get(id)) || {
-    id,
-    totalSec,
-    bits: new Uint8Array(Math.ceil((totalSec + 1) / 8)),
-    listenedSec: 0,
-    completed: false,
-    totalPlayWallSec: 0,
-    totalPlayContentSec: 0,
-    updatedAt: Date.now(),
-  };
-  // 总时长可能从无到有，扩容 bits
-  if (totalSec > row.totalSec) {
-    const newLen = Math.ceil((totalSec + 1) / 8);
-    if (newLen > row.bits.length) {
-      const nb = new Uint8Array(newLen);
-      nb.set(row.bits);
-      row.bits = nb;
-    }
-    row.totalSec = totalSec;
-  }
+  let row;
   let newRealSec = false; // [B-55] 本次是否新增了"真实听过的一秒"(bit 首次置位)
-  if (recordBit && sec >= 0 && sec < totalSec) {
-    const byteIdx = sec >> 3;
-    const bitIdx = sec & 7;
-    if (byteIdx < row.bits.length) {
-      const had = (row.bits[byteIdx] >> bitIdx) & 1;
-      if (!had) {
-        row.bits[byteIdx] |= 1 << bitIdx;
-        row.listenedSec += 1;
-        newRealSec = true;
+  // [审P2-10] 把 episodeListenStats 的 get→改→put 包进 Dexie rw 事务：每秒 fire-and-forget 的 tick
+  //   在 seek/倍速快触发、或写入较慢时会并发重叠，原裸 R-M-W 会"后写覆盖前写"丢更新(少计统计)。
+  //   同表 rw 事务会自动串行 → 后一笔读到的是前一笔已提交的值，杜绝丢更新。行为不变、只是计数不再丢。
+  await db.transaction('rw', db.episodeListenStats, async () => {
+    row = (await db.episodeListenStats.get(id)) || {
+      id,
+      totalSec,
+      bits: new Uint8Array(Math.ceil((totalSec + 1) / 8)),
+      listenedSec: 0,
+      completed: false,
+      totalPlayWallSec: 0,
+      totalPlayContentSec: 0,
+      updatedAt: Date.now(),
+    };
+    // 总时长可能从无到有，扩容 bits
+    if (totalSec > row.totalSec) {
+      const newLen = Math.ceil((totalSec + 1) / 8);
+      if (newLen > row.bits.length) {
+        const nb = new Uint8Array(newLen);
+        nb.set(row.bits);
+        row.bits = nb;
+      }
+      row.totalSec = totalSec;
+    }
+    if (recordBit && sec >= 0 && sec < totalSec) {
+      const byteIdx = sec >> 3;
+      const bitIdx = sec & 7;
+      if (byteIdx < row.bits.length) {
+        const had = (row.bits[byteIdx] >> bitIdx) & 1;
+        if (!had) {
+          row.bits[byteIdx] |= 1 << bitIdx;
+          row.listenedSec += 1;
+          newRealSec = true;
+        }
       }
     }
-  }
-  row.totalPlayWallSec = (row.totalPlayWallSec || 0) + wallDeltaSec;
-  row.totalPlayContentSec = (row.totalPlayContentSec || 0) + contentDeltaSec;
-  if (row.totalSec > 0 && row.listenedSec >= row.totalSec - 5) {
-    row.completed = true;
-  }
-  row.updatedAt = Date.now();
-  await db.episodeListenStats.put(row);
-  // [B-37] 同步累加「按天×节目」聚合，供"最近 N 天"统计（episodeListenStats 只有累计值，无时间分布）
+    row.totalPlayWallSec = (row.totalPlayWallSec || 0) + wallDeltaSec;
+    row.totalPlayContentSec = (row.totalPlayContentSec || 0) + contentDeltaSec;
+    if (row.totalSec > 0 && row.listenedSec >= row.totalSec - 5) {
+      row.completed = true;
+    }
+    row.updatedAt = Date.now();
+    await db.episodeListenStats.put(row);
+  });
+  // [B-37] 同步累加「按天×节目」聚合，供"最近 N 天"统计（episodeListenStats 只有累计值，无时间分布）。
+  //   [审P2-10] 同样用 listenDaily 独立 rw 事务串行 get→改→put；保持独立 try/catch=daily 失败不影响主进度。
   try {
     const podcastId = String(id).split('::')[0];
     const dateStr = dayKey();
     const dkey = `${dateStr}::${podcastId}`;
-    const drow = (await db.listenDaily.get(dkey)) || {
-      key: dkey,
-      date: dateStr,
-      podcastId,
-      wallSec: 0,
-      contentSec: 0,
-    };
-    drow.wallSec += wallDeltaSec;
-    drow.contentSec += contentDeltaSec;
-    // [B-55] 真实听过秒（bit 新置位）的按天增量，供"最近 N 天"用真实时长统计（拖动水的不算）
-    drow.listenedSec = (drow.listenedSec || 0) + (newRealSec ? 1 : 0);
-    await db.listenDaily.put(drow);
+    await db.transaction('rw', db.listenDaily, async () => {
+      const drow = (await db.listenDaily.get(dkey)) || {
+        key: dkey,
+        date: dateStr,
+        podcastId,
+        wallSec: 0,
+        contentSec: 0,
+      };
+      drow.wallSec += wallDeltaSec;
+      drow.contentSec += contentDeltaSec;
+      // [B-55] 真实听过秒（bit 新置位）的按天增量，供"最近 N 天"用真实时长统计（拖动水的不算）
+      drow.listenedSec = (drow.listenedSec || 0) + (newRealSec ? 1 : 0);
+      await db.listenDaily.put(drow);
+    });
   } catch (e) {
     // ignore（daily 统计失败不影响主进度）
   }
