@@ -36,8 +36,8 @@
 - 🔴 searchLocalEpisodes 全表 JS filter 无索引。[B69-F4]
 - 🔴 本地搜单集混入未订阅预览(语义待定)。[B69-L1]
 - 🔴 播放心跳每秒 2 次 Dexie 写(功耗,可降频)。[B69-F5]
-- 🔴 _updateMprisState 监听器永不移除(休眠中,改 once)。[B69-L2]
-- 🔴 Player.vue beforeDestroy 漏清 closeQueuePanel(影响≈0)。[B69-L3]
+- ✅ _updateMprisState 监听器永不移除 [B69-L2] —— 即 `saveLyricFinished` 监听，**已在审P2-5 修**(removeAllListeners+once，提交 `f3a7b5b`)。
+- ✅ Player.vue beforeDestroy 漏清 closeQueuePanel [B69-L3] —— **沉浸式轮已补**(beforeDestroy 调 closeQueuePanel)。
 - 🔴 软删记录(subscribed:false)长期堆积(数据量小)。
 - 🔴 重启时下载中断成孤儿任务(edge case)。
 - 🟡 统计 toggle 残留帧致差集闪现 — 疑 v1.5.7 已根治,留作回归边界。
@@ -68,7 +68,7 @@
 - ✅ **[审P2-7]**（2026-06-15 已修，提交 `86d5a3b`）parseRss 加 item 数上限(`MAX_ITEMS=50000`，纯防失控、不丢真实集) + 单集 description `capLen 100KB`(挡内嵌大 base64 灌爆 DB/v-html)。`rssParser.js`。
 - ✅ **[审P2-8]**（2026-06-15 已修，提交 `86d5a3b`）parseOpmlLenient 加 `8MB` 输入护栏(`scan=slice`)→ 防 `[^>]*` 在数十 MB 畸形 OPML 上 O(n·m) 回溯卡 UI；主 DOMParser 路径不变。`rssParser.js`。
 - ✅ **[审P2-9]**（2026-06-15 已修，提交 `d4d0df4`）OPML 导入串行改并发 `runLimited(≤5)` → 2000 档不再不可用；进度改完成计数。`service.js`。(source 经核为本文件设计 manual 即涵盖 OPML，不引入新值；审查 false-positive)
-- 🟠 **[审P2-10]** `tickListen` 每秒 `get→改→put` 非事务、`listenDaily` 第二段独立 R-M-W → seek/倍速快触发时后写覆盖前写、少计统计(丢更新)。`listening.js:34-101`。[待真机]
+- ✅ **[审P2-10]**（2026-06-15 已修，提交 `9c78b43`）`tickListen` 两表 R-M-W 各用 `db.transaction('rw',table,…)` 包住 → 同表 rw 事务自动串行、并发 tick 不再丢更新；listenDaily 仍独立 try/catch(隔离不变)。统计行为不变。`listening.js`。对抗审查 CLEAN。
 - ✅ **[审P2-11]**（2026-06-15 已修，提交 `86d5a3b`）NAS `ensureItems`/`ensureEps` 加在途去重(并发复用同一 promise) + 按 `total` 分页拉全(原 `limit=500` 漏档；满页无 total→Infinity 靠短页 break 收尾)。`nasBridge.js`。[NAS 待真机]
 
 ### 🟡 P3（5 条，全部确认）
