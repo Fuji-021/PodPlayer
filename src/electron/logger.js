@@ -3,13 +3,21 @@
 //   开发者/支持可直接看文件、也便于据日志回溯用户操作。文件路径在设置页「打开日志文件夹」一键打开。
 //   注：本文件在 src/electron/ 主进程域，按项目约定**不使用可选链 ?. / 空值合并 ??**。
 import log from 'electron-log';
-import { ipcMain, shell } from 'electron';
+import { ipcMain, shell, app } from 'electron';
 
 let _inited = false;
 
 export function initMainLogger() {
   if (_inited) return;
   _inited = true;
+  try {
+    // 显式锁定日志路径到当前 profile 的 userData(本函数须在 app.setName/setPath 之后调用)，
+    //   否则 electron-log 会用默认 app 名(yesplaymusic)把日志写错目录。
+    log.transports.file.resolvePath = () =>
+      require('path').join(app.getPath('userData'), 'logs', 'main.log');
+  } catch (e) {
+    /* ignore */
+  }
   try {
     log.transports.file.level = 'info';
     log.transports.file.maxSize = 5 * 1024 * 1024; // 5MB 轮转(超出自动归档 .old.log)

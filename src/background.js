@@ -41,9 +41,6 @@ import { createMpris, createDbus } from '@/electron/mpris';
 import { spawn } from 'child_process';
 import { initMainLogger, registerLogIpc, log as elog } from './electron/logger';
 const clc = require('cli-color');
-// [日志] 尽早初始化文件日志 + 注册日志 IPC(接渲染端日志 / 打开日志文件夹)。
-initMainLogger();
-registerLogIpc();
 const log = text => {
   console.log(`${clc.blueBright('[background.js]')} ${text}`);
   try {
@@ -169,6 +166,10 @@ class Background {
       'userData',
       require('path').join(app.getPath('appData'), PROFILE.name)
     );
+    // [日志] 必须在 setName/setPath 之后初始化：确保 electron-log 写到本 profile 的
+    //   userData\logs\main.log（而非默认 app 名目录）。
+    initMainLogger();
+    registerLogIpc();
 
     // Make sure the app is singleton.
     if (!app.requestSingleInstanceLock()) return app.quit();
