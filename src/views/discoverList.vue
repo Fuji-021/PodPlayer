@@ -2,7 +2,7 @@
   <div class="discover-list">
     <div class="head">
       <h1>{{ title }}</h1>
-      <button class="refresh-btn" title="换一批" @click="reload(true)">
+      <button v-tip="'换一批'" class="refresh-btn" @click="reload(true)">
         <svg-icon icon-class="refresh" />
       </button>
     </div>

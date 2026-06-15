@@ -15,7 +15,7 @@
         <div class="s">{{ item.podcastTitle }}</div>
       </div>
       <!-- [B-33] 专属页：单集右边只显示「已收藏」状态按钮（点击取消收藏） -->
-      <button class="unfav" title="取消收藏" @click.stop="unfav(item)">
+      <button v-tip="'取消收藏'" class="unfav" @click.stop="unfav(item)">
         <svg-icon icon-class="heart-solid" />
       </button>
     </div>

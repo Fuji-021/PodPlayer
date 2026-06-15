@@ -55,12 +55,16 @@
               </template>
             </div>
           </div>
-          <button class="ep-act" title="立即播放" @click.stop="playEpisode(ep)">
+          <button
+            v-tip="'立即播放'"
+            class="ep-act"
+            @click.stop="playEpisode(ep)"
+          >
             <svg-icon icon-class="play-circle" />
           </button>
           <button
+            v-tip="'更多'"
             class="ep-act"
-            title="更多"
             @click.stop="openMenu($event, ep)"
           >
             <svg-icon icon-class="menu-dots-vertical" />

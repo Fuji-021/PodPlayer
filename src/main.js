@@ -14,6 +14,9 @@ import '@/assets/css/nprogress.css';
 // [B-62] 全局注册统一淡入封面组件（节目/单集封面零成本替换 <img>）
 import PodImage from '@/components/PodImage.vue';
 Vue.component('PodImage', PodImage);
+// [优化2] 全局 hover tooltip 指令(统一替换原生 title= 的丑系统框)
+import tip from '@/utils/directives/tip';
+Vue.directive('tip', tip);
 
 // [审P1-2] 渲染端全局兜底：未处理的 Promise 拒绝集中记录(仍 console.error 可见、保留 reason 栈)并
 //   preventDefault，避免控制台被刷爆 + 某些配置下被当致命错误。首要修复是给高频写路径补 .catch

@@ -22,10 +22,10 @@
         <!-- hover 按钮：未订阅=方形+；已订阅=方形勾（绿）。仅 hover 显示，点击切换订阅 -->
         <button
           v-show="!overlayMode"
+          v-tip="subbed ? '已订阅 · 点击取消订阅' : '订阅到我的'"
           class="act-btn"
           :class="{ subbed: subbed }"
           :disabled="busy"
-          :title="subbed ? '已订阅 · 点击取消订阅' : '订阅到我的'"
           @click.stop="onToggle"
         >
           <svg-icon :icon-class="subbed ? 'checkbox' : 'square-plus'" />
@@ -47,12 +47,12 @@
     <div class="card-name">
       <span class="cn-text">{{ podcast.name }}</span>
       <!-- [B-49] 已订阅绿点（少数派标记；封面仍零常驻状态，点在名字旁不在封面上） -->
-      <span v-if="subbed" class="src-dot" title="已订阅"></span>
+      <span v-if="subbed" v-tip="'已订阅'" class="src-dot"></span>
       <!-- [B-70] 链接无法解析红点：点进去预览抓取失败过的节目，标红让用户避开 -->
       <span
         v-else-if="broken"
+        v-tip="'链接无法解析，暂时打不开'"
         class="src-dot broken-dot"
-        title="链接无法解析，暂时打不开"
       ></span>
     </div>
     <div class="card-meta">

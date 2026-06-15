@@ -47,13 +47,13 @@
              有角标→点击像刷子摇晃一下 + 清零全部角标(角标各自播离场动画)；
              无角标→点不动，只轻微缩小下沉反馈。 -->
         <button
+          v-tip="hasBadges ? '清理“有更新”角标' : '没有可清理的角标'"
           class="clean-button"
           :class="{
             active: hasBadges,
             shaking: cleaning,
             sinking: sinking,
           }"
-          :title="hasBadges ? '清理“有更新”角标' : '没有可清理的角标'"
           @click="clearBadges"
         >
           <svg-icon icon-class="clean" />
@@ -165,14 +165,14 @@
           {{ p.title || '(无标题)'
           }}<span
             v-if="p.source === 'discover'"
+            v-tip="'来自首页发现页订阅'"
             class="src-dot dot-discover"
-            title="来自首页发现页订阅"
           ></span
           ><span
             v-if="nasOn(p)"
+            v-tip="'NAS 上有此节目（音源就近）'"
             class="nas-dot"
             :style="nasGlow(p.id)"
-            title="NAS 上有此节目（音源就近）"
             ><svg-icon icon-class="wifi"
           /></span>
         </div>
@@ -221,7 +221,7 @@
           </div>
           <div class="status">
             <span>{{ importDone }} / {{ importTotal }}</span>
-            <span class="current" :title="importCurrent">{{
+            <span v-tip="importCurrent" class="current">{{
               importCurrent
             }}</span>
           </div>

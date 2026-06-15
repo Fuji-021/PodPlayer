@@ -16,8 +16,8 @@
       </div>
       <!-- [B-33] 专属页：单集右边只显示「已下载」状态按钮（点击删除） -->
       <button
+        v-tip="'已下载（点击删除）'"
         class="dl-btn"
-        title="已下载（点击删除）"
         @click.stop="askDelete(item)"
       >
         <svg-icon icon-class="check-circle" />

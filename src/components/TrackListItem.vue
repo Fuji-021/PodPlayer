@@ -1,9 +1,9 @@
 <template>
   <div
+    v-tip="showUnavailableSongInGreyStyle ? track.reason : ''"
     class="track"
     :class="trackClass"
     :style="trackStyle"
-    :title="showUnavailableSongInGreyStyle ? track.reason : ''"
     @mouseover="hover = true"
     @mouseleave="hover = false"
   >
@@ -33,7 +33,7 @@
       <div class="container">
         <div class="title">
           {{ track.name }}
-          <span v-if="isSubTitle" :title="subTitle" class="sub-title">
+          <span v-if="isSubTitle" v-tip="subTitle" class="sub-title">
             ({{ subTitle }})
           </span>
           <span v-if="isAlbum" class="featured">

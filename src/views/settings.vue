@@ -75,7 +75,7 @@
           <div class="title"> {{ $t('settings.deviceSelector') }} </div>
         </div>
         <div class="right">
-          <select v-model="outputDevice" :title="currentOutputDeviceLabel">
+          <select v-model="outputDevice" v-tip="currentOutputDeviceLabel">
             <option
               v-for="device in allOutputDevices"
               :key="device.deviceId"
@@ -256,7 +256,7 @@
       <div class="item">
         <div class="left">
           <!-- [设置] 彩虹猫=吉祥物：进度条样式开关，标题直接用吉祥物 gif(后续会加更多样式) -->
-          <div class="title nyancat-title" title="进度条彩虹猫样式">
+          <div v-tip="'进度条彩虹猫样式'" class="title nyancat-title">
             <img src="/img/logos/nyancat.gif" alt="进度条彩虹猫样式" />
           </div>
         </div>

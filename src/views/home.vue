@@ -85,8 +85,8 @@
           <div class="disc-head">
             <div class="disc-title">{{ sec.title }}</div>
             <div
+              v-tip="sec.actionText"
               class="disc-action"
-              :title="sec.actionText"
               @click="onSectionAction(sec)"
             >
               <span>{{ sec.actionText }}</span>

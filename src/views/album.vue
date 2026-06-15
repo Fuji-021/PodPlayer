@@ -33,7 +33,7 @@
             class="explicit-symbol"
             ><ExplicitSymbol
           /></span>
-          <span :title="album.publishTime | formatDate">{{
+          <span v-tip="album.publishTime | formatDate">{{
             new Date(album.publishTime).getFullYear()
           }}</span>
           <span> · {{ album.size }} {{ $t('common.songs') }}</span

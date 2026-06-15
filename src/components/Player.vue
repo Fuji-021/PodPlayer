@@ -64,7 +64,10 @@
       </div>
       <div class="controls">
         <div class="playing">
-          <div class="container" @click.stop>
+          <!-- [BUG1] 删掉左列 container 整体 @click.stop：原本它撑满整个左列、把"金刚键左边空白"
+               也吃掉 → 点左边不进沉浸(右边能)。改为只给内部真控件各自 @click.stop，container 空白
+               冒泡到 .player → 左右对称进沉浸。 -->
+          <div class="container">
             <!-- [B-63] 播放栏封面：小幅 hover 微动+光晕（力度/光晕比首页小一档） -->
             <div class="cover-box">
               <div
@@ -77,10 +80,10 @@
                 :src="coverSrc"
                 @load="coverLoaded = true"
                 @error="coverLoaded = true"
-                @click="goToAlbumOrPodcast"
+                @click.stop="goToAlbumOrPodcast"
               />
             </div>
-            <div class="track-info" :title="audioSource">
+            <div v-tip="audioSource" class="track-info">
               <!-- [播客改造] 单集名：超出容器宽度时 hover 跑马灯滚动；
                  内层 span 用 transform 平移实现，需配合 JS 检测溢出 -->
               <!-- [B-31] 点击单集名：网易云 → 跳列表；播客 → 跳单集详情 -->
@@ -93,7 +96,7 @@
                     marquee: nameOverflow,
                   },
                 ]"
-                @click="onClickName"
+                @click.stop="onClickName"
                 @mouseenter="checkNameOverflow"
               >
                 <span ref="nameText" class="name-text">{{
@@ -108,7 +111,7 @@
                   <span
                     v-for="(ar, index) in currentTrack.ar"
                     :key="ar.id"
-                    @click="onClickArtist(ar)"
+                    @click.stop="onClickArtist(ar)"
                   >
                     <span :class="{ ar: ar.id || isPodcastTrack }">
                       {{ ar.name }} </span
@@ -123,8 +126,8 @@
             <!-- [播客改造 A-7.1] 爱心收藏：当前播放是播客则走本地收藏，否则保留原网易云逻辑 -->
             <div class="like-button" :class="{ favorited: isFavorited }">
               <button-icon
-                :title="isFavorited ? '取消收藏' : '收藏'"
-                @click.native="toggleFavorite"
+                v-tip="isFavorited ? '取消收藏' : '收藏'"
+                @click.native.stop="toggleFavorite"
               >
                 <svg-icon v-show="!isFavorited" icon-class="heart"></svg-icon>
                 <svg-icon
@@ -145,24 +148,24 @@
                图标暂用原项目的 previous/next（自绘 SVG 风格不一致，暂缓） -->
             <button-icon
               v-show="!player.isPersonalFM"
-              title="后退 15 秒"
+              v-tip="'后退 15 秒'"
               @click.native="seekBackward15"
               ><svg-icon icon-class="previous"
             /></button-icon>
             <button-icon
               v-show="player.isPersonalFM"
-              title="不喜欢"
+              v-tip="'不喜欢'"
               @click.native="moveToFMTrash"
               ><svg-icon icon-class="thumbs-down"
             /></button-icon>
             <button-icon
+              v-tip="$t(player.playing ? 'player.pause' : 'player.play')"
               class="play"
-              :title="$t(player.playing ? 'player.pause' : 'player.play')"
               @click.native="playOrPause"
             >
               <svg-icon :icon-class="player.playing ? 'pause' : 'play'"
             /></button-icon>
-            <button-icon title="前进 30 秒" @click.native="seekForward30"
+            <button-icon v-tip="'前进 30 秒'" @click.native="seekForward30"
               ><svg-icon icon-class="next"
             /></button-icon>
           </div>
@@ -343,15 +346,15 @@
               </transition>
             </div>
             <button-icon
-              :class="{
-                active: player.repeatMode !== 'off',
-                disabled: player.isPersonalFM,
-              }"
-              :title="
+              v-tip="
                 player.repeatMode === 'one'
                   ? $t('player.repeatTrack')
                   : $t('player.repeat')
               "
+              :class="{
+                active: player.repeatMode !== 'off',
+                disabled: player.isPersonalFM,
+              }"
               @click.native="switchRepeatMode"
             >
               <svg-icon
@@ -366,24 +369,24 @@
             <!-- [播客改造 A-7.2] 删除随机播放按钮（播客不需要，源码保留） -->
             <button-icon
               v-if="false"
+              v-tip="$t('player.shuffle')"
               :class="{ active: player.shuffle, disabled: player.isPersonalFM }"
-              :title="$t('player.shuffle')"
               @click.native="switchShuffle"
               ><svg-icon icon-class="shuffle"
             /></button-icon>
             <button-icon
               v-if="settings.enableReversedMode"
+              v-tip="$t('player.reversed')"
               :class="{
                 active: player.reversed,
                 disabled: player.isPersonalFM,
               }"
-              :title="$t('player.reversed')"
               @click.native="switchReversed"
               ><svg-icon icon-class="sort-up"
             /></button-icon>
             <!-- [播客改造 A-7.4] 滚轮调音量：在音量按钮或音量条上滚动均可 -->
             <div class="volume-control" @wheel.prevent="onVolumeWheel">
-              <button-icon :title="$t('player.mute')" @click.native="mute">
+              <button-icon v-tip="$t('player.mute')" @click.native="mute">
                 <svg-icon v-show="volume > 0.5" icon-class="volume" />
                 <svg-icon v-show="volume === 0" icon-class="volume-mute" />
                 <svg-icon
@@ -408,8 +411,8 @@
             <!-- [沉浸式播放页 P0] 展开沉浸页按钮：arrow-up = 向上展开全屏沉浸页。
                原 toggleLyrics(老网易云歌词页)已不适用播客，改调 toggleImmersive；歌词代码原样保留(可逆)。 -->
             <button-icon
+              v-tip="'沉浸页'"
               class="lyrics-button"
-              title="沉浸页"
               style="margin-left: 12px"
               @click.native="toggleImmersive"
               ><svg-icon icon-class="arrow-up"
@@ -437,8 +440,8 @@
         <!-- 顶部：收起按钮(P1 会加 ESC/顶部 hover 提示) -->
         <div class="imm-top">
           <button-icon
+            v-tip="'收起'"
             class="imm-collapse"
-            title="收起"
             @click.native="closeImmersive"
             ><svg-icon icon-class="arrow-down"
           /></button-icon>
@@ -465,16 +468,16 @@
             <div class="imm-meta">
               <div class="imm-text">
                 <div
+                  v-tip="currentTrack.name"
                   class="imm-ep"
-                  :title="currentTrack.name"
                   @click="immClickTitle"
                 >
                   {{ currentTrack.name }}
                 </div>
                 <div
                   v-if="podcastName"
+                  v-tip="podcastName"
                   class="imm-pod"
-                  :title="podcastName"
                   @click="immClickPodcast"
                 >
                   {{ podcastName }}
@@ -692,20 +695,20 @@
               <!-- 三大金刚：后退15 / 播放暂停(无圈) / 前进30 -->
               <div class="imm-king">
                 <button-icon
+                  v-tip="'后退 15 秒'"
                   class="imm-seek"
-                  title="后退 15 秒"
                   @click.native="seekBackward15"
                   ><svg-icon icon-class="previous"
                 /></button-icon>
                 <button-icon
+                  v-tip="$t(player.playing ? 'player.pause' : 'player.play')"
                   class="imm-play"
-                  :title="$t(player.playing ? 'player.pause' : 'player.play')"
                   @click.native="playOrPause"
                   ><svg-icon :icon-class="player.playing ? 'pause' : 'play'"
                 /></button-icon>
                 <button-icon
+                  v-tip="'前进 30 秒'"
                   class="imm-seek"
-                  title="前进 30 秒"
                   @click.native="seekForward30"
                   ><svg-icon icon-class="next"
                 /></button-icon>
@@ -740,7 +743,7 @@
                 <!-- 收藏 -->
                 <div class="imm-like" :class="{ favorited: isFavorited }">
                   <button-icon
-                    :title="isFavorited ? '取消收藏' : '收藏'"
+                    v-tip="isFavorited ? '取消收藏' : '收藏'"
                     @click.native="toggleFavorite"
                   >
                     <svg-icon
@@ -761,8 +764,8 @@
                   @click.stop
                 >
                   <button-icon
+                    v-tip="'音量'"
                     :class="{ active: volMenuOpen }"
-                    title="音量"
                     @click.native="toggleVolMenu"
                   >
                     <svg-icon v-show="volume > 0.5" icon-class="volume" />
@@ -2612,22 +2615,48 @@ export default {
 }
 
 // ============ [沉浸式播放页 P0] 全屏沉浸 overlay ============
-// 主题隔离：固定深色底 + 浅色文字，不随系统深/浅色切换(方案 §3.3)。
+// [TODO3] 字色随主题(改回随主题，弃旧"固定深色"隔离)+ 柔和(非刺眼纯白)+ 可读兜底。
+//   背景是封面采样色(偏暗为主、但有的封面偏亮)，故:深色模式=柔和近白字 + 深磨砂底 + 轻暗描边;
+//   浅色模式=柔和近黑字 + 浅磨砂遮罩(把偏暗封面提亮让深字可读)+ 轻亮描边。所有字色集中到 4 个变量。
 .immersive {
+  // 深色模式默认值(浅色模式见下方 body[data-theme='light'] 覆盖)
+  --imm-text: rgba(245, 245, 247, 0.92); // 主字(标题/播放键):柔和近白
+  --imm-text-2nd: rgba(236, 237, 241, 0.82); // 次字(功能图标/倍速/标记)
+  --imm-text-weak: rgba(228, 230, 236, 0.6); // 弱字(节目名副标题)
+  --imm-text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); // 可读兜底:轻暗描边
+  --imm-frost: rgba(10, 11, 14, 0.34); // 磨砂遮罩:压暗封面
+  --imm-accent: rgba(
+    255,
+    255,
+    255,
+    0.92
+  ); // 进度条已播/把手(随主题，浅色下不再白到看不见)
+  --imm-rail: rgba(255, 255, 255, 0.18); // 进度条未播轨
   position: fixed;
   inset: 0;
   z-index: 190; // 盖住 navbar/bar(100)，低于 toast/modal(1000+)
   background: #0e0f13;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--imm-text);
+  text-shadow: var(--imm-text-shadow); // 子元素继承，任何封面上都撑住对比
   overflow: hidden;
   user-select: none;
-  // 复用的功能键(倍速文字/队列/睡眠/音量/收藏)统一浅色，覆盖全局主题 var(--color-text)
+  // 复用的功能键(倍速文字/队列/睡眠/音量/收藏)字色随主题
   ::v-deep .button-icon .svg-icon {
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--imm-text-2nd);
   }
   ::v-deep .button-icon:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: rgba(127, 127, 127, 0.16); // 中性 hover 底，深浅色都可见
   }
+}
+// [TODO3] 浅色模式:柔和近黑字 + 浅色磨砂遮罩(压亮偏暗封面、保深字可读) + 轻亮描边
+body[data-theme='light'] .immersive {
+  --imm-text: rgba(28, 28, 30, 0.92);
+  --imm-text-2nd: rgba(44, 44, 48, 0.82);
+  --imm-text-weak: rgba(66, 66, 72, 0.62);
+  --imm-text-shadow: 0 1px 2px rgba(255, 255, 255, 0.55);
+  --imm-frost: rgba(236, 238, 243, 0.62);
+  --imm-accent: rgba(38, 38, 42, 0.9);
+  --imm-rail: rgba(0, 0, 0, 0.14);
 }
 .imm-fade-enter-active,
 .imm-fade-leave-active {
@@ -2664,7 +2693,7 @@ export default {
 .imm-bg-frost {
   position: absolute;
   inset: 0;
-  background: rgba(10, 11, 14, 0.34);
+  background: var(--imm-frost); // [TODO3] 随主题:深色压暗 / 浅色提亮
   backdrop-filter: blur(24px) saturate(1.05);
   // 极轻噪点：内联 svg feTurbulence(高级磨砂感)
   &::after {
@@ -2692,7 +2721,7 @@ export default {
   .imm-collapse .svg-icon {
     width: 22px;
     height: 22px;
-    color: rgba(255, 255, 255, 0.86);
+    color: var(--imm-text-2nd);
   }
 }
 
@@ -2751,7 +2780,7 @@ export default {
     font-size: clamp(16px, 1.5vw, 22px);
     font-weight: 700;
     line-height: 1.25;
-    color: #fff;
+    color: var(--imm-text);
     cursor: pointer;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2765,14 +2794,14 @@ export default {
   .imm-pod {
     margin-top: 4px;
     font-size: clamp(12px, 1vw, 14px);
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--imm-text-weak);
     cursor: pointer;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     &:hover {
       text-decoration: underline;
-      color: rgba(255, 255, 255, 0.85);
+      color: var(--imm-text-2nd);
     }
   }
 }
@@ -2785,15 +2814,15 @@ export default {
   //   (slider.css；本组件 scoped 白色规则带 data 属性、特异性更高，会压过彩虹猫，故用 :not 排除)。
   &:not(.nyancat) {
     ::v-deep .vue-slider-rail {
-      background-color: rgba(255, 255, 255, 0.18);
+      background-color: var(--imm-rail);
       border-radius: 999px;
     }
     ::v-deep .vue-slider-process {
-      background-color: rgba(255, 255, 255, 0.92);
+      background-color: var(--imm-accent);
       border-radius: 999px;
     }
     ::v-deep .vue-slider-dot-handle {
-      background-color: #fff;
+      background-color: var(--imm-accent);
       box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
       visibility: hidden; // 干净：平时藏点，hover/拖动才现
     }
@@ -2806,7 +2835,7 @@ export default {
   .progress-hover-tip {
     bottom: calc(100% + 8px);
     background: transparent;
-    color: #fff;
+    color: var(--imm-text);
     padding: 0;
     box-shadow: none;
     opacity: 1;
@@ -2847,12 +2876,12 @@ export default {
 .immersive .rate-button {
   width: 36px;
   padding: 4px 0;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--imm-text-2nd);
   &:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: rgba(127, 127, 127, 0.16);
   }
   &.active {
-    color: #fff;
+    color: var(--imm-text);
   }
 }
 // 队列/睡眠激活态
@@ -2868,9 +2897,9 @@ export default {
   margin: 0;
   width: 36px;
   height: 36px;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--imm-text-2nd);
   &:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: rgba(127, 127, 127, 0.16);
   }
   .mark-icon {
     width: 20px;
@@ -2948,26 +2977,16 @@ export default {
   .imm-seek ::v-deep .svg-icon {
     width: clamp(20px, 2vw, 26px);
     height: clamp(20px, 2vw, 26px);
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--imm-text);
   }
   .imm-play ::v-deep .svg-icon {
     width: clamp(30px, 3.2vw, 42px);
     height: clamp(30px, 3.2vw, 42px);
-    color: #fff;
+    color: var(--imm-text);
   }
 }
 
-// [审操作#17] 沉浸页内复用的弹窗(倍速/队列/睡眠/音量)主题隔离：原用 var(--color-body-bg)/--color-text
-//   跟随全局深浅色，浅色模式下"浅底深字"漂在深色沉浸页上、与"沉浸页一个样"相悖。这里在沉浸页作用域内
-//   把这几支主题变量**就地重定义为深色**——弹窗容器与其全部子元素(qp-item 边框/qp-sub 等用 var 的)自动
-//   继承到深色值，无需逐个改。--color-primary(品牌蓝强调色)保留。
-.immersive .rate-menu,
-.immersive .queue-panel,
-.immersive .sleep-menu,
-.immersive .vol-menu {
-  --color-body-bg: #1c1c20;
-  --color-text: rgba(255, 255, 255, 0.92);
-  --color-secondary-bg-for-transparent: rgba(255, 255, 255, 0.1);
-  --color-primary-bg-for-transparent: rgba(83, 94, 234, 0.22);
-}
+// [TODO3] 原 [审操作#17] 把沉浸页内弹窗(倍速/队列/睡眠/音量)主题隔离为固定深色;按"改回随主题"
+//   的最新意见**去掉该隔离** —— 弹窗改为跟随全局深浅色(沉浸页本体也已随主题:深色深磨砂/浅色浅磨砂),
+//   二者一致、不再就地强制深色。如需弹窗与沉浸字色完全统一可后续再调。
 </style>

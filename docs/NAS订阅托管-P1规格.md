@@ -4,6 +4,8 @@
 > 本文是 P1（对账 / 取消删档 / 冷藏 / 多设备 / 首连差异）的可照写实现规格。凡依赖 P0 的 ABS 契约（POST/PATCH body 形态、folder 解析、`?hard=1` 参数、token 权限）处标 **〔对齐P0〕**——以 P0 本机实测结论为准，收敛到一个抽取函数 `ensureManaged()` 改一处即全对齐。
 >
 > **贯穿铁律**：无 NAS 全程降级、对账失败静默不抛、`src/electron/` 与 `src/utils/podcast/` 新增 NAS 代码禁可选链 `?.`/`??`（用 `&&` 守卫 + `|| 默认值`）、**所有破坏性操作走「feature-flag(默认关) + 宽限 + 多设备 scope(默认 local) + dry-run gating(默认关)」四闸**。
+>
+> ⚠️ **【2026-06-16 修正 · 砍冷藏】** 按最新意见 + `docs/NAS订阅托管方案.md`：**P1 不做「6 个月未听冷藏」**——本文里凡「冷藏 / coldStore / `nas:coldStore` / 6 个月不活跃 / 删单集留最近 1 集」的段落(§1.1 三态的"冷藏"态、§5 冷藏删单集、P1-e、相关 flag `nasColdStoreEnabled`)**全部作废、跳过不实现**。容量回收改由 **NAS 端 ABS 看门狗(`docs/abs-watchdog.py` / `docker-compose.watchdog.yml`,按总容量驱逐全局最老集)** 负责，app 侧**不删单集**。于是 P1 两态简化为：`subscribed=true`→确保托管；`subscribed=false`→7 天宽限后删整档(取消移除)。**对账 / 多设备(仅本机·共享) / 首连差异对账 / 取消移除 照常做。**
 
 ---
 

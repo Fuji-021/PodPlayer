@@ -44,18 +44,18 @@
             <svg-icon :icon-class="isFav ? 'heart-solid' : 'heart'" />
           </button>
           <button
+            v-tip="isQueued ? '移出播放列表' : '加入播放列表'"
             class="mini-btn"
             :class="{ queued: isQueued }"
-            :title="isQueued ? '移出播放列表' : '加入播放列表'"
             @click="onQueue"
           >
             <svg-icon :icon-class="isQueued ? 'check-circle' : 'layer-plus'" />
           </button>
           <!-- [B-31] 下载按钮：未下载 → download；下载中 → 进度%；已下载 → check-circle（点击删除） -->
           <button
+            v-tip="downloadBtnTitle"
             class="mini-btn"
             :class="{ downloaded: isDownloaded, downloading: isDownloading }"
-            :title="downloadBtnTitle"
             @click="onDownload"
           >
             <svg-icon :icon-class="downloadIcon" />

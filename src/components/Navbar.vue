@@ -67,8 +67,8 @@
                  用 button 包裹确保原生点击可触发(svg-icon 是组件，@click 需 .native)。 -->
             <button
               v-if="keywords"
+              v-tip="'清除'"
               class="clear-btn"
-              title="清除"
               @click.stop="clearSearch"
             >
               <svg-icon icon-class="x" />

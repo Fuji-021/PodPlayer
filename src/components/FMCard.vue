@@ -14,17 +14,17 @@
       </div>
       <div class="controls">
         <div class="buttons">
-          <button-icon title="不喜欢" @click.native="moveToFMTrash">
+          <button-icon v-tip="'不喜欢'" @click.native="moveToFMTrash">
             <svg-icon id="thumbs-down" icon-class="thumbs-down" />
           </button-icon>
           <button-icon
-            :title="$t(isPlaying ? 'player.pause' : 'player.play')"
+            v-tip="$t(isPlaying ? 'player.pause' : 'player.play')"
             class="play"
             @click.native="play"
           >
             <svg-icon :icon-class="isPlaying ? 'pause' : 'play'" />
           </button-icon>
-          <button-icon :title="$t('player.next')" @click.native="next">
+          <button-icon v-tip="$t('player.next')" @click.native="next">
             <svg-icon icon-class="next" />
           </button-icon>
         </div>

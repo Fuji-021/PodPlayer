@@ -31,7 +31,7 @@
           <span class="ago">{{ formatAgo(item.lastPlayedAt) }}</span>
         </div>
       </div>
-      <button class="play-btn" title="继续播放" @click.stop="play(item)">
+      <button v-tip="'继续播放'" class="play-btn" @click.stop="play(item)">
         <svg-icon icon-class="play-circle" />
       </button>
     </div>

@@ -20,8 +20,8 @@
           />
           <div v-if="coverMenuMode" class="cover-menu-overlay" @click.stop>
             <button
+              v-tip="'批量下载'"
               class="cover-menu-btn"
-              title="批量下载"
               @click="enterMultiDownload"
             >
               <svg-icon icon-class="download" />
@@ -29,8 +29,8 @@
             <!-- [B-50] 只有真订阅的节目才显示"取消订阅"（预览节目不是订阅，不显示） -->
             <button
               v-if="podcast.subscribed !== false"
+              v-tip="'取消订阅'"
               class="cover-menu-btn danger"
-              title="取消订阅"
               @click="confirmUnsubscribe"
             >
               <svg-icon icon-class="heart-crack" />
@@ -79,6 +79,7 @@
           'is-downloaded': selectMode && isDownloaded(ep),
         }"
         @click="onRowClick(ep)"
+        @dblclick="onRowDblClick(ep)"
         @contextmenu.prevent="openEpisodeMenu($event, ep)"
       >
         <!-- [B-34] 多选框：已下载的显示绿勾禁用；未下载可勾选 -->
@@ -103,9 +104,9 @@
             {{ ep.title
             }}<span
               v-if="nasEpOn(ep)"
+              v-tip="'NAS 上有此单集（音源就近）'"
               class="nas-dot"
               :style="nasGlow(ep.guid)"
-              title="NAS 上有此单集（音源就近）"
               ><svg-icon icon-class="wifi"
             /></span>
           </div>
@@ -127,26 +128,28 @@
         <!-- [B-59] 排队中：显式状态图标，只提示不操作（取消请用更多菜单里的"取消下载"） -->
         <div
           v-if="!selectMode && isQueued(ep)"
+          v-tip="'排队中'"
           class="ep-queued"
-          title="排队中"
         >
           <svg-icon icon-class="queue-alt" />
         </div>
         <!-- 已下载（点击 → 中央确认删除弹窗） -->
         <button
           v-if="!selectMode && isDownloaded(ep)"
+          v-tip="'已下载（点击删除）'"
           class="ep-downloaded-btn"
-          title="已下载（点击删除）"
           @click.stop="askDeleteDownload(ep)"
+          @dblclick.stop
         >
           <svg-icon icon-class="check-circle" />
         </button>
         <!-- 已收藏（点击 → 取消收藏） -->
         <button
           v-if="!selectMode && isFavorited(ep)"
+          v-tip="'已收藏（点击取消）'"
           class="ep-fav-btn"
-          title="已收藏（点击取消）"
           @click.stop="toggleFav(ep)"
+          @dblclick.stop
         >
           <svg-icon icon-class="heart-solid" />
         </button>
@@ -155,6 +158,7 @@
           v-if="!selectMode"
           class="ep-play-btn"
           @click.stop="playEpisode(ep)"
+          @dblclick.stop
         >
           <svg-icon icon-class="play-circle" />
         </button>
@@ -162,6 +166,7 @@
           v-if="!selectMode"
           class="ep-menu-btn"
           @click.stop="openEpisodeMenu($event, ep)"
+          @dblclick.stop
         >
           <svg-icon icon-class="menu-dots-vertical" />
         </button>
@@ -375,6 +380,7 @@ export default {
     this.closeCoverMenu();
     this.closeEpisodeMenu();
     this._stopHydration(); // [B-75] 取消后台水合，避免在已销毁实例上回调
+    if (this._rowClickTimer) clearTimeout(this._rowClickTimer); // [TODO4] 清挂起的单击定时器
   },
   methods: {
     // [B-75/F1] 后台渐进水合：首屏 50 上屏后，用 rAF 逐帧把 epDisplayLimit 补满到全量。
@@ -757,13 +763,27 @@ export default {
       if (i >= 0) this.selectedEpIds.splice(i, 1);
       else this.selectedEpIds.push(ep.id);
     },
-    // [B-34] 单集行点击：多选模式 → 勾选；否则进单集详情
+    // [B-34] 单集行点击：多选模式 → 勾选；否则延迟进单集详情(留窗口给双击拦截)
+    // [TODO4] 单击进详情、双击直接播放：单击先挂起 ~250ms；这期间来 dblclick 则取消导航、改播放。
     onRowClick(ep) {
       if (this.selectMode) {
         this.toggleSelect(ep);
         return;
       }
-      this.goEpisodeDetail(ep);
+      if (this._rowClickTimer) clearTimeout(this._rowClickTimer);
+      this._rowClickTimer = setTimeout(() => {
+        this._rowClickTimer = null;
+        this.goEpisodeDetail(ep);
+      }, 250);
+    },
+    // [TODO4] 双击单集行 → 取消挂起的"进详情"，直接播放
+    onRowDblClick(ep) {
+      if (this.selectMode) return; // 多选模式不播放(与单击语义一致:只勾选)
+      if (this._rowClickTimer) {
+        clearTimeout(this._rowClickTimer);
+        this._rowClickTimer = null;
+      }
+      this.playEpisode(ep);
     },
     // [B-34] 批量下载选中项（并发，每个独立 IPC 任务）
     downloadSelected() {

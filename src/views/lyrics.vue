@@ -47,7 +47,7 @@
           <div class="controls">
             <div class="top-part">
               <div class="track-info">
-                <div class="title" :title="currentTrack.name">
+                <div v-tip="currentTrack.name" class="title">
                   <router-link
                     v-if="hasList()"
                     :to="`${getListPath()}`"
@@ -71,8 +71,8 @@
                   <span v-if="album.id !== 0">
                     -
                     <router-link
+                      v-tip="album.name"
                       :to="`/album/${album.id}`"
-                      :title="album.name"
                       @click.native="toggleLyrics"
                       >{{ album.name }}
                     </router-link>
@@ -81,7 +81,7 @@
               </div>
               <div class="top-right">
                 <div class="volume-control">
-                  <button-icon :title="$t('player.mute')" @click.native="mute">
+                  <button-icon v-tip="$t('player.mute')" @click.native="mute">
                     <svg-icon v-show="volume > 0.5" icon-class="volume" />
                     <svg-icon v-show="volume === 0" icon-class="volume-mute" />
                     <svg-icon
@@ -104,7 +104,7 @@
                 </div>
                 <div class="buttons">
                   <button-icon
-                    :title="$t('player.like')"
+                    v-tip="$t('player.like')"
                     @click.native="likeATrack(player.currentTrack.id)"
                   >
                     <svg-icon
@@ -114,7 +114,7 @@
                     />
                   </button-icon>
                   <button-icon
-                    :title="$t('contextMenu.addToPlaylist')"
+                    v-tip="$t('contextMenu.addToPlaylist')"
                     @click.native="addToPlaylist"
                   >
                     <svg-icon icon-class="plus" />
@@ -147,7 +147,7 @@
             <div class="media-controls">
               <button-icon
                 v-show="!player.isPersonalFM"
-                :title="
+                v-tip="
                   player.repeatMode === 'one'
                     ? $t('player.repeatTrack')
                     : $t('player.repeat')
@@ -167,27 +167,27 @@
               <div class="middle">
                 <button-icon
                   v-show="!player.isPersonalFM"
-                  :title="$t('player.previous')"
+                  v-tip="$t('player.previous')"
                   @click.native="playPrevTrack"
                 >
                   <svg-icon icon-class="previous" />
                 </button-icon>
                 <button-icon
                   v-show="player.isPersonalFM"
-                  title="不喜欢"
+                  v-tip="'不喜欢'"
                   @click.native="moveToFMTrash"
                 >
                   <svg-icon icon-class="thumbs-down" />
                 </button-icon>
                 <button-icon
                   id="play"
-                  :title="$t(player.playing ? 'player.pause' : 'player.play')"
+                  v-tip="$t(player.playing ? 'player.pause' : 'player.play')"
                   @click.native="playOrPause"
                 >
                   <svg-icon :icon-class="player.playing ? 'pause' : 'play'" />
                 </button-icon>
                 <button-icon
-                  :title="$t('player.next')"
+                  v-tip="$t('player.next')"
                   @click.native="playNextTrack"
                 >
                   <svg-icon icon-class="next" />
@@ -195,7 +195,7 @@
               </div>
               <button-icon
                 v-show="!player.isPersonalFM"
-                :title="$t('player.shuffle')"
+                v-tip="$t('player.shuffle')"
                 :class="{ active: player.shuffle }"
                 @click.native="switchShuffle"
               >
@@ -207,7 +207,7 @@
                   $store.state.settings.showLyricsTranslation &&
                   lyricType === 'translation'
                 "
-                :title="$t('player.translationLyric')"
+                v-tip="$t('player.translationLyric')"
                 @click.native="switchLyricType"
               >
                 <span class="lyric-switch-icon">译</span>
@@ -218,7 +218,7 @@
                   $store.state.settings.showLyricsTranslation &&
                   lyricType === 'romaPronunciation'
                 "
-                :title="$t('player.PronunciationLyric')"
+                v-tip="$t('player.PronunciationLyric')"
                 @click.native="switchLyricType"
               >
                 <span class="lyric-switch-icon">音</span>
