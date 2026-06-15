@@ -80,6 +80,35 @@
 
 ---
 
+## 🔧 操作逻辑与功能符合性审查（2026-06-15）
+
+> 来源 `docs/审查报告-操作逻辑与功能符合性.md`(对抗 session，4 agent 查"交互逻辑/图标-文案-意图是否相符")，共 17 条。本轮**修了 8 条**(提交 `2708a9d`，均 electron/渲染 build + 8 agent 对抗审查；#3/#10 经审查补正)。
+
+### ✅ 本轮已修（8）
+- ✅ **#3**（★数据安全）收藏入口补 `podcastId`(=feedUrl)：原 **7 处**收藏构造 track 不带 podcastId → 写空 → `prunePreviewOrphans` 把"收藏过单集的未订阅节目"连同单集静默删。补 podcastDetail×2 / episodeDetail / downloadsList / favoritesList / **historyList / searchPodcast**(后两处审查补出)。
+- ✅ **#11** 重订阅已存在档改"合并"(保留 newCount 角标 / 原 source / 已存在字段)，不再 put 整覆盖清零。`service.js`。
+- ✅ **#10** OPML 导入按 `cleanUrl` 归一化去重 → "成功 N 档"不再虚高(审查指出尾斜杠漏判已补)。`service.js`。
+- ✅ **#5** forYou reroll 排除集并入「新上线」→ 三栏不再撞车。`home.vue`。
+- ✅ **#2** 「按最近收听」不显方向箭头(其固定多键序不读 sortDir)→ 消除"箭头翻转列表不动"矛盾。`podcastLibrary.vue`。
+- ✅ **#14** 「按最新更新」lead 图标 `arrow-down-small-big`→`refresh`(中性)→ 消除与右侧方向箭头矛盾。`podcastLibrary.vue`。
+- ✅ **#13** 详情页剩余时长 `Math.max(0,…)` → position 超 RSS 时长不再显示 "-1:-50"。`podcastDetail.vue`。
+- ✅ **#17** 沉浸页弹窗(倍速/队列/睡眠/音量)就地重定义主题变量为深色 → 主题隔离，不再随浅色模式漂白。`Player.vue`。
+
+### 🔧 待办（8，本轮未做）
+- 🟠 **#4** 二级页 `discoverList`「换一批」无 shuffle(hot/new/treasure 确定性返回)→ treasure 点了完全不变；hot/new 叫"换一批"语义不当(应"刷新")。`discover.js getSectionFull`。
+- 🟠 **#7** 本地"隐藏/显示播放器"快捷键(minimize，默认 Ctrl+M)UI 可设可存但**不生效**(`menu.js` 没注册 minimize accelerator，只全局列那格真生效)。`menu.js`/`settings.vue`。
+- 🟡 **#6** treasure 切片口径 `splitSections`(先 slice 再 filter) vs `reshuffleSection`(先 excludeSubbed 再 slice)不一致 → 订阅越多偏差越大。`discover.js`。
+- 🟡 **#8**（已定方案·删列表循环）repeat 改 **off↔one 两档**(播客随听随弃，列表循环无意义)：`Player.js switchRepeatMode` 改 `off↔one`、`Player.vue` 图标去中间 on 态、启动把遗留 `'on'` 归一化 `'off'`。**方案明确、可直接实现**。
+- 🟡 **#9** 未加载 howler 时按 后退15/前进30 静默无反应(playOrPause 有懒加载兜底、seek 没)。`Player.vue seekBackward15/Forward30`。
+- 🟡 **#12** 粘贴RSS/OPML/单档导入订阅后未 `commit('addSubscribedPodcast')`(只 loadPodcasts 刷本页)→ 另一标签已开的发现页绿勾不即时(切页 loadSubscribedMap 自愈)。`podcastLibrary.vue`。
+- 🟡 **#15** 快捷键无冲突检测 + 保存恒提示成功(`globalShortcut.register` 对占用/非法键静默 false)。`settings.vue saveShortcut`。
+- 🟡 **#16** NAS「测试连接」在总开关关闭时恒报失败(`probe` 开头 `if(!enabled) return false`)、与可达无关。`nasSource testCurrentNas`/`nasBridge probe`。
+
+### ⚪ 已闭（非 bug）
+- **#1** 后退15/前进30 用 `previous`/`next` 三角图标 —— **用户 2026-06-14 决定保留不换**(非命名错误，是选型)。
+
+---
+
 ## ✅ TODO
 
 ### P1
