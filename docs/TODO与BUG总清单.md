@@ -67,7 +67,7 @@
 - ✅ **[审P2-6]**（2026-06-15 已修，提交 `f3a7b5b`）`upsertEpisodes` 整体包 try/catch(失败 log + return undefined 不抛，防御纵深)；成功路径不变。`db.js`。
 - ✅ **[审P2-7]**（2026-06-15 已修，提交 `86d5a3b`）parseRss 加 item 数上限(`MAX_ITEMS=50000`，纯防失控、不丢真实集) + 单集 description `capLen 100KB`(挡内嵌大 base64 灌爆 DB/v-html)。`rssParser.js`。
 - ✅ **[审P2-8]**（2026-06-15 已修，提交 `86d5a3b`）parseOpmlLenient 加 `8MB` 输入护栏(`scan=slice`)→ 防 `[^>]*` 在数十 MB 畸形 OPML 上 O(n·m) 回溯卡 UI；主 DOMParser 路径不变。`rssParser.js`。
-- 🟠 **[审P2-9]** OPML 导入纯**串行** for-await(非 runLimited) + 单档 20s 超时 → 2000 档实际不可用(~11h)；且未传 `source` 全记 `'manual'`。`service.js:92-103`。
+- ✅ **[审P2-9]**（2026-06-15 已修，提交 `d4d0df4`）OPML 导入串行改并发 `runLimited(≤5)` → 2000 档不再不可用；进度改完成计数。`service.js`。(source 经核为本文件设计 manual 即涵盖 OPML，不引入新值；审查 false-positive)
 - 🟠 **[审P2-10]** `tickListen` 每秒 `get→改→put` 非事务、`listenDaily` 第二段独立 R-M-W → seek/倍速快触发时后写覆盖前写、少计统计(丢更新)。`listening.js:34-101`。[待真机]
 - ✅ **[审P2-11]**（2026-06-15 已修，提交 `86d5a3b`）NAS `ensureItems`/`ensureEps` 加在途去重(并发复用同一 promise) + 按 `total` 分页拉全(原 `limit=500` 漏档；满页无 total→Infinity 靠短页 break 收尾)。`nasBridge.js`。[NAS 待真机]
 
