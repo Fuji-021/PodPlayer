@@ -130,7 +130,12 @@ export async function maybeAutoRestore() {
     } catch (e) {
       count = 0; // 库打不开也视作空 → 尝试从备份恢复
     }
-    if (count > 0) return; // 有数据 → 正常，不打扰
+    if (count > 0) {
+      // [二段·半恢复] 订阅在、但收听进度/统计为空(如手动重订阅后统计=0)→ 若备份里有历史，
+      //   提示只把历史"合并恢复"回来(不删订阅、不动当前库)。
+      await maybeMergeRestoreHistory();
+      return;
+    }
     const res = await ipcRenderer.invoke('podcast:backup:readLatest');
     if (!res || !res.ok || !res.json) return; // 无备份(新用户) → 不提示
     let n = 0;
@@ -158,5 +163,123 @@ export async function maybeAutoRestore() {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[auto-restore] 失败:', (e && e.message) || e);
+  }
+}
+
+// [事故恢复·合并] 只回灌"历史表"(进度/统计/收藏/下载/每日)，**不 db.delete、不动 podcasts/episodes**。
+//   用于订阅在但历史空的半恢复态(如手动重订阅 OPML 后统计=0)，保住用户当前订阅、只补历史。
+//   bulkPut 按主键覆盖：内置安全守卫——当前进度/统计任一非空则拒绝(除非 force)，杜绝旧备份覆盖新数据。
+export async function mergeRestoreHistoryFromLatestBackup(opts) {
+  if (!ipcRenderer) throw new Error('not-electron');
+  // [安全守卫·下沉] 当前进度/统计任一非空 → 拒绝合并(bulkPut 按主键会覆盖较新数据)。force:true 可
+  //   绕过(供明确知情的强制恢复)。自动自检路径已预检为空、再过一道这里无害；手动入口由此获得同等保护。
+  const force = !!(opts && opts.force);
+  if (!force) {
+    let pc = 0;
+    let sc = 0;
+    try {
+      pc = await db.episodeProgress.count();
+      sc = await db.episodeListenStats.count();
+    } catch (e) {
+      pc = 0;
+      sc = 0;
+    }
+    if (pc > 0 || sc > 0) {
+      throw new Error(
+        '当前已有收听进度/统计，已取消合并恢复以免覆盖较新数据。如确需用备份整库覆盖，请改用 restoreFromBackup()。'
+      );
+    }
+  }
+  const res = await ipcRenderer.invoke('podcast:backup:readLatest');
+  if (!res || !res.ok || !res.json) {
+    throw new Error((res && res.error) || '没有可用备份');
+  }
+  const data = JSON.parse(res.json);
+  const arr = k => (Array.isArray(data[k]) ? data[k] : []);
+  // bits: JSON 把 Uint8Array 变成了 {0:..} 普通对象 → 还原回 Uint8Array(同 restoreFromLatestBackup)
+  const stats = arr('episodeListenStats').map(s => {
+    if (s && s.bits && !(s.bits instanceof Uint8Array)) {
+      try {
+        return { ...s, bits: Uint8Array.from(Object.values(s.bits)) };
+      } catch (e) {
+        return { ...s, bits: new Uint8Array(0) };
+      }
+    }
+    return s;
+  });
+  // [原子性] 五张历史表用一个 rw 事务包裹：任一 bulkPut 失败整体回滚，杜绝"恢复一半"的脏状态。
+  await db.transaction(
+    'rw',
+    db.favorites,
+    db.episodeProgress,
+    db.episodeListenStats,
+    db.listenDaily,
+    db.episodeDownloads,
+    async () => {
+      await db.favorites.bulkPut(arr('favorites'));
+      await db.episodeProgress.bulkPut(arr('episodeProgress'));
+      await db.episodeListenStats.bulkPut(stats);
+      await db.listenDaily.bulkPut(arr('listenDaily'));
+      await db.episodeDownloads.bulkPut(arr('episodeDownloads'));
+    }
+  );
+  return {
+    from: res.name,
+    favorites: arr('favorites').length,
+    episodeProgress: arr('episodeProgress').length,
+    episodeListenStats: stats.length,
+    listenDaily: arr('listenDaily').length,
+    episodeDownloads: arr('episodeDownloads').length,
+  };
+}
+
+// [事故恢复·合并·自检] 当前历史(进度+统计)是否完全为空、而备份里有 → 弹窗询问只合并恢复历史。
+//   只在"两者都为空"时触发：避免 bulkPut 用旧备份覆盖用户重订阅后新累积的进度/统计。
+async function maybeMergeRestoreHistory() {
+  if (!ipcRenderer) return;
+  try {
+    let progCount = 0;
+    let statCount = 0;
+    try {
+      progCount = await db.episodeProgress.count();
+      statCount = await db.episodeListenStats.count();
+    } catch (e) {
+      return; // 库异常 → 不打扰
+    }
+    if (progCount > 0 || statCount > 0) return; // 已有历史 → 正常，不打扰、不覆盖
+    const res = await ipcRenderer.invoke('podcast:backup:readLatest');
+    if (!res || !res.ok || !res.json) return; // 无备份 → 没的可恢复
+    let bp = null;
+    try {
+      bp = JSON.parse(res.json);
+    } catch (e) {
+      return;
+    }
+    const hist =
+      (bp && Array.isArray(bp.episodeProgress)
+        ? bp.episodeProgress.length
+        : 0) +
+      (bp && Array.isArray(bp.episodeListenStats)
+        ? bp.episodeListenStats.length
+        : 0);
+    if (hist <= 0) return; // 备份也没历史 → 不提示
+    const ok =
+      typeof window.confirm === 'function' &&
+      window.confirm(
+        `检测到你的订阅在，但收听进度 / 统计为空，而备份（${res.name}）里有这些数据。\n` +
+          `是否把收听进度 / 统计 / 收藏 / 下载记录从备份合并恢复回来？\n` +
+          `（只补这些历史数据，不会改动你当前的订阅）`
+      );
+    if (!ok) return;
+    const r = await mergeRestoreHistoryFromLatestBackup();
+    // eslint-disable-next-line no-console
+    console.log('[merge-restore] 已合并恢复历史:', r);
+    if (typeof window.alert === 'function') {
+      window.alert('已合并恢复收听历史，即将刷新页面。');
+    }
+    window.location.reload();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[merge-restore] 失败:', (e && e.message) || e);
   }
 }

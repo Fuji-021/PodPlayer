@@ -1,4 +1,5 @@
 import store from '@/store';
+import { db } from '@/utils/db';
 
 const player = store.state.player;
 
@@ -29,6 +30,34 @@ export function ipcRenderer(vueInstance) {
     // 触发数据响应
     self.$refs.navbar.$refs.searchInput.focus();
     self.$refs.navbar.inputFocus = true;
+  });
+
+  // [审P1-4] 优雅退出：主进程真正 app.exit() 前发 'app:before-exit-flush'，这里把 Player 的收听缓冲
+  //   + 最后一次播放进度 flush 落盘、再关库，完成后回 'app:flush-done' ack。await Promise 保证 Dexie
+  //   事务 commit 后主进程才退(主进程侧另有 800ms 超时兜底，绝不卡死退出)。electron/ 禁可选链。
+  ipcRenderer.on('app:before-exit-flush', () => {
+    const ack = () => {
+      try {
+        ipcRenderer.send('app:flush-done');
+      } catch (e) {
+        /* ignore */
+      }
+    };
+    Promise.resolve()
+      .then(() => {
+        if (player && typeof player.flushBeforeExit === 'function') {
+          return player.flushBeforeExit();
+        }
+      })
+      .then(() => {
+        try {
+          if (db && db.isOpen()) db.close(); // 等收听/进度写完后再关库，杜绝在途事务被腰斩
+        } catch (e) {
+          /* ignore */
+        }
+      })
+      .catch(() => {})
+      .then(ack); // 无论成败都 ack(主进程那边还有 800ms 兜底)
   });
 
   // [快捷键修 B] 菜单 accelerator 即使焦点在输入框也会触发并吞键(如搜索框/NAS 弹窗打字时按 Ctrl+L

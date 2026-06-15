@@ -321,7 +321,7 @@ export default class {
   // [B69-F5 降频] 把累积的收听窗口批量落盘 + 据返回 row 广播 5% 步进/完成给 UI（沿用原逐秒 bump 逻辑）。
   _flushListenBuf() {
     const buf = this._listenBuf;
-    if (!buf || !buf.count) return;
+    if (!buf || !buf.count) return Promise.resolve(); // [审P1-4] 返回 Promise 供退出前 await
     const id = buf.id;
     const totalSec = buf.totalSec;
     const payload = {
@@ -338,7 +338,7 @@ export default class {
       content: 0,
       count: 0,
     };
-    tickListenBatch(id, totalSec, payload)
+    return tickListenBatch(id, totalSec, payload) // [审P1-4] 返回链供退出前 await commit
       .then(row => {
         if (!row) return;
         const stepNow = Math.floor(
@@ -358,6 +358,25 @@ export default class {
         }
       })
       .catch(() => {});
+  }
+  // [审P1-4] 退出前一次性 flush：收听缓冲 + 最后一次播放进度，返回 Promise 供主进程 await。
+  //   _flushListenBuf 已返回可 await 的 Promise；进度照搬切歌时的存法(seek()>0 才写)。
+  flushBeforeExit() {
+    const tasks = [this._flushListenBuf()];
+    try {
+      const t = this._currentTrack;
+      if (t && t.podcastEpisodeId && this._howler) {
+        const pos = Math.floor(this._howler.seek() || 0);
+        if (pos > 0) {
+          tasks.push(
+            saveEpisodeProgress(t.podcastEpisodeId, pos).catch(() => {})
+          );
+        }
+      }
+    } catch (e) {
+      /* ignore */
+    }
+    return Promise.all(tasks).catch(() => {});
   }
   _setIntervals() {
     // 同步播放进度

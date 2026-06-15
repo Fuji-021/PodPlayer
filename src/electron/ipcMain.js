@@ -11,6 +11,46 @@ const log = text => {
   console.log(`${clc.blueBright('[ipcMain.js]')} ${text}`);
 };
 
+// [审P1-4] 优雅退出协调：真正 app.exit() 前先让渲染端把 in-flight Dexie 写(收听缓冲/播放进度)
+//   flush 落盘 + db.close()，await 一个带超时的 ack(≤800ms 没回也强制退，绝不卡死退出)。只在
+//   "真退出"路径用；minimizeToTray 不走这里(它不是退出，不该 flush)。win 已 destroy / 渲染端已挂
+//   则直接退。electron/ 禁可选链，全用 && 守卫。根治：app.exit() 立即硬杀渲染进程 → 在途 IndexedDB
+//   事务(逐秒进度、收听批写)半途夭折 → 库损坏/丢统计(审P1-4)。
+let _gracefulExiting = false;
+function gracefulExit(win) {
+  const hardExit = () => {
+    try {
+      app.exit(); //exit()直接关闭客户端，不会执行quit();
+    } catch (e) {
+      /* ignore */
+    }
+  };
+  if (_gracefulExiting) return; // 防重入(连点"退出")
+  _gracefulExiting = true;
+  if (
+    !win ||
+    win.isDestroyed() ||
+    !win.webContents ||
+    win.webContents.isDestroyed()
+  ) {
+    return hardExit();
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    ipcMain.removeAllListeners('app:flush-done');
+    hardExit();
+  };
+  ipcMain.once('app:flush-done', finish);
+  setTimeout(finish, 800); // [超时兜底] 渲染端卡住也最多等 800ms 必退
+  try {
+    win.webContents.send('app:before-exit-flush');
+  } catch (e) {
+    finish(); // 发送失败(渲染已挂)→ 立即退
+  }
+}
+
 const exitAsk = (e, win) => {
   e.preventDefault(); //阻止默认行为
   dialog
@@ -27,9 +67,8 @@ const exitAsk = (e, win) => {
         e.preventDefault(); //阻止默认行为
         win.minimize(); //调用 最小化实例方法
       } else if (result.response == 1) {
-        win = null;
-        //app.quit();
-        app.exit(); //exit()直接关闭客户端，不会执行quit();
+        // [审P1-4] 优雅退出：先让渲染端 flush 收听/进度并关库，再 app.exit()(带 800ms 超时兜底)
+        gracefulExit(win);
       }
     })
     .catch(err => {
@@ -61,9 +100,8 @@ const exitAskWithoutMac = (e, win) => {
         e.preventDefault(); //阻止默认行为
         win.hide(); //调用 最小化实例方法
       } else if (result.response === 1) {
-        win = null;
-        //app.quit();
-        app.exit(); //exit()直接关闭客户端，不会执行quit();
+        // [审P1-4] 优雅退出：先让渲染端 flush 收听/进度并关库，再 app.exit()(带 800ms 超时兜底)
+        gracefulExit(win);
       }
     })
     .catch(err => {
@@ -205,9 +243,8 @@ export function initIpcMain(win, store, trayEventEmitter) {
     } else {
       let closeOpt = store.get('settings.closeAppOption');
       if (closeOpt === 'exit') {
-        win = null;
-        //app.quit();
-        app.exit(); //exit()直接关闭客户端，不会执行quit();
+        // [审P1-4] 优雅退出：先让渲染端 flush 收听/进度并关库，再 app.exit()(带 800ms 超时兜底)
+        gracefulExit(win);
       } else if (closeOpt === 'minimizeToTray') {
         e.preventDefault();
         win.hide();

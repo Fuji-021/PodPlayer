@@ -88,6 +88,7 @@ loadAllDownloads()
 import {
   startBackupSchedule,
   restoreFromLatestBackup,
+  mergeRestoreHistoryFromLatestBackup,
   maybeAutoRestore,
 } from '@/utils/podcast/backup';
 startBackupSchedule();
@@ -107,6 +108,19 @@ window.restoreFromBackup = async () => {
   console.log('[restore] 已恢复:', r);
   if (typeof window.alert === 'function') {
     window.alert(`已恢复 ${r.podcasts} 档订阅，即将刷新页面。`);
+  }
+  window.location.reload();
+  return r;
+};
+
+// [事故恢复·合并] 手动入口：订阅在但收听统计/进度为空时，控制台跑 mergeRestoreHistory() 只把
+//   历史(进度/统计/收藏/下载)从备份合并回来，不动当前订阅(自检未弹时的兜底)。
+window.mergeRestoreHistory = async () => {
+  const r = await mergeRestoreHistoryFromLatestBackup();
+  // eslint-disable-next-line no-console
+  console.log('[merge-restore] 已合并恢复历史:', r);
+  if (typeof window.alert === 'function') {
+    window.alert('已合并恢复收听历史，即将刷新页面。');
   }
   window.location.reload();
   return r;
