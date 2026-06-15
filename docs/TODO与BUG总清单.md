@@ -31,6 +31,8 @@
 - ✅ last.fm 子窗 nodeIntegration+webSecurity:false 历史高危（2026-06-15 修·`fix/buglist`）— `background.js` new-window 删整段 last.fm 高危内嵌子窗死分支，统一 `shell.openExternal` 走系统浏览器。behaviorChange=false。**待真机**(scrobble 仍正常)。
 
 ### P3（低/边缘/记录）
+- 🔴 **[启动竞态·日志查出 2026-06-16]** `setTitle`(Player.js:101)在 `store` 模块求值完成前被 `new Player()→_init→_loadCurrentPodcastEpisode` 调到 → `store.commit` 报 `Cannot read property 'commit' of undefined`;同路径还用无效 key 查 Dexie → `IDBObjectStore get not a valid key (DataError)`。**每次启动各报一次、被 unhandledrejection 兜底,不崩不影响功能**;正式版应清(setTitle 加 `store &&` 守卫 / 启动期跳过无效 key)。PRE-EXISTING(上游 fork 遗留)。
+- 🔴 **[启动·噪声]** discord-rpc 连不上(Discord 没开)的 `[main] Could not connect` unhandledRejection,每次启动一条。无害,可后续静音(connect 失败 catch)。
 - 🔴 搜索栏再右移 + 宽度再缩对齐 navbar。[B67-BUG-7]
 - 🔴 subscribedMap 以节目名为键→同名节目互相覆盖(评估暂不修)。[B56-5]
 - 🔴 searchLocalEpisodes 全表 JS filter 无索引。[B69-F4]
