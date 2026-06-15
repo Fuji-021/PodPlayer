@@ -22,7 +22,7 @@
 - 🔴 **统计页排行重排动画仍有问题** — 已连修 9 轮(v1.5.7);现象待细说,先定位路径(toggle=setRange vs 进页=enterWithAnimation),用 scripts/stats_toggle_repro.js 复现。[known-bugs]
 
 ### P2
-- 🔴 **统计「最近一周」>「全部」(如岩中花述)** — 数据模型不一致:"全部"读 episodeListenStats 累计、"周"读 listenDaily 按天=两套表,后者有记前者没记全则周>全部。正解=统一数据源(非trivial)。本轮已诊断未修。[listening.js:179]
+- ✅ **统计「最近一周」>「全部」(如岩中花述)**（2026-06-15 修·分支 `feature/perf` round2）— 根因坐实:`resetEpisodeListening`(重播已听完单集)清 `episodeListenStats.bits/listenedSec` 却不动 `listenDaily` → 听完重听后「全部」(读 listenedSec)被清零重数、「周」(读 listenDaily.listenedSec)仍含旧值 → 周>全部。**修**:统计聚合改用两表一致、永不 reset 的 `totalPlayContentSec`(全部)/`contentSec`(周) → 天然 全部≥周。**待真机验证**(重播已听完档→看周≤全部)。[listening.js getListenStatsByPodcast]
 - 🔴 《思文，败类》首页封面 ≠ 详情页封面 — 疑 name≠RSS title→subscribedMap 查不到 feedUrl→回落旧 logo。
 - 🔴 头像二级菜单弹出锁全局滚动 — ContextMenu enableScrolling:false→#main overflow:hidden。
 - 🔴 单集列表全量渲染无虚拟化(与机核同源,大档建数百行 DOM)。
@@ -35,7 +35,7 @@
 - 🔴 subscribedMap 以节目名为键→同名节目互相覆盖(评估暂不修)。[B56-5]
 - 🔴 searchLocalEpisodes 全表 JS filter 无索引。[B69-F4]
 - 🔴 本地搜单集混入未订阅预览(语义待定)。[B69-L1]
-- 🔴 播放心跳每秒 2 次 Dexie 写(功耗,可降频)。[B69-F5]
+- ✅ 播放心跳每秒 3 写 Dexie(进度+收听 stats/daily)(功耗) [B69-F5]（2026-06-15 修·分支 `feature/perf` round2）— Player 端内存累积每秒 tick、每 5s 批量 `tickListenBatch` 落盘(写事务 3/秒→~1.4/秒、bits 整段 put 每 5s);切集/暂停/退出 flush;进度仍逐秒。语义不变(逐位去重/completed/daily 全保留)。**待真机验证**。
 - ✅ _updateMprisState 监听器永不移除 [B69-L2] —— 即 `saveLyricFinished` 监听，**已在审P2-5 修**(removeAllListeners+once，提交 `f3a7b5b`)。
 - ✅ Player.vue beforeDestroy 漏清 closeQueuePanel [B69-L3] —— **沉浸式轮已补**(beforeDestroy 调 closeQueuePanel)。
 - 🔴 软删记录(subscribed:false)长期堆积(数据量小)。

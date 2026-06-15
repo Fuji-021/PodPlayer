@@ -16,13 +16,22 @@ import {
   markNasDown,
 } from '@/utils/podcast/nasSource';
 // [播客改造] 真实收听统计
-import { tickListen, resetEpisodeListening } from '@/utils/podcast/listening';
+// [B69-F5 降频] tickListen(逐秒) → tickListenBatch(批量)：每秒 tick 在 Player 端内存累积，
+//   每 LISTEN_FLUSH_SEC 秒批量落盘一次，写事务量降到约 1/N。
+import {
+  tickListenBatch,
+  resetEpisodeListening,
+} from '@/utils/podcast/listening';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
 import { Howl, Howler } from 'howler';
 import shuffle from 'lodash/shuffle';
 import { decode as base642Buffer } from '@/utils/base64';
 
 const PLAY_PAUSE_FADE_DURATION = 200;
+
+// [B69-F5 降频] 收听统计批量落盘窗口：每累积这么多秒 tick 落盘一次（兼顾写放大↓ 与崩溃丢失上限）。
+//   崩溃硬退最多丢 ~LISTEN_FLUSH_SEC 秒收听统计；进度(saveEpisodeProgress)仍逐秒、不受影响。
+const LISTEN_FLUSH_SEC = 5;
 
 const INDEX_IN_PLAY_NEXT = -1;
 
@@ -119,6 +128,13 @@ export default class {
 
     // init
     this._init();
+
+    // [B69-F5 降频] 收听统计批量缓冲（每秒 tick 累积、节流落盘）。退出/刷新前尽力 flush 一次
+    //   （best-effort：IndexedDB 写异步，未必赶在卸载前提交；暂停/切集已各自 flush 兜底）。
+    this._listenBuf = null;
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', () => this._flushListenBuf());
+    }
 
     window.yesplaymusic = {};
     window.yesplaymusic.player = this;
@@ -295,10 +311,53 @@ export default class {
     }
   }
   _setPlaying(isPlaying) {
+    // [B69-F5 降频] 暂停/停止(playing true→false) → 把未落盘的收听缓冲写出，避免丢本窗口统计。
+    if (!isPlaying && this._playing) this._flushListenBuf();
     this._playing = isPlaying;
     if (isCreateTray) {
       ipcRenderer?.send('updateTrayPlayState', this._playing);
     }
+  }
+  // [B69-F5 降频] 把累积的收听窗口批量落盘 + 据返回 row 广播 5% 步进/完成给 UI（沿用原逐秒 bump 逻辑）。
+  _flushListenBuf() {
+    const buf = this._listenBuf;
+    if (!buf || !buf.count) return;
+    const id = buf.id;
+    const totalSec = buf.totalSec;
+    const payload = {
+      secs: buf.secs,
+      wallDeltaSec: buf.wall,
+      contentDeltaSec: buf.content,
+    };
+    // 同步取出后立即重置窗口(保留 id/totalSec)，防异步落盘期间新 tick 串改本批数据。
+    this._listenBuf = {
+      id,
+      totalSec,
+      secs: [],
+      wall: 0,
+      content: 0,
+      count: 0,
+    };
+    tickListenBatch(id, totalSec, payload)
+      .then(row => {
+        if (!row) return;
+        const stepNow = Math.floor(
+          ((row.listenedSec || 0) / Math.max(1, row.totalSec)) * 20
+        ); // 5% = 1/20
+        const lastStep = this._lastListenStep ?? -1;
+        const lastCompleted = this._lastListenCompleted || false;
+        if (stepNow !== lastStep || row.completed !== lastCompleted) {
+          this._lastListenStep = stepNow;
+          this._lastListenCompleted = row.completed;
+          store.commit('bumpListenTick', {
+            episodeId: id,
+            listenedSec: row.listenedSec || 0,
+            totalSec: row.totalSec || 0,
+            completed: !!row.completed,
+          });
+        }
+      })
+      .catch(() => {});
   }
   _setIntervals() {
     // 同步播放进度
@@ -369,32 +428,29 @@ export default class {
             const bigJumpTh = Math.max(45, Math.floor(totalSec * 0.3));
             const isBigJump = lastSec >= 0 && jump > bigJumpTh;
             const rate = this._playbackRate || 1;
-            // [B-31] tickListen 返回 row 后，按"5% 步进 或 completed 变化"广播给 UI
-            tickListen(t.podcastEpisodeId, sec, totalSec, {
-              recordBit: !isBigJump,
-              wallDeltaSec: 1, // 真实流逝 1 秒
-              contentDeltaSec: isBigJump ? 0 : rate, // 节目时长域：按倍速
-            })
-              .then(row => {
-                if (!row) return;
-                const stepNow = Math.floor(
-                  ((row.listenedSec || 0) / Math.max(1, row.totalSec)) * 20
-                ); // 5% = 1/20
-                const lastStep = this._lastListenStep ?? -1;
-                const lastCompleted = this._lastListenCompleted || false;
-                if (stepNow !== lastStep || row.completed !== lastCompleted) {
-                  this._lastListenStep = stepNow;
-                  this._lastListenCompleted = row.completed;
-                  store.commit('bumpListenTick', {
-                    episodeId: t.podcastEpisodeId,
-                    listenedSec: row.listenedSec || 0,
-                    totalSec: row.totalSec || 0,
-                    completed: !!row.completed,
-                  });
-                }
-              })
-              .catch(() => {});
+            // [B69-F5 降频] 不再每秒各开 2 个 Dexie rw 事务，改为内存累积本窗口
+            //   (记 bit 的秒位置 + 墙钟/内容增量)，每 LISTEN_FLUSH_SEC 秒批量落盘(_flushListenBuf)。
+            //   切集(id 变)在此 flush 旧集；暂停由 _setPlaying、退出由 beforeunload 兜底 flush。
+            let buf = this._listenBuf;
+            if (!buf || buf.id !== t.podcastEpisodeId) {
+              if (buf) this._flushListenBuf(); // 切集 → 先把上一集缓冲落盘
+              buf = this._listenBuf = {
+                id: t.podcastEpisodeId,
+                totalSec,
+                secs: [],
+                wall: 0,
+                content: 0,
+                count: 0,
+              };
+            }
+            buf.totalSec = totalSec; // dt 可能从 0(未知)变为已知
+            // 大跳那一秒不记 bit、不计内容秒（=原 recordBit:!isBigJump / contentDeltaSec:0）
+            if (!isBigJump && sec >= 0 && sec < totalSec) buf.secs.push(sec);
+            buf.wall += 1; // 真实流逝 1 秒
+            buf.content += isBigJump ? 0 : rate; // 节目时长域：按倍速
+            buf.count += 1;
             this._lastListenSec = sec;
+            if (buf.count >= LISTEN_FLUSH_SEC) this._flushListenBuf();
           }
         }
       }
@@ -1501,6 +1557,11 @@ export default class {
       savedPos = 0;
       saveEpisodeProgress(track.podcastEpisodeId, 0).catch(() => {});
       resetEpisodeListening(track.podcastEpisodeId).catch(() => {});
+      // [B69-F5 降频] 重置已听完单集 → 丢弃该集尚未落盘的收听缓冲，
+      //   避免陈旧秒位置在 reset 清 bits 之后又被 flush 回写（重播是少见边角，丢 ≤几秒缓冲无碍）。
+      if (this._listenBuf && this._listenBuf.id === track.podcastEpisodeId) {
+        this._listenBuf = null;
+      }
     }
     // [B-74] 时间戳跳转：调用方指定起播秒数 → 覆盖续播位置(放在"已听完归零"之后，
     //   保证时间戳必赢)。clamp 到时长内，避免越界；之后由 once('load') 确定性 seek。

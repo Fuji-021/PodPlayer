@@ -22,27 +22,34 @@ export async function getAllListenStats() {
 }
 
 /**
- * 单秒标记 + 累计墙钟/内容秒。
+ * [B69-F5 降频] 批量收听 tick：把一个时间窗口(由 Player 端累积 ~LISTEN_FLUSH_SEC 秒)的
+ *   "记 bit 的秒位置数组 + 墙钟/内容增量"一次性写入。原逐秒 tickListen 每秒各开 2 个 rw 事务
+ *   (episodeListenStats 整行 put 含 KB 级 bits + listenDaily)，长集(机核 4h≈14400s)累计数万次写事务、
+ *   bits 每秒整段重写 → 功耗/SSD 写放大 + 与列表读争用。改为批量后写事务量降到约 1/N。
+ *   语义完全不变：逐位 dedup 置位、completed 判定、listenDaily 按天聚合。
+ *
+ * 设计要点：
+ *   - 仍用 `db.transaction('rw', …)` 包 R-M-W(承袭 审P2-10，防 flush 重叠丢更新)。
+ *   - **每次都读最新 DB 行**(不缓存内存行) → 对 resetEpisodeListening(重播已听完单集会清 bits)天然友好：
+ *     flush 读到的就是重置后的行，不会用陈旧内存行把重置覆盖掉。
+ *   - 数据缓冲在 Player 端(随播放会话，切集/暂停/退出 flush)，本函数无模块级状态。
+ *
  * @param {string} id           episode.id
- * @param {number} sec          当前秒位置（howler.seek() 取整）
  * @param {number} totalSec     单集总时长（秒）
  * @param {object} opts
- *   - recordBit: 是否对 bit 置位（大跳时 false，只累墙钟）
- *   - wallDeltaSec: 本次墙钟增量（通常 = 1）
- *   - contentDeltaSec: 本次节目时长域增量（通常 = rate）
+ *   - secs: 本窗口"记 bit"的秒位置数组（大跳那秒不入此数组，只计墙钟；可含重复，逐位 dedup 兜底）
+ *   - wallDeltaSec: 本窗口墙钟增量合计（通常 = 窗口秒数）
+ *   - contentDeltaSec: 本窗口节目时长域增量合计（按倍速；大跳秒计 0）
+ * @returns 写后的 row（供 UI 广播 5% 步进/完成）
  */
-export async function tickListen(
+export async function tickListenBatch(
   id,
-  sec,
   totalSec,
-  { recordBit = true, wallDeltaSec = 1, contentDeltaSec = 1 } = {}
+  { secs = [], wallDeltaSec = 0, contentDeltaSec = 0 } = {}
 ) {
   if (!id || !totalSec || totalSec <= 0) return null;
   let row;
-  let newRealSec = false; // [B-55] 本次是否新增了"真实听过的一秒"(bit 首次置位)
-  // [审P2-10] 把 episodeListenStats 的 get→改→put 包进 Dexie rw 事务：每秒 fire-and-forget 的 tick
-  //   在 seek/倍速快触发、或写入较慢时会并发重叠，原裸 R-M-W 会"后写覆盖前写"丢更新(少计统计)。
-  //   同表 rw 事务会自动串行 → 后一笔读到的是前一笔已提交的值，杜绝丢更新。行为不变、只是计数不再丢。
+  let newReal = 0; // 本窗口新置位(=新增真实听过秒)数，供 listenDaily 累加
   await db.transaction('rw', db.episodeListenStats, async () => {
     row = (await db.episodeListenStats.get(id)) || {
       id,
@@ -64,16 +71,17 @@ export async function tickListen(
       }
       row.totalSec = totalSec;
     }
-    if (recordBit && sec >= 0 && sec < totalSec) {
+    // 批量置位（逐位 dedup：已置位的不重复计入 listenedSec）
+    for (const sec of secs) {
+      if (sec < 0 || sec >= row.totalSec) continue;
       const byteIdx = sec >> 3;
       const bitIdx = sec & 7;
-      if (byteIdx < row.bits.length) {
-        const had = (row.bits[byteIdx] >> bitIdx) & 1;
-        if (!had) {
-          row.bits[byteIdx] |= 1 << bitIdx;
-          row.listenedSec += 1;
-          newRealSec = true;
-        }
+      if (byteIdx >= row.bits.length) continue;
+      const had = (row.bits[byteIdx] >> bitIdx) & 1;
+      if (!had) {
+        row.bits[byteIdx] |= 1 << bitIdx;
+        row.listenedSec += 1;
+        newReal += 1;
       }
     }
     row.totalPlayWallSec = (row.totalPlayWallSec || 0) + wallDeltaSec;
@@ -101,7 +109,7 @@ export async function tickListen(
       drow.wallSec += wallDeltaSec;
       drow.contentSec += contentDeltaSec;
       // [B-55] 真实听过秒（bit 新置位）的按天增量，供"最近 N 天"用真实时长统计（拖动水的不算）
-      drow.listenedSec = (drow.listenedSec || 0) + (newRealSec ? 1 : 0);
+      drow.listenedSec = (drow.listenedSec || 0) + newReal;
       await db.listenDaily.put(drow);
     });
   } catch (e) {
@@ -190,15 +198,25 @@ export function listenedPercentStepped(row) {
   return stepped;
 }
 
-// [B-37] 收听数据统计：按节目聚合墙钟时长 + join 节目元数据（标题/封面），降序。
+// [B-37] 收听数据统计：按节目聚合收听时长 + join 节目元数据（标题/封面），降序。
 //   range='all' → 用 episodeListenStats 累计值（含历史）；range=数字 → 用 listenDaily 最近 N 天。
+//
+// [修「周>全部」· 2026-06-15] 改用 contentSec 口径，根治"最近一周 > 全部"。
+//   原 bug：「全部」读 `episodeListenStats.listenedSec`(bit-array 计数)，而 `resetEpisodeListening`
+//   (重播已听完单集时触发，Player.js)会清零 bits/listenedSec **却不动 listenDaily** → 听完再重听后
+//   「全部」被清零重数、「周」(listenDaily.listenedSec)仍含旧值+重听 → 周 > 全部。
+//   正解：换一对**两表一致、永不 reset** 的字段——`episodeListenStats.totalPlayContentSec`(全部)
+//   与 `listenDaily.contentSec`(周)：二者都按 `contentDeltaSec` 每秒累加(大跳/拖动"水时长"记 0，
+//   保留 B-55"不计水时长"意图)、reset 均不碰、且全部是周的全时段超集 → **天然 全部 ≥ 周**。
+//   口径含义=按倍速换算的"内容收听时长"(重听如实计入)；对单次正常收听数值 ≈ 旧 listenedSec。
+//   注：listenedSec/bits 仍保留其"当前一遍进度/完成%"职责(listenedPercentStepped / bumpListenTick)，
+//   只把**统计聚合**换成 contentSec，互不影响。
 export async function getListenStatsByPodcast(range = 'all') {
   const byPod = {};
   if (range === 'all') {
     const all = await db.episodeListenStats.toArray();
     all.forEach(s => {
-      // [B-55] 真实听过秒（bit-array 去重，大跳/拖动"水时长"不计），而非墙钟
-      const sec = s.listenedSec || 0;
+      const sec = s.totalPlayContentSec || 0;
       if (sec <= 0) return;
       const pid = String(s.id).split('::')[0];
       byPod[pid] = (byPod[pid] || 0) + sec;
@@ -211,8 +229,7 @@ export async function getListenStatsByPodcast(range = 'all') {
       .aboveOrEqual(cutoff)
       .toArray();
     rows.forEach(r => {
-      // [B-55] 同样用真实听过秒（B-55 起 listenDaily 记 listenedSec；更早的旧数据无此字段→0）
-      const sec = r.listenedSec || 0;
+      const sec = r.contentSec || 0;
       if (sec <= 0) return;
       byPod[r.podcastId] = (byPod[r.podcastId] || 0) + sec;
     });
