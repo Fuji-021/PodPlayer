@@ -22,7 +22,7 @@
 - 🔴 **统计页排行重排动画仍有问题** — 已连修 9 轮(v1.5.7);现象待细说,先定位路径(toggle=setRange vs 进页=enterWithAnimation),用 scripts/stats_toggle_repro.js 复现。[known-bugs]
 
 ### P2
-- ✅ **统计「最近一周」>「全部」(如岩中花述)**（2026-06-15 修·分支 `feature/perf` round2）— 根因坐实:`resetEpisodeListening`(重播已听完单集)清 `episodeListenStats.bits/listenedSec` 却不动 `listenDaily` → 听完重听后「全部」(读 listenedSec)被清零重数、「周」(读 listenDaily.listenedSec)仍含旧值 → 周>全部。**修**:统计聚合改用两表一致、永不 reset 的 `totalPlayContentSec`(全部)/`contentSec`(周) → 天然 全部≥周。**待真机验证**(重播已听完档→看周≤全部)。[listening.js getListenStatsByPodcast]
+- ✅ **统计「最近一周」>「全部」(如岩中花述)**（2026-06-15 修·分支 `feature/perf` round2）— 根因坐实:`resetEpisodeListening`(重播已听完单集)清 `episodeListenStats.bits/listenedSec` 却不动 `listenDaily` → 听完重听后「全部」(读 listenedSec)被清零重数、「周」(读 listenDaily.listenedSec)仍含旧值 → 周>全部。**修**(终极):「全部」= `max(Σ episodeListenStats.totalPlayContentSec, Σ listenDaily.contentSec 全天)`,「周」= listenDaily 7 天。因周⊆全天⊆全部 → **数学保证 全部≥周**(与两表是否一致无关),取 max 还兜住两表漂移。**已用用户真实备份模拟验证:旧口径 2 档违例→纯 contentSec 1 档→本方案 0 档**;另确认 totalPlayContentSec 历史一直在填、数据未丢。**待真机最终确认**。[listening.js getListenStatsByPodcast]
 - 🔴 《思文，败类》首页封面 ≠ 详情页封面 — 疑 name≠RSS title→subscribedMap 查不到 feedUrl→回落旧 logo。
 - 🔴 头像二级菜单弹出锁全局滚动 — ContextMenu enableScrolling:false→#main overflow:hidden。
 - 🔴 单集列表全量渲染无虚拟化(与机核同源,大档建数百行 DOM)。

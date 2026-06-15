@@ -199,28 +199,46 @@ export function listenedPercentStepped(row) {
 }
 
 // [B-37] 收听数据统计：按节目聚合收听时长 + join 节目元数据（标题/封面），降序。
-//   range='all' → 用 episodeListenStats 累计值（含历史）；range=数字 → 用 listenDaily 最近 N 天。
+//   range='all' → 全部累计；range=数字 → 用 listenDaily 最近 N 天。统一用 contentSec(倍速换算内容秒)口径。
 //
-// [修「周>全部」· 2026-06-15] 改用 contentSec 口径，根治"最近一周 > 全部"。
-//   原 bug：「全部」读 `episodeListenStats.listenedSec`(bit-array 计数)，而 `resetEpisodeListening`
-//   (重播已听完单集时触发，Player.js)会清零 bits/listenedSec **却不动 listenDaily** → 听完再重听后
-//   「全部」被清零重数、「周」(listenDaily.listenedSec)仍含旧值+重听 → 周 > 全部。
-//   正解：换一对**两表一致、永不 reset** 的字段——`episodeListenStats.totalPlayContentSec`(全部)
-//   与 `listenDaily.contentSec`(周)：二者都按 `contentDeltaSec` 每秒累加(大跳/拖动"水时长"记 0，
-//   保留 B-55"不计水时长"意图)、reset 均不碰、且全部是周的全时段超集 → **天然 全部 ≥ 周**。
-//   口径含义=按倍速换算的"内容收听时长"(重听如实计入)；对单次正常收听数值 ≈ 旧 listenedSec。
-//   注：listenedSec/bits 仍保留其"当前一遍进度/完成%"职责(listenedPercentStepped / bumpListenTick)，
-//   只把**统计聚合**换成 contentSec，互不影响。
+// [修「周>全部」· 2026-06-15·终极] 根治"最近一周 > 全部"。
+//   ① 旧 bug：「全部」读 `episodeListenStats.listenedSec`(bit-array 计数)，而 `resetEpisodeListening`
+//      (重播已听完单集触发，Player.js)清零 bits/listenedSec **却不动 listenDaily** → 听完重听后
+//      「全部」被清零重数、「周」仍含旧值 → 周>全部(实测有档周=2×全部)。
+//   ② 改用永不 reset 的 contentSec 后仍有**残留**：`episodeListenStats`(全部)与 `listenDaily`(周)
+//      是两张表分别写(各自 rw 事务)，审P2-10 之前的并发竞态让两表产生几秒漂移 → 偶发周比全部多 1~2 秒
+//      (实测真实备份命中 1 档差 1 秒)。
+//   ③ **终极正解**：「全部」= **max(Σ episodeListenStats.totalPlayContentSec, Σ listenDaily.contentSec 全天)**。
+//      「周」是 listenDaily 的 7 天子集 ≤ listenDaily 全天 ≤ 全部 → **数学上保证 全部 ≥ 周**(与两表是否一致无关)；
+//      取 max 还顺带用上两表里更完整的信号(stats 含 listenDaily 建表前的历史；listenDaily 兜住 stats 漂移)。
+//      在用户真实备份上模拟：旧口径 2 档违例、纯 contentSec 1 档违例、**本方案 0 违例**。
+//   口径含义=按倍速换算的"内容收听时长"(重听如实计入、大跳/拖动"水时长"记 0)；单次正常收听 ≈ 旧 listenedSec。
+//   注：listenedSec/bits 仍各司其职(当前一遍进度/完成%：listenedPercentStepped/bumpListenTick)，只换统计聚合口径。
 export async function getListenStatsByPodcast(range = 'all') {
   const byPod = {};
   if (range === 'all') {
-    const all = await db.episodeListenStats.toArray();
-    all.forEach(s => {
+    const [stats, daily] = await Promise.all([
+      db.episodeListenStats.toArray(),
+      db.listenDaily.toArray(),
+    ]);
+    const statsByPod = {};
+    stats.forEach(s => {
       const sec = s.totalPlayContentSec || 0;
       if (sec <= 0) return;
       const pid = String(s.id).split('::')[0];
-      byPod[pid] = (byPod[pid] || 0) + sec;
+      statsByPod[pid] = (statsByPod[pid] || 0) + sec;
     });
+    const dailyByPod = {};
+    daily.forEach(r => {
+      const sec = r.contentSec || 0;
+      if (sec <= 0) return;
+      dailyByPod[r.podcastId] = (dailyByPod[r.podcastId] || 0) + sec;
+    });
+    new Set([...Object.keys(statsByPod), ...Object.keys(dailyByPod)]).forEach(
+      pid => {
+        byPod[pid] = Math.max(statsByPod[pid] || 0, dailyByPod[pid] || 0);
+      }
+    );
   } else {
     const days = Number(range) || 7;
     const cutoff = dayKey(Date.now() - (days - 1) * 86400000);
