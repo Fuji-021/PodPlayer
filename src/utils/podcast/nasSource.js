@@ -221,6 +221,18 @@ export async function testNasConnection() {
   const ok = await probe();
   return { ok };
 }
+// [#16 修]「设置·测试连接」专用：走 nas:probeActive(**不看总开关**)，关态也能真测可达性，不再恒报失败。
+//   与 testNasConnection(Navbar"手动重连"——经 probe() 更新模块 nasAlive 驱动状态图标)刻意区分：
+//   后者要受总开关短路(关态不跑心跳)，前者只是一次性可达性测试，互不影响。
+export async function testNasReachable() {
+  if (!ipcRenderer) return { ok: false };
+  try {
+    const r = await ipcRenderer.invoke('nas:probeActive');
+    return r && typeof r.ok === 'boolean' ? r : { ok: false };
+  } catch (e) {
+    return { ok: false };
+  }
+}
 export async function getNasConfig() {
   if (!ipcRenderer) return null;
   try {

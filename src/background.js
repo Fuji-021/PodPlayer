@@ -442,24 +442,9 @@ class Background {
     this.window.webContents.on('new-window', function (e, url) {
       e.preventDefault();
       log('open url');
-      const excludeHosts = ['www.last.fm'];
-      const exclude = excludeHosts.find(host => url.includes(host));
-      if (exclude) {
-        const newWindow = new BrowserWindow({
-          width: 800,
-          height: 600,
-          titleBarStyle: 'default',
-          title: PROFILE.title,
-          webPreferences: {
-            webSecurity: false,
-            nodeIntegration: true,
-            enableRemoteModule: true,
-            contextIsolation: false,
-          },
-        });
-        newWindow.loadURL(url);
-        return;
-      }
+      // [安全收敛] 移除历史高危 last.fm 内嵌子窗(webSecurity:false + nodeIntegration:true +
+      //   enableRemoteModule + contextIsolation:false)。其唯一入口(lastfm auth)早已删除=死分支。
+      //   现所有新窗口/外链统一交给系统浏览器，杜绝可被导航触达的高危内嵌窗。
       shell.openExternal(url);
     });
   }

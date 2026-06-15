@@ -116,6 +116,21 @@ export function createMenu(win, store) {
           },
         },
         {
+          // [#7 修] 本地"隐藏/显示播放器"快捷键原来没注册菜单 accelerator(只有全局键生效)。
+          //   这里读 minimize 本地键并执行与 globalShortcut.js 同款的窗口隐藏/显示切换。
+          label: '隐藏/显示播放器',
+          accelerator: shortcuts.find(s => s.id === 'minimize').shortcut,
+          click: () => {
+            if (win.isVisible()) {
+              win.hide();
+            } else {
+              win.show();
+              if (win.isMinimized()) win.restore();
+              win.focus();
+            }
+          },
+        },
+        {
           label: 'Repeat',
           accelerator: 'Alt+R',
           click: () => {

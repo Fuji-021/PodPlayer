@@ -425,7 +425,7 @@ import {
   activateNasProfile,
   setNasEnabled,
   listNasLibraries,
-  testNasConnection,
+  testNasReachable,
   nasStatus,
   initNas,
 } from '@/utils/podcast/nasSource';
@@ -723,7 +723,8 @@ export default {
       this.nas.status = nasStatus();
     },
     async testCurrentNas() {
-      const r = await testNasConnection();
+      // [#16 修] 走 testNasReachable(不看总开关) → 总开关关闭时也能真测可达性，不再恒报失败。
+      const r = await testNasReachable();
       this.nas.status = nasStatus();
       this.showToast(r && r.ok ? 'NAS 连接正常' : 'NAS 暂时连不上');
     },

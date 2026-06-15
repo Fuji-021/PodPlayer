@@ -28,7 +28,7 @@
 - 🔴 单集列表全量渲染无虚拟化(与机核同源,大档建数百行 DOM)。
 - 🔴 「为你推荐」reroll 不换/池只剩 3 — reshuffle 没排除上一批 forYou。
 - ✅ 单集详情「加入播放列表」按钮加入后图标过大 + 不能再点移出 [B67-BUG-5]（2026-06-15 修·`fix/buglist`）— 改 `isQueued`(真实队列成员)驱动的持久 toggle + `check-circle` 图标(有边界);点击可移出。**待真机**。
-- 🔴 last.fm 子窗 nodeIntegration+webSecurity:false 历史高危(入口已删,建议收敛/移除)。
+- ✅ last.fm 子窗 nodeIntegration+webSecurity:false 历史高危（2026-06-15 修·`fix/buglist`）— `background.js` new-window 删整段 last.fm 高危内嵌子窗死分支，统一 `shell.openExternal` 走系统浏览器。behaviorChange=false。**待真机**(scrobble 仍正常)。
 
 ### P3（低/边缘/记录）
 - 🔴 搜索栏再右移 + 宽度再缩对齐 navbar。[B67-BUG-7]
@@ -96,13 +96,13 @@
 
 ### 🔧 待办（8，本轮未做）
 - 🟠 **#4** 二级页 `discoverList`「换一批」无 shuffle(hot/new/treasure 确定性返回)→ treasure 点了完全不变；hot/new 叫"换一批"语义不当(应"刷新")。`discover.js getSectionFull`。
-- 🟠 **#7** 本地"隐藏/显示播放器"快捷键(minimize，默认 Ctrl+M)UI 可设可存但**不生效**(`menu.js` 没注册 minimize accelerator，只全局列那格真生效)。`menu.js`/`settings.vue`。
+- ✅ **#7** 本地"隐藏/显示播放器"快捷键不生效（2026-06-15 修·`fix/buglist`）— `menu.js` Controls 子菜单补 minimize 菜单项(accelerator 取本地键、click 做窗口 hide/show)，改键后重建菜单即时生效。**待真机**。
 - 🟡 **#6** treasure 切片口径 `splitSections`(先 slice 再 filter) vs `reshuffleSection`(先 excludeSubbed 再 slice)不一致 → 订阅越多偏差越大。`discover.js`。
 - ✅ **#8** repeat 改 **off↔one 两档**（2026-06-15 修·`fix/buglist`）— `switchRepeatMode` 改 off↔one、启动归一化遗留 `'on'→'off'`;图标模板天然正确无需改;核验确认无音乐回归('on' 分支退化为无害死代码)。**待真机**。
 - ✅ **#9** 未加载 howler 时 后退15/前进30 静默无反应（2026-06-15 修·`fix/buglist`）— `Player.js seek` 加 playOrPause 同款兜底(load+autoplay)，**不带 startAt → 保留续播位**。**待真机**。
 - ✅ **#12** 导入订阅后发现页绿勾不即时（2026-06-15 修·`fix/buglist`）— 粘贴RSS/OPML/单档三处订阅成功补 `commit('addSubscribedPodcast')`(键=title、值=feedUrl);`importOpmlText` 多返回 `subscribed[]` 供逐条 commit。**待真机**。
 - 🟡 **#15** 快捷键无冲突检测 + 保存恒提示成功(`globalShortcut.register` 对占用/非法键静默 false)。`settings.vue saveShortcut`。
-- 🟡 **#16** NAS「测试连接」在总开关关闭时恒报失败(`probe` 开头 `if(!enabled) return false`)、与可达无关。`nasSource testCurrentNas`/`nasBridge probe`。
+- ✅ **#16** NAS「测试连接」总开关关闭时恒报失败（2026-06-15 修·`fix/buglist`）— 新增 `nas:probeActive` IPC(不看 enabled 只测可达) + `testNasReachable()`，settings 改用之;`testNasConnection`(Navbar 手动重连，更新 nasAlive)保留不动。**待真机**。
 
 ### ⚪ 已闭（非 bug）
 - **#1** 后退15/前进30 用 `previous`/`next` 三角图标 —— **用户 2026-06-14 决定保留不换**(非命名错误，是选型)。

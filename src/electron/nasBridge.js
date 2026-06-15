@@ -259,6 +259,24 @@ export function registerNasIpc() {
     }
   });
 
+  // [#16 修]「测试连接」专用：**不看总开关(enabled)**，只测当前激活档 baseUrl 的真实可达性。
+  //   总开关关闭时只翻 store.enabled、不删档，getCfg 照常返回 baseUrl → 能独立测；
+  //   与后台心跳/熔断(nas:probe 的 !enabled 短路)解耦，不破坏"关闭时不跑心跳"的低耦合铁律。
+  ipcMain.handle('nas:probeActive', async () => {
+    const c = getCfg();
+    if (!c.baseUrl) return { ok: false, reason: 'no-config' };
+    try {
+      await axios.get(c.baseUrl + '/ping', {
+        timeout: PROBE_TIMEOUT,
+        headers: { 'User-Agent': UA },
+        validateStatus: s => s >= 200 && s < 300,
+      });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: 'unreachable' };
+    }
+  });
+
   // 解析单集 → 流 URL（含 token）。未就绪/查不到/出错一律 {url:null}。
   ipcMain.handle('nas:resolve', async (_e, args) => {
     const c = getCfg();
