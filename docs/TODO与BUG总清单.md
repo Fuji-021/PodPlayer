@@ -62,20 +62,20 @@
 - 🟠 **[审P2-1]** mediaSession 从不设 `playbackState` → 暂停后系统卡片仍显"播放中"，部分 Windows 版不展示卡片。`Player.js` _initMediaSession/_updateMediaSessionPositionState。[待真机]
 - 🟠 **[审P2-2]** mediaSession handler 注册两遍，生效的 `Player.vue:1788` 版把 play/pause **都绑 playOrPause(toggle)** → 系统已暂停时发 pause 反被 toggle 成播放。`Player.js:862` vs `Player.vue:1788`。[待真机]
 - 🟠 **[审P2-3]** 主进程无 `nativeTheme.on('updated')`，运行时切系统深浅色靠渲染端 matchMedia → "自动"模式下应用主体+托盘图标不实时跟随、常要重启。`common.js`/`store/index.js`。[待真机]
-- 🟠 **[审P2-4]** 窗口只存/读 `getBounds()` 不存 `isMaximized` → 最大化状态不恢复；且最大化时 resized/moved 把最大化 bounds 写进还原尺寸(污染)。`background.js:389-403`。
+- ✅ **[审P2-4]**（2026-06-15 已修，提交 `86d5a3b`）新增 `saveWindowState()`：最大化只记 `isMaximized:true` 保留 prev bounds、非最大化存真实 bounds；createWindow 末尾按 isMaximized 调 `maximize()` 恢复。最大化不再污染还原尺寸、最大化状态可恢复。`background.js`。
 - ✅ **[审P2-5]**（2026-06-15 已修，提交 `f3a7b5b`）`saveLyricFinished` 改 `removeAllListeners + once` → 监听不再每次切歌累积、无 MaxListeners 警告。`Player.js`。
 - ✅ **[审P2-6]**（2026-06-15 已修，提交 `f3a7b5b`）`upsertEpisodes` 整体包 try/catch(失败 log + return undefined 不抛，防御纵深)；成功路径不变。`db.js`。
-- 🟠 **[审P2-7]** RSS 解析无 item 数/description 长度上限 → 超大 feed(上万集、内嵌数 MB base64)全量入 IndexedDB + `v-html` 巨型 DOM，逼近配额。`rssParser.js:82-117`。[待真机]
-- 🟠 **[审P2-8]** OPML 宽容正则全文 `exec` 循环 + `[^>]*` 回溯，数十 MB 畸形 OPML O(n·m) 卡 UI 数秒(非指数 ReDoS)。`rssParser.js:154-170`。[待真机]
+- ✅ **[审P2-7]**（2026-06-15 已修，提交 `86d5a3b`）parseRss 加 item 数上限(`MAX_ITEMS=50000`，纯防失控、不丢真实集) + 单集 description `capLen 100KB`(挡内嵌大 base64 灌爆 DB/v-html)。`rssParser.js`。
+- ✅ **[审P2-8]**（2026-06-15 已修，提交 `86d5a3b`）parseOpmlLenient 加 `8MB` 输入护栏(`scan=slice`)→ 防 `[^>]*` 在数十 MB 畸形 OPML 上 O(n·m) 回溯卡 UI；主 DOMParser 路径不变。`rssParser.js`。
 - 🟠 **[审P2-9]** OPML 导入纯**串行** for-await(非 runLimited) + 单档 20s 超时 → 2000 档实际不可用(~11h)；且未传 `source` 全记 `'manual'`。`service.js:92-103`。
 - 🟠 **[审P2-10]** `tickListen` 每秒 `get→改→put` 非事务、`listenDaily` 第二段独立 R-M-W → seek/倍速快触发时后写覆盖前写、少计统计(丢更新)。`listening.js:34-101`。[待真机]
-- 🟠 **[审P2-11]** NAS `ensureItems/ensureEps` 无在途去重(冷缓存时 resolve/warm/podcastSet 三入口对同一 `items?limit=500` 发 3 份重复请求) + `limit=500` 硬上限(库超 500 档静默漏档)。`nasBridge.js:119-153`。[待真机]
+- ✅ **[审P2-11]**（2026-06-15 已修，提交 `86d5a3b`）NAS `ensureItems`/`ensureEps` 加在途去重(并发复用同一 promise) + 按 `total` 分页拉全(原 `limit=500` 漏档；满页无 total→Infinity 靠短页 break 收尾)。`nasBridge.js`。[NAS 待真机]
 
 ### 🟡 P3（5 条，全部确认）
 - 🟡 **[审P3-1]** 关闭策略分散 5 处 + Mac `exitAsk` 用 `minimize()` 而非 `hide()`(Windows 路径正确，Mac 托盘语义不一致)。`background.js`/`ipcMain.js:201-218`。
 - ✅ **[审P3-2]**（2026-06-15 已修，提交 `f3a7b5b`）多显示器越界判定 `- bounds.height` 改 `+ bounds.height` → 副屏窗口重启不再被拉回主屏。`background.js`。[改后逻辑对，定位仍宜真机多屏验]
 - ✅ **[审P3-3]**（2026-06-15 已修，提交 `f3a7b5b`）`coverColor.js`/`coverPalette.js` 取色缓存加 LRU(cap 100，命中提最新+超量淘汰)，套 `episodeCache.js` 模式。
-- 🟡 **[审P3-4]** NAS 心跳 `setInterval` 仅停用时清、无卸载清理 → 渲染端重载边缘可能叠加游离 interval(危害极小)。`nasSource.js:53-57`。
+- ✅ **[审P3-4]**（2026-06-15 已修，提交 `86d5a3b`）NAS 心跳加模块级 `beforeunload` 卸载清理 → 渲染端重载不再叠加游离 interval。`nasSource.js`。
 - ✅ **[审P3-5]**（2026-06-15 已修，提交 `f3a7b5b`）Howl 补 `onplayerror`：NAS 源→切 CDN、否则提示+跳下一集，播放期失败不再静默卡住。`Player.js`。
 
 ---
