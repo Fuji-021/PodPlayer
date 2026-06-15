@@ -114,8 +114,8 @@
 
 ### P1
 - 🟡🔜 **NAS 订阅托管 + 智能回收** — 声明式 + 对账模型：订阅成功自动托管到 ABS/NAS(autoDownload + 下最近100期)、6 个月未听冷藏(删 NAS 单集留最近1集+所有收藏)、取消订阅 7 天宽限后删整档、首连新 NAS 差异对账(只动我订阅过的)。执行提示词=`docs/NAS订阅托管-执行提示词.md`、设计=`docs/NAS订阅托管方案.md`。
-  - **✅ P0 已落地（2026-06-15·分支 `feature/nas-handoff`·未并 master）**：订阅成功 fire-and-forget 托管到 NAS（已存在 PATCH / 不存在 POST 创建+autoDownload）+ 无 NAS 全程降级 + `settings.nasHandoffEnabled` 可回退开关。**P0 走路 A**(靠 autoDownload、不放量 download-episodes/DELETE)。2 对抗核验 SAFE-TO-MERGE、eslint 0。`nasBridge.js`/`nasSource.js`/`service.js`/`initLocalStorage.js`/`settings.vue`。
-  - **⚠️ 放量前必做真机 ABS 实测**：① `POST /api/podcasts` body 形态 + folder 解析 + admin/update token 权限；② 路 A 坐实——autoDownload 实际抓几集？不足「最近 100 历史」则 P1 接 `download-episodes`（**记账：别误以为 100 集已落地**）。实测通过→并 master。
+  - **✅ P0 已落地并真机验证 + 已并 master（2026-06-16）**：订阅成功 fire-and-forget 托管到 NAS（已存在 PATCH / 不存在 POST 创建）+ 无 NAS 全程降级 + `settings.nasHandoffEnabled` 可回退开关。**真正触发下载靠** `PATCH .../media {lastEpisodeCheck:1}` + `GET .../checknew?limit=100`（仅 autoDownloadEpisodes 不回填历史=之前"建档却 0 下载"的真因；checknew 与用户 ABS 看门狗 requeue 同机制）。真机复测 ABS 下载队列 94 集在下 ✓;POST body/folder/token 权限均通过。`nasBridge.js`/`nasSource.js`/`service.js`/`initLocalStorage.js`/`settings.vue`。
+  - **终检通过**：4 对抗核验 SAFE-TO-MERGE(含**密钥未泄露**确认:全分支 grep `eyJ`/JWT 0 命中)、eslint 0。非阻断记账(留 P1 加固)：重订阅 checknew 幂等节流、大 OPML 批量 handoff 限流、POST body 随 ABS 版本浮动。
   - **P1+ 待做(规格已备 `docs/NAS订阅托管-P1规格.md`·待 P0 实测过后落地)**：声明式对账(启动/恢复/每日/操作后即时·断联跳过恢复全量)、取消订阅 7 天宽限删整档(DELETE ?hard=1)、6 个月冷藏、多设备「仅本机/共享」开关、首连差异对账、README 教程。破坏性四闸=feature-flag(默认关)+宽限+多设备 scope(默认 local)+`nasDestructiveArmed` dry-run gating(默认关)；时间戳存 `podcasts.nasRemoveAt`(非索引免升版本)；契约收口于抽取的 `ensureManaged()`(随 P0 实测对齐一处)。
 - 🟡 **NAS P3 中途掉线续播** — 代码已落地(并入 master 3b1db90),**待真机断网验收**(≤5s 续 CDN/误差<2s + NAS 关闭态核心回归)。
 - 🔴 桌面通知(新单集/下载完成,须合 Windows 通知框架)。
