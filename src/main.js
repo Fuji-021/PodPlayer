@@ -24,6 +24,10 @@ window.addEventListener('unhandledrejection', e => {
   if (e && typeof e.preventDefault === 'function') e.preventDefault();
 });
 
+// [日志] 安装渲染端全局错误兜底 + 日志(经 IPC 落主进程文件 main.log)，尽早调用以捕获早期错误。
+import { installRendererLogging } from '@/utils/log';
+installRendererLogging();
+
 // [事故加固] resetApp() 会 deleteDatabase 清空全部本地数据(订阅/进度/统计/收藏)。
 //   2026-06-12 疑似被误触 → 不可恢复的清库。改为：① 必须显式 confirm；② 不再在
 //   console 显眼广告它(去掉吸引误触的彩色提示)。仅作最后的人工自救手段保留。

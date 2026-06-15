@@ -238,6 +238,19 @@
         </div>
       </div>
 
+      <!-- [日志] 出问题时打开日志文件排查/发开发者；落 userData\logs\main.log -->
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">应用日志</div>
+          <div class="description">
+            出问题时点开看日志文件，便于排查（也可发给开发者定位）。
+          </div>
+        </div>
+        <div class="right">
+          <button @click="openLogFolder">打开日志文件夹</button>
+        </div>
+      </div>
+
       <!-- [§12] 已删 3 个网易云音乐专属开关：Apple Music 歌单(showPlaylistsByAppleMusic)、
            双语字幕(subTitleDefault)、倒序播放(enableReversedMode) —— 播客无关。 -->
       <div class="item">
@@ -728,6 +741,15 @@ export default {
   },
   methods: {
     ...mapActions(['showToast']),
+    // [日志] 打开日志文件夹(主进程 shell 定位 main.log)；非 electron 无操作。
+    openLogFolder() {
+      if (!this.isElectron) return;
+      try {
+        window.require('electron').ipcRenderer.invoke('app:openLogs');
+      } catch (e) {
+        /* ignore */
+      }
+    },
     // ===== [NAS] 配置中心方法 =====
     async loadNas() {
       const r = await listNasProfiles();

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import Dexie from 'dexie';
 import store from '@/store';
+import { rlog } from '@/utils/log';
 // import pkg from "../../package.json";
 
 // [播客改造] 导出 db 实例，供 utils/podcast/db.js 复用，避免多个 Dexie 实例冲突。
@@ -313,6 +314,11 @@ export function openDatabase() {
   return db.open().catch(err => {
     const name = err && err.name;
     console.error('[db] open failed:', name, err && err.message);
+    try {
+      rlog.error('[db] open failed', name, (err && err.message) || String(err));
+    } catch (e) {
+      /* ignore */
+    }
     if (
       name === 'UnknownError' ||
       name === 'InvalidStateError' ||

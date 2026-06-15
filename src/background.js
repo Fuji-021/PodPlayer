@@ -39,9 +39,18 @@ import expressProxy from 'express-http-proxy';
 import Store from 'electron-store';
 import { createMpris, createDbus } from '@/electron/mpris';
 import { spawn } from 'child_process';
+import { initMainLogger, registerLogIpc, log as elog } from './electron/logger';
 const clc = require('cli-color');
+// [日志] 尽早初始化文件日志 + 注册日志 IPC(接渲染端日志 / 打开日志文件夹)。
+initMainLogger();
+registerLogIpc();
 const log = text => {
   console.log(`${clc.blueBright('[background.js]')} ${text}`);
+  try {
+    elog.info('[main]', text);
+  } catch (e) {
+    /* ignore */
+  }
 };
 
 // [审P1-1 兜底] 主进程最后一道防线：任何未捕获异常 / 未处理 Promise 拒绝只记录、不让整个 app 崩溃。

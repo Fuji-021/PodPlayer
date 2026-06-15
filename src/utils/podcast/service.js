@@ -12,6 +12,7 @@ import {
   deletePodcast,
 } from './db';
 import { handoffToNas } from './nasSource';
+import { rlog } from '@/utils/log';
 
 const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
@@ -77,8 +78,7 @@ export async function subscribeByRssUrl(feedUrl, source = 'manual') {
         //   no-nas/nas-down/flag-off 等 skip 不打，避免无 NAS 用户每次订阅刷控制台。一行/次、不阻塞。
         // eslint-disable-next-line no-console
         if (r && (r.error || r.created || r.updated)) {
-          // eslint-disable-next-line no-console
-          console.log('[nas-handoff]', url, r);
+          rlog.info('[nas-handoff]', url, r);
         }
       })
       .catch(() => {});
