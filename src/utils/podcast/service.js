@@ -73,10 +73,13 @@ export async function subscribeByRssUrl(feedUrl, source = 'manual') {
   if (nasHandoffOn()) {
     handoffToNas(url, merged.title)
       .then(r => {
-        // [NAS 托管·实测期可见] 每次订阅都打结果，含 skip 原因(no-nas/nas-down/flag-off)，
-        //   便于真机 ABS 验收时判断「为何没托管」；created/updated/error 为真动作。一行/次、不阻塞。
+        // [NAS 托管] 仅在真发生托管动作或出错时打日志(created/updated/error)，便于排查；
+        //   no-nas/nas-down/flag-off 等 skip 不打，避免无 NAS 用户每次订阅刷控制台。一行/次、不阻塞。
         // eslint-disable-next-line no-console
-        if (r) console.log('[nas-handoff]', url, r);
+        if (r && (r.error || r.created || r.updated)) {
+          // eslint-disable-next-line no-console
+          console.log('[nas-handoff]', url, r);
+        }
       })
       .catch(() => {});
   }
