@@ -23,7 +23,7 @@
 
 ### P2
 - ✅ **统计「最近一周」>「全部」(如岩中花述)**（2026-06-15 修·分支 `feature/perf` round2）— 根因坐实:`resetEpisodeListening`(重播已听完单集)清 `episodeListenStats.bits/listenedSec` 却不动 `listenDaily` → 听完重听后「全部」(读 listenedSec)被清零重数、「周」(读 listenDaily.listenedSec)仍含旧值 → 周>全部。**修**(终极):「全部」= `max(Σ episodeListenStats.totalPlayContentSec, Σ listenDaily.contentSec 全天)`,「周」= listenDaily 7 天。因周⊆全天⊆全部 → **数学保证 全部≥周**(与两表是否一致无关),取 max 还兜住两表漂移。**已用用户真实备份模拟验证:旧口径 2 档违例→纯 contentSec 1 档→本方案 0 档**;另确认 totalPlayContentSec 历史一直在填、数据未丢。**待真机最终确认**。[listening.js getListenStatsByPodcast]
-- ✅ 《思文，败类》首页封面 ≠ 详情页封面（2026-06-15 修·`fix/buglist`）— 根因 name≠RSS title→subscribedMap 查不到。**修**:DiscoverCard 新增 `coverFeedUrl=feedUrl||podcast.feedUrl`，用它(feedUrl 主键)查本地真实封面，不依赖 name 匹配(不触 B56-5)。边界:纯榜单卡(无 feedUrl)仍回落 logo。**待真机**。
+- 🔴 **[R13] 首页节目封面错/空白(d6325f8=假修复·方向错·已重开)** — 思文败类首页≠详情**仍没好**(d6325f8 只给单个节目加 coverFeedUrl、commit 自标边界未覆盖=没修；换 Nice Try 复现)+ Nice Try 首页空白。两点结构缺陷:①封面错误回落「目录旧 logoURL」(已订阅本应优先 DB coverUrl，但靠 subscribedMap[name] 反查、name≠RSS title 即失效，同 B56-5)；②PodImage 加载失败只 opacity 隐藏、无占位=整块空白。**根治(治本·一处统一·别每组件各写)**:①统一取值链 DB coverUrl→目录 logoURL→内置占位；②name 归一化再查/补 feedUrl/Apple id 关联本地库；③PodImage 内置默认占位+onImgError 显占位不隐藏(下载/历史/收藏/搜索/详情/订阅/播放条全局生效)；④封面 URL 统一 http→https。**本轮不修(用户 2026-06-15 驳回先消化)**·详见 `docs/BUG审查.md` R13 + [[known-bugs]]/[[debugging-methodology]]「PASS≠fixed」。真机验收:思文败类==详情、Nice Try 有封面、带标点名节目都对、故意断一个 URL 看是否出占位。
 - ✅ 头像二级菜单弹出锁全局滚动（2026-06-15 修·`fix/buglist`）— `ContextMenu.openMenu` 加 `lockScrolling=true` 默认开关、头像菜单传 false 不锁；其余右键菜单默认锁、行为不变。**待真机**。
 - 🔴 单集列表全量渲染无虚拟化(与机核同源,大档建数百行 DOM)。
 - ✅ 「为你推荐」reroll 不换/池只剩 3（2026-06-15 修·`fix/buglist`）— 排除拆 hardExclude(已订阅)/softExclude(其它栏+**上一批 forYou**)，池不足从非订阅全池回填。reroll 真换一批 + 不再只剩三个。与操作#5 不同问题。**待真机**。
