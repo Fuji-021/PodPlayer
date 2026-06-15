@@ -50,11 +50,11 @@
 
 ### 🔴 P1（8 条，全部确认）
 - ✅ **[审P1-1]**（2026-06-15 已修，提交 `ecd422f`）下载 `writeStream` 补 `.on('error')` + 统一失败收尾 `failDownload`(settled 去重 + 停 res/writeStream 两端流 + 删半成品 + 上报 download:error) + 完成信号改挂 `writeStream 'finish'` + 主进程 `uncaughtException`/`unhandledRejection` 兜底(只 log)→ 磁盘满(ENOSPC)/目录不可写(EACCES/ENOENT)不再崩主进程、单集不再卡 downloading。原 `podcastDownload.js:146`。electron:build 通过 + 对抗审查无回归。
-- 🔴 **[审P1-2]** 每秒 `saveEpisodeProgress` 裸 promise 无 `.catch` + 全工程无 `unhandledrejection` → IndexedDB 异常态(锁争用/损坏/配额)时**每秒一条未捕获 rejection**。`Player.js:339`(对照紧邻 tickListen().catch())。★最该先修·落在事故同故障域
+- ✅ **[审P1-2]**（2026-06-15 已修，提交 `f3a7b5b`）每秒/拖动/切歌三处 `saveEpisodeProgress` 均补 `.catch(()=>{})` + `main.js` 加全局 `window.unhandledrejection`(log + preventDefault) → IndexedDB 异常态不再每秒刷未捕获 rejection、不被当致命错误。`Player.js:249/341/1408` + `main.js`。
 - 🔴 **[审P1-3]** 全工程无 `powerMonitor`(suspend/resume) + 无 `mediaDevices.devicechange` → 睡眠唤醒本地/CDN 源可能卡死、下载卡死无重试、拔输出设备(蓝牙断)不回落默认。`src` 全工程零命中。
 - 🔴 **[审P1-4]** 退出钩子不通知渲染端 flush + 无 `beforeunload`/`pagehide`；`app.exit()` 立即终止 → in-flight Dexie 写(进度/统计)可能半途夭折。`background.js:536-547`；`ipcMain.js:32/66/210` app.exit。**呼应数据丢失事故**。
 - 🔴 **[审P1-5]** 物理媒体键(MediaPlayPause/Next/Prev)未注册 globalShortcut，仅 `Player.vue` 页内 keydown(聚焦才有效) → 最小化到托盘用媒体键控制大概率失灵；无系统"正在播放"卡片。`globalShortcut.js`/`shortcuts.js`。[待真机]
-- 🔴 **[审P1-6]** RSS `fetchText` 无 `maxContentLength`/`maxBodyLength`(axios 默认 -1) → 大档 RSS(数十 MB)无上限读入主进程 + IPC 结构化克隆双份，5 档并行内存尖峰。`podcastFetch.js:10-21`。[待真机]
+- ✅ **[审P1-6]**（2026-06-15 已修，提交 `f3a7b5b`）RSS `fetchText` 加 `maxContentLength`/`maxBodyLength=25MB`(超限 axios 抛错→IPC try/catch 接住返回 {ok:false} 优雅降级)。`podcastFetch.js`。
 - 🔴 **[审P1-7]** `parseRss` 渲染端主线程**同步**执行，大 feed 数百 ms 独占主线程，批量刷新/大 OPML 导入掉帧。`service.js:41/131/176` + `rssParser.js:62`。建议移 Worker/分片。[待真机]
 - 🔴 **[审P1-8]** 沉浸页背景叠两层重型滤镜(底层封面 `blur(64px)` + frost 全屏 `backdrop-filter:blur(24px)` + 噪点 mix-blend) → 页内动画(封面 scale/进度/nyancat/充能)触发 frost **每帧重采样模糊**，低端/4K 发烫掉帧。`Player.vue .imm-bg-cover/.imm-bg-frost`。建议去二次 backdrop-filter 或降半径。[待真机·新功能引入]
 
@@ -63,8 +63,8 @@
 - 🟠 **[审P2-2]** mediaSession handler 注册两遍，生效的 `Player.vue:1788` 版把 play/pause **都绑 playOrPause(toggle)** → 系统已暂停时发 pause 反被 toggle 成播放。`Player.js:862` vs `Player.vue:1788`。[待真机]
 - 🟠 **[审P2-3]** 主进程无 `nativeTheme.on('updated')`，运行时切系统深浅色靠渲染端 matchMedia → "自动"模式下应用主体+托盘图标不实时跟随、常要重启。`common.js`/`store/index.js`。[待真机]
 - 🟠 **[审P2-4]** 窗口只存/读 `getBounds()` 不存 `isMaximized` → 最大化状态不恢复；且最大化时 resized/moved 把最大化 bounds 写进还原尺寸(污染)。`background.js:389-403`。
-- 🟠 **[审P2-5]** `saveLyricFinished` 每次切歌 `ipcRenderer.on` 不 removeListener → 累积 IPC 放大 + MaxListeners 警告(仅 OSDLyrics 开+网易云曲)。`Player.js:945`。[待真机]
-- 🟠 **[审P2-6]** `upsertEpisodes` 读写无内部 try/catch，全靠调用方兜底(3/4 调用方无)，防御纵深不足、新增不包 catch 调用方即回归白屏。`db.js:151-167`。
+- ✅ **[审P2-5]**（2026-06-15 已修，提交 `f3a7b5b`）`saveLyricFinished` 改 `removeAllListeners + once` → 监听不再每次切歌累积、无 MaxListeners 警告。`Player.js`。
+- ✅ **[审P2-6]**（2026-06-15 已修，提交 `f3a7b5b`）`upsertEpisodes` 整体包 try/catch(失败 log + return undefined 不抛，防御纵深)；成功路径不变。`db.js`。
 - 🟠 **[审P2-7]** RSS 解析无 item 数/description 长度上限 → 超大 feed(上万集、内嵌数 MB base64)全量入 IndexedDB + `v-html` 巨型 DOM，逼近配额。`rssParser.js:82-117`。[待真机]
 - 🟠 **[审P2-8]** OPML 宽容正则全文 `exec` 循环 + `[^>]*` 回溯，数十 MB 畸形 OPML O(n·m) 卡 UI 数秒(非指数 ReDoS)。`rssParser.js:154-170`。[待真机]
 - 🟠 **[审P2-9]** OPML 导入纯**串行** for-await(非 runLimited) + 单档 20s 超时 → 2000 档实际不可用(~11h)；且未传 `source` 全记 `'manual'`。`service.js:92-103`。
@@ -73,10 +73,10 @@
 
 ### 🟡 P3（5 条，全部确认）
 - 🟡 **[审P3-1]** 关闭策略分散 5 处 + Mac `exitAsk` 用 `minimize()` 而非 `hide()`(Windows 路径正确，Mac 托盘语义不一致)。`background.js`/`ipcMain.js:201-218`。
-- 🟡 **[审P3-2]** 多显示器越界判定写成 `y < bounds.y - bounds.height`(**恒 false**) → 副屏窗口重启常被拉回主屏。`background.js:288`。[待真机]
-- 🟡 **[审P3-3]** `coverColor.js`/`coverPalette.js` 两套取色缓存都是模块级 Map 只增不淘汰、无 LRU(对照 `episodeCache.js` 有 LRU cap12)。`coverColor.js:6,47`+`coverPalette.js:14,110`。(单条小，实际不到 MB，但单调增长)
+- ✅ **[审P3-2]**（2026-06-15 已修，提交 `f3a7b5b`）多显示器越界判定 `- bounds.height` 改 `+ bounds.height` → 副屏窗口重启不再被拉回主屏。`background.js`。[改后逻辑对，定位仍宜真机多屏验]
+- ✅ **[审P3-3]**（2026-06-15 已修，提交 `f3a7b5b`）`coverColor.js`/`coverPalette.js` 取色缓存加 LRU(cap 100，命中提最新+超量淘汰)，套 `episodeCache.js` 模式。
 - 🟡 **[审P3-4]** NAS 心跳 `setInterval` 仅停用时清、无卸载清理 → 渲染端重载边缘可能叠加游离 interval(危害极小)。`nasSource.js:53-57`。
-- 🟡 **[审P3-5]** howler 只配 `onloaderror` 无 `onplayerror` → 加载成功后播放期失败(body 损坏/中途断流/decode 失败)无人接，不报错不跳集(loaderror 已覆盖好，仅此窄缝)。`Player.js:510-540`。
+- ✅ **[审P3-5]**（2026-06-15 已修，提交 `f3a7b5b`）Howl 补 `onplayerror`：NAS 源→切 CDN、否则提示+跳下一集，播放期失败不再静默卡住。`Player.js`。
 
 ---
 
