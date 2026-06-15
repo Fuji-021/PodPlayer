@@ -347,36 +347,57 @@ export function registerNasIpc() {
     if (!feedUrl) return { error: 'no-feedurl' };
     try {
       const items = await ensureItems(c);
-      const existingId = items[normFeed(feedUrl)] || '';
-      if (existingId) {
-        await authPatch(c, '/api/items/' + existingId + '/media', {
-          autoDownloadEpisodes: true,
-          maxNewEpisodesToDownload: 100,
-          maxEpisodesToKeep: 100,
-        });
-        return { ok: true, updated: true };
+      let itemId = items[normFeed(feedUrl)] || '';
+      let created = false;
+      if (!itemId) {
+        // 不存在 → 取 folder → POST 创建
+        const folder = await getFirstFolder(c);
+        if (!folder || !folder.id) return { error: 'no-folder' };
+        const safe = sanitizeName(title) || normFeed(feedUrl).slice(0, 64);
+        const path = folder.fullPath
+          ? String(folder.fullPath).replace(/[\\/]+$/, '') + '/' + safe
+          : '';
+        const body = {
+          libraryId: c.libraryId,
+          folderId: folder.id,
+          path: path,
+          media: {
+            metadata: { feedUrl: feedUrl, title: title },
+            autoDownloadEpisodes: true,
+            maxNewEpisodesToDownload: 100,
+            maxEpisodesToKeep: 100,
+          },
+        };
+        const res = await authPost(c, '/api/podcasts', body);
+        itemId = res && res.data && res.data.id ? res.data.id : '';
+        created = true;
+        clearCache(); // 新建后让 itemsCache 失效，下次 ensureItems 重拉
       }
-      const folder = await getFirstFolder(c);
-      if (!folder || !folder.id) return { error: 'no-folder' };
-      const safe = sanitizeName(title) || normFeed(feedUrl).slice(0, 64);
-      const path = folder.fullPath
-        ? String(folder.fullPath).replace(/[\\/]+$/, '') + '/' + safe
-        : '';
-      const body = {
-        libraryId: c.libraryId,
-        folderId: folder.id,
-        path: path,
-        media: {
-          metadata: { feedUrl: feedUrl, title: title },
-          autoDownloadEpisodes: true,
-          maxNewEpisodesToDownload: 100,
-          maxEpisodesToKeep: 100,
-        },
-      };
-      const res = await authPost(c, '/api/podcasts', body);
-      const newId = res && res.data && res.data.id ? res.data.id : '';
-      clearCache(); // 新建后让 itemsCache 失效，下次 ensureItems 重拉
-      return { ok: true, created: true, itemId: newId };
+      if (!itemId) return { ok: true, created: created, queued: 0 };
+      // [关键·真正触发下载] 仅 autoDownloadEpisodes:true 只追"未来新集"、不回填历史(=之前 ABS 建了
+      //   档却 0 下载的真因)。要真下最近 100 集：把 lastEpisodeCheck 置 1(全部历史集都当"新")再
+      //   GET checknew?limit=100 触发抓取入队。与用户 ABS 看门狗 requeue() 同机制、其 ABS 已实测可用。
+      await authPatch(c, '/api/items/' + itemId + '/media', {
+        lastEpisodeCheck: 1,
+        autoDownloadEpisodes: true,
+        maxNewEpisodesToDownload: 100,
+        maxEpisodesToKeep: 100,
+      });
+      let queued = 0;
+      try {
+        const ck = await authGet(
+          c,
+          '/api/podcasts/' + itemId + '/checknew?limit=100'
+        );
+        const d = (ck && ck.data) || {};
+        if (Array.isArray(d.episodes)) queued = d.episodes.length;
+        else if (typeof d.numNew === 'number') queued = d.numNew;
+      } catch (e) {
+        // checknew 失败不致命：autoDownload 仍会追新集，下次重订/对账可补
+      }
+      return created
+        ? { ok: true, created: true, itemId: itemId, queued: queued }
+        : { ok: true, updated: true, itemId: itemId, queued: queued };
     } catch (e) {
       return { error: String((e && e.message) || e) };
     }
