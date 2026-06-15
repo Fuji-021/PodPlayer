@@ -122,7 +122,7 @@
 
 ### P2
 - 🟡 机核 hover CHUNK→24 真机验收(残留则调 16)。
-- 🔴 性能路线:L1 内存缓存→L2 hover 预取(先只对已订阅)→F2 prune→L2 放开未订阅→L3 空闲预热(每轮一步)。
+- 🔵 **性能优化路线(2026-06-15 全代码库审计后更新·分支 `feature/perf`)** — 详见 [性能审计报告](性能审计报告.md)(原始 57→对抗核实存活 56;3 高/10 中/41 低)。新落地序:①数据层「整档重复读」(podcasts 冗余 `latestPubTime` 去 `getLatestEpisodeTime` 整档读 + episodes `[podcastId+pubTime]` 复合索引免内存 sortBy + 统计页去重全表扫,**性价比最高·含 schema bump**)→②B69-F5 心跳降频(每秒 3 写 Dexie→节流)→③刷新条件请求 ETag/304 + shownotes 预取节流→④F1 真窗口虚拟化(专开一轮)→⑤审P1-7 parseRss 移 Worker。原 L1→L2→F2→L3 内存缓存路线并入④之后。
 - 🔵 定期 OPML+JSON 自动备份(userData\backups 已就绪,定期导出待做)。
 - 🔴 **NAS 源节目「第三大板块」** — navbar 第三板块(首页/我的订阅之外),排版区别于二者(样式未定);是 nas §10 #2「我的NAS栏」升级设想。用户 2026-06-14 提,优先级低、设计未定。
 - 🔴 NAS-在档标识(#4:单集/节目「NAS 上有」呼吸点,需设计,别复用来源点)。
