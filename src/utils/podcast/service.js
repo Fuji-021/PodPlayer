@@ -11,10 +11,23 @@ import {
   getEpisodesByPodcast,
   deletePodcast,
 } from './db';
+import { handoffToNas } from './nasSource';
 
 const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
 const ipcRenderer = electron?.ipcRenderer ?? null;
+
+// [NAS 托管·P0] 读"订阅自动托管"总开关。service 层不 import store，直接读 Vuex 持久化的
+//   localStorage.settings（key 确为 'settings'，见 store/plugins/localStorage.js）。
+//   未设/解析失败 = 默认开(!== false 兼容老用户)。
+function nasHandoffOn() {
+  try {
+    const s = JSON.parse(window.localStorage.getItem('settings') || '{}');
+    return s.nasHandoffEnabled !== false;
+  } catch (e) {
+    return true;
+  }
+}
 
 async function ipcFetch(channel, url) {
   if (!ipcRenderer) {
@@ -55,6 +68,11 @@ export async function subscribeByRssUrl(feedUrl, source = 'manual') {
     : { ...podcast, source, subscribed: true };
   await upsertPodcast(merged);
   await upsertEpisodes(episodes);
+  // [NAS 托管·P0] 订阅成功后旁路托管到 NAS：fire-and-forget，不 await、失败绝不影响订阅返回与播放。
+  //   总开关关 / 无 NAS / NAS 不可达 → 内部静默 skip。OPML 批量导入每档各自触发(各自幂等、失败静默)。
+  if (nasHandoffOn()) {
+    handoffToNas(url, merged.title).catch(() => {});
+  }
   return { podcast: merged, episodes };
 }
 

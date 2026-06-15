@@ -113,7 +113,10 @@
 ## ✅ TODO
 
 ### P1
-- 🔴🔜 **NAS 订阅托管 + 智能回收（下一轮主攻 · 计划下周做）** — 声明式 + 对账模型：订阅成功自动托管到 ABS/NAS(autoDownload + 下最近100期)、6 个月未听冷藏(删 NAS 单集留最近1集+所有收藏)、取消订阅 7 天宽限后删整档、首连新 NAS 差异对账(只动我订阅过的)。**P0=订阅托管 + 无 NAS 降级**先看效果；P1=冷藏/对账/移除/差异/README 教程。执行提示词=`docs/NAS订阅托管-执行提示词.md`、设计=`docs/NAS订阅托管方案.md`；切分支 `feature/nas-handoff`。
+- 🟡🔜 **NAS 订阅托管 + 智能回收** — 声明式 + 对账模型：订阅成功自动托管到 ABS/NAS(autoDownload + 下最近100期)、6 个月未听冷藏(删 NAS 单集留最近1集+所有收藏)、取消订阅 7 天宽限后删整档、首连新 NAS 差异对账(只动我订阅过的)。执行提示词=`docs/NAS订阅托管-执行提示词.md`、设计=`docs/NAS订阅托管方案.md`。
+  - **✅ P0 已落地（2026-06-15·分支 `feature/nas-handoff`·未并 master）**：订阅成功 fire-and-forget 托管到 NAS（已存在 PATCH / 不存在 POST 创建+autoDownload）+ 无 NAS 全程降级 + `settings.nasHandoffEnabled` 可回退开关。**P0 走路 A**(靠 autoDownload、不放量 download-episodes/DELETE)。2 对抗核验 SAFE-TO-MERGE、eslint 0。`nasBridge.js`/`nasSource.js`/`service.js`/`initLocalStorage.js`/`settings.vue`。
+  - **⚠️ 放量前必做真机 ABS 实测**：① `POST /api/podcasts` body 形态 + folder 解析 + admin/update token 权限；② 路 A 坐实——autoDownload 实际抓几集？不足「最近 100 历史」则 P1 接 `download-episodes`（**记账：别误以为 100 集已落地**）。实测通过→并 master。
+  - **P1+ 待做**：声明式对账(启动/恢复/每日/操作后即时·断联跳过恢复全量)、取消订阅 7 天宽限删整档(DELETE ?hard=1)、多设备「仅本机/共享」开关、首连差异对账、看门狗容量驱逐(已在 abs-watchdog 侧)、README 教程。
 - 🟡 **NAS P3 中途掉线续播** — 代码已落地(并入 master 3b1db90),**待真机断网验收**(≤5s 续 CDN/误差<2s + NAS 关闭态核心回归)。
 - 🔴 桌面通知(新单集/下载完成,须合 Windows 通知框架)。
 - 🔴 托盘菜单 + 任务栏缩略图三键(上一首/暂停/下一首)。

@@ -110,6 +110,26 @@
           </div>
         </div>
       </div>
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">订阅时自动托管到 NAS</div>
+          <div class="description">
+            新订阅的节目自动在 NAS 上创建并开启自动下载（留最近 100 集）；未连接
+            NAS 时此项无效，可随时关闭回退。
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="nas-handoff-enable"
+              v-model="nasHandoffEnabled"
+              type="checkbox"
+              name="nas-handoff-enable"
+            />
+            <label for="nas-handoff-enable"></label>
+          </div>
+        </div>
+      </div>
       <div v-if="isElectron && activeProfile" class="item">
         <div class="left">
           <div class="title">
@@ -644,6 +664,18 @@ export default {
       set(value) {
         this.$store.commit('updateSettings', {
           key: 'enableGlobalShortcut',
+          value,
+        });
+      },
+    },
+    // [NAS 托管·P0] 订阅自动托管总开关。未设=默认开(!== false 兼容老用户)。
+    nasHandoffEnabled: {
+      get() {
+        return this.settings.nasHandoffEnabled !== false;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'nasHandoffEnabled',
           value,
         });
       },

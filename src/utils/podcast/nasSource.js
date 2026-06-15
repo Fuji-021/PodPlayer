@@ -305,3 +305,22 @@ export async function activateNasProfile(id) {
   await initNas();
   return { ok: true };
 }
+
+// [NAS 托管·P0] 订阅成功后旁路托管：把该档交给主进程托管到 NAS(创建/确保 autoDownload)。
+//   门槛：NAS 未启用 / 无 feedUrl → skip；探活(缓存>30s 才发探测)不通 → skip。fire-and-forget：
+//   **永不抛、失败静默**，调用方(service.subscribeByRssUrl)绝不 await、不受其成败影响。
+//   托管功能总开关(settings.nasHandoffEnabled)由调用方先判(见 service.nasHandoffOn)。
+export async function handoffToNas(feedUrl, title) {
+  if (!isNasEnabled() || !feedUrl) return { skipped: 'no-nas' };
+  try {
+    const alive = await ensureProbed();
+    if (!alive) return { skipped: 'nas-down' };
+    const r = await ipcRenderer.invoke('nas:handoffSubscription', {
+      feedUrl: feedUrl,
+      title: title || '',
+    });
+    return r || { ok: false };
+  } catch (e) {
+    return { error: String((e && e.message) || e) };
+  }
+}

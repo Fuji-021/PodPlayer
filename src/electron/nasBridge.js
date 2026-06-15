@@ -116,6 +116,49 @@ function authGet(c, path, timeout) {
   });
 }
 
+// [NAS 托管·P0] 写类请求(POST/PATCH)。需 admin/update token；失败由调用方 try/catch 静默吞，
+//   绝不抛到打断订阅。本文件主进程域，禁可选链 ?.（全用 && 守卫）。
+function authPost(c, path, body) {
+  return axios.post(c.baseUrl + path, body, {
+    timeout: API_TIMEOUT,
+    headers: {
+      Authorization: 'Bearer ' + c.token,
+      'User-Agent': UA,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    validateStatus: s => s >= 200 && s < 300,
+  });
+}
+function authPatch(c, path, body) {
+  return axios.patch(c.baseUrl + path, body, {
+    timeout: API_TIMEOUT,
+    headers: {
+      Authorization: 'Bearer ' + c.token,
+      'User-Agent': UA,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    validateStatus: s => s >= 200 && s < 300,
+  });
+}
+// [NAS 托管·P0] 取库的首个 folder（创建播客需 folderId+path）。版本差异：folders 可能在
+//   顶层或 library 下，逐层判（禁 ?.）。无则返回 null。
+async function getFirstFolder(c) {
+  const res = await authGet(c, '/api/libraries/' + c.libraryId);
+  const d = (res && res.data) || {};
+  const lib = d.library ? d.library : d;
+  const folders = (lib && lib.folders) || [];
+  return folders.length ? folders[0] : null;
+}
+// 文件名净化：去 NAS/Windows 非法字符，限长，作为 path 末段。
+function sanitizeName(s) {
+  return String(s || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .trim()
+    .slice(0, 80);
+}
+
 // [审P2-11] 在途请求(冷缓存时三入口并发去重)
 let itemsInflight = null;
 const epsInflight = {};
@@ -287,6 +330,55 @@ export function registerNasIpc() {
       return { url: url || null };
     } catch (e) {
       return { url: null, error: String((e && e.message) || e) };
+    }
+  });
+
+  // [NAS 托管·P0] 订阅成功后把该档托管到 NAS：
+  //   已存在该 feedUrl → 幂等 PATCH /api/items/{id}/media 确保 autoDownload 开 + 上限 100；
+  //   不存在 → 取 folder → POST /api/podcasts 创建(autoDownloadEpisodes:true，靠 ABS 自动抓最近 100 集)。
+  //   **P0 走路 A：不调 download-episodes、不调任何 DELETE**（破坏面最小）。未就绪/出错一律返回对象、绝不抛，
+  //   属订阅后旁路、失败不影响订阅与播放。⚠️ POST body 形态/folder 解析/PATCH 权限需本机 ABS 实测后放量。
+  ipcMain.handle('nas:handoffSubscription', async (_e, args) => {
+    const c = getCfg();
+    if (!ready(c)) return { skipped: 'no-nas' };
+    const a = args || {};
+    const feedUrl = String(a.feedUrl || '');
+    const title = String(a.title || '');
+    if (!feedUrl) return { error: 'no-feedurl' };
+    try {
+      const items = await ensureItems(c);
+      const existingId = items[normFeed(feedUrl)] || '';
+      if (existingId) {
+        await authPatch(c, '/api/items/' + existingId + '/media', {
+          autoDownloadEpisodes: true,
+          maxNewEpisodesToDownload: 100,
+          maxEpisodesToKeep: 100,
+        });
+        return { ok: true, updated: true };
+      }
+      const folder = await getFirstFolder(c);
+      if (!folder || !folder.id) return { error: 'no-folder' };
+      const safe = sanitizeName(title) || normFeed(feedUrl).slice(0, 64);
+      const path = folder.fullPath
+        ? String(folder.fullPath).replace(/[\\/]+$/, '') + '/' + safe
+        : '';
+      const body = {
+        libraryId: c.libraryId,
+        folderId: folder.id,
+        path: path,
+        media: {
+          metadata: { feedUrl: feedUrl, title: title },
+          autoDownloadEpisodes: true,
+          maxNewEpisodesToDownload: 100,
+          maxEpisodesToKeep: 100,
+        },
+      };
+      const res = await authPost(c, '/api/podcasts', body);
+      const newId = res && res.data && res.data.id ? res.data.id : '';
+      clearCache(); // 新建后让 itemsCache 失效，下次 ensureItems 重拉
+      return { ok: true, created: true, itemId: newId };
+    } catch (e) {
+      return { error: String((e && e.message) || e) };
     }
   });
 
