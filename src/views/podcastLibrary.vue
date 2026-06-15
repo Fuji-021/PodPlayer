@@ -716,6 +716,11 @@ export default {
       this.addError = '';
       try {
         const { podcast } = await subscribeByRssUrl(this.newFeedUrl);
+        // [#12 修] 即时回显到 subscribedMap → 另开的发现页 tab 绿勾立刻亮(不必等切页 loadSubscribedMap 自愈)
+        this.$store.commit('addSubscribedPodcast', {
+          name: podcast.title,
+          feedUrl: podcast.feedUrl,
+        });
         await this.loadPodcasts();
         this.$store.dispatch('showToast', `已添加：${podcast.title}`);
         this.showAddDialog = false;
@@ -757,13 +762,20 @@ export default {
       this.importTotal = 1;
       this.importCurrent = '解析 OPML...';
       try {
-        const { added, failed } = await importOpmlText(
+        const { added, failed, subscribed } = await importOpmlText(
           text,
           (done, total, t) => {
             this.importDone = done;
             this.importTotal = total || 1;
             this.importCurrent = t || '';
           }
+        );
+        // [#12 修] 把导入的订阅即时回显到 subscribedMap(另开的发现页 tab 绿勾立刻亮)
+        (subscribed || []).forEach(s =>
+          this.$store.commit('addSubscribedPodcast', {
+            name: s.title,
+            feedUrl: s.feedUrl,
+          })
         );
         await this.loadPodcasts();
         this.importPhase = 'done';
@@ -791,6 +803,11 @@ export default {
       this.importCurrent = fileName || '';
       try {
         const { podcast } = await importRssText(text, fileName);
+        // [#12 修] 即时回显到 subscribedMap
+        this.$store.commit('addSubscribedPodcast', {
+          name: podcast.title,
+          feedUrl: podcast.feedUrl,
+        });
         await this.loadPodcasts();
         this.importDone = 1;
         this.importPhase = 'done';

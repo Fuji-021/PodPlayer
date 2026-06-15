@@ -930,6 +930,8 @@ export default class {
     for (const [key, value] of Object.entries(player)) {
       this[key] = value;
     }
+    // [#8 repeat 两档] 归一化遗留的列表循环态 'on' → 'off'(已删该档)。直接写私有字段。
+    if (this._repeatMode === 'on') this._repeatMode = 'off';
   }
   _initMediaSession() {
     if ('mediaSession' in navigator) {
@@ -1267,6 +1269,18 @@ export default class {
     }
   }
   seek(time = null, sendMpris = true) {
+    // [seek-no-lazyload 修 #9] 启动后 howler 尚未实例化(只 setup 未 load)时，带参 seek 会静默 no-op
+    //   (后退15/前进30"点了没反应")。与 playOrPause 同款兜底：播客 track 且 howler 缺失 → 主动
+    //   load+autoplay。**不带 startAt** → 保留 episodeProgress 续播位置，不丢进度(本次 seek 增量忽略，
+    //   加载后续 seek 正常)。
+    if (
+      time !== null &&
+      !this._howler &&
+      this._currentTrack?.podcastEpisodeId
+    ) {
+      this._loadCurrentPodcastEpisode(true).catch(() => {});
+      return time;
+    }
     if (isCreateMpris && sendMpris && time) {
       ipcRenderer?.send('seeked', time);
     }
@@ -1401,13 +1415,9 @@ export default class {
   }
 
   switchRepeatMode() {
-    if (this._repeatMode === 'on') {
-      this.repeatMode = 'one';
-    } else if (this._repeatMode === 'one') {
-      this.repeatMode = 'off';
-    } else {
-      this.repeatMode = 'on';
-    }
+    // [#8 repeat 两档] 播客随听随弃，列表循环('on')无意义 → 只在 off↔one(单集循环)间切。
+    //   (图标模板天然正确：判 'one'→repeat-1 高亮、否则灰 repeat；'on' 不再产生。)
+    this.repeatMode = this._repeatMode === 'one' ? 'off' : 'one';
     if (isCreateMpris) {
       ipcRenderer?.send('switchRepeatMode', this.repeatMode);
     }

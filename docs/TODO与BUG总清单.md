@@ -24,10 +24,10 @@
 ### P2
 - ✅ **统计「最近一周」>「全部」(如岩中花述)**（2026-06-15 修·分支 `feature/perf` round2）— 根因坐实:`resetEpisodeListening`(重播已听完单集)清 `episodeListenStats.bits/listenedSec` 却不动 `listenDaily` → 听完重听后「全部」(读 listenedSec)被清零重数、「周」(读 listenDaily.listenedSec)仍含旧值 → 周>全部。**修**(终极):「全部」= `max(Σ episodeListenStats.totalPlayContentSec, Σ listenDaily.contentSec 全天)`,「周」= listenDaily 7 天。因周⊆全天⊆全部 → **数学保证 全部≥周**(与两表是否一致无关),取 max 还兜住两表漂移。**已用用户真实备份模拟验证:旧口径 2 档违例→纯 contentSec 1 档→本方案 0 档**;另确认 totalPlayContentSec 历史一直在填、数据未丢。**待真机最终确认**。[listening.js getListenStatsByPodcast]
 - 🔴 《思文，败类》首页封面 ≠ 详情页封面 — 疑 name≠RSS title→subscribedMap 查不到 feedUrl→回落旧 logo。
-- 🔴 头像二级菜单弹出锁全局滚动 — ContextMenu enableScrolling:false→#main overflow:hidden。
+- ✅ 头像二级菜单弹出锁全局滚动（2026-06-15 修·`fix/buglist`）— `ContextMenu.openMenu` 加 `lockScrolling=true` 默认开关、头像菜单传 false 不锁；其余右键菜单默认锁、行为不变。**待真机**。
 - 🔴 单集列表全量渲染无虚拟化(与机核同源,大档建数百行 DOM)。
 - 🔴 「为你推荐」reroll 不换/池只剩 3 — reshuffle 没排除上一批 forYou。
-- 🔴 单集详情「加入播放列表」按钮加入后图标过大 + 不能再点移出。[B67-BUG-5]
+- ✅ 单集详情「加入播放列表」按钮加入后图标过大 + 不能再点移出 [B67-BUG-5]（2026-06-15 修·`fix/buglist`）— 改 `isQueued`(真实队列成员)驱动的持久 toggle + `check-circle` 图标(有边界);点击可移出。**待真机**。
 - 🔴 last.fm 子窗 nodeIntegration+webSecurity:false 历史高危(入口已删,建议收敛/移除)。
 
 ### P3（低/边缘/记录）
@@ -98,9 +98,9 @@
 - 🟠 **#4** 二级页 `discoverList`「换一批」无 shuffle(hot/new/treasure 确定性返回)→ treasure 点了完全不变；hot/new 叫"换一批"语义不当(应"刷新")。`discover.js getSectionFull`。
 - 🟠 **#7** 本地"隐藏/显示播放器"快捷键(minimize，默认 Ctrl+M)UI 可设可存但**不生效**(`menu.js` 没注册 minimize accelerator，只全局列那格真生效)。`menu.js`/`settings.vue`。
 - 🟡 **#6** treasure 切片口径 `splitSections`(先 slice 再 filter) vs `reshuffleSection`(先 excludeSubbed 再 slice)不一致 → 订阅越多偏差越大。`discover.js`。
-- 🟡 **#8**（已定方案·删列表循环）repeat 改 **off↔one 两档**(播客随听随弃，列表循环无意义)：`Player.js switchRepeatMode` 改 `off↔one`、`Player.vue` 图标去中间 on 态、启动把遗留 `'on'` 归一化 `'off'`。**方案明确、可直接实现**。
-- 🟡 **#9** 未加载 howler 时按 后退15/前进30 静默无反应(playOrPause 有懒加载兜底、seek 没)。`Player.vue seekBackward15/Forward30`。
-- 🟡 **#12** 粘贴RSS/OPML/单档导入订阅后未 `commit('addSubscribedPodcast')`(只 loadPodcasts 刷本页)→ 另一标签已开的发现页绿勾不即时(切页 loadSubscribedMap 自愈)。`podcastLibrary.vue`。
+- ✅ **#8** repeat 改 **off↔one 两档**（2026-06-15 修·`fix/buglist`）— `switchRepeatMode` 改 off↔one、启动归一化遗留 `'on'→'off'`;图标模板天然正确无需改;核验确认无音乐回归('on' 分支退化为无害死代码)。**待真机**。
+- ✅ **#9** 未加载 howler 时 后退15/前进30 静默无反应（2026-06-15 修·`fix/buglist`）— `Player.js seek` 加 playOrPause 同款兜底(load+autoplay)，**不带 startAt → 保留续播位**。**待真机**。
+- ✅ **#12** 导入订阅后发现页绿勾不即时（2026-06-15 修·`fix/buglist`）— 粘贴RSS/OPML/单档三处订阅成功补 `commit('addSubscribedPodcast')`(键=title、值=feedUrl);`importOpmlText` 多返回 `subscribed[]` 供逐条 commit。**待真机**。
 - 🟡 **#15** 快捷键无冲突检测 + 保存恒提示成功(`globalShortcut.register` 对占用/非法键静默 false)。`settings.vue saveShortcut`。
 - 🟡 **#16** NAS「测试连接」在总开关关闭时恒报失败(`probe` 开头 `if(!enabled) return false`)、与可达无关。`nasSource testCurrentNas`/`nasBridge probe`。
 

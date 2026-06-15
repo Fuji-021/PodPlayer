@@ -45,11 +45,11 @@
           </button>
           <button
             class="mini-btn"
-            :class="{ queued: justQueued }"
-            :title="justQueued ? '已加入播放列表' : '加入播放列表'"
+            :class="{ queued: isQueued }"
+            :title="isQueued ? '移出播放列表' : '加入播放列表'"
             @click="onQueue"
           >
-            <svg-icon :icon-class="justQueued ? 'check' : 'layer-plus'" />
+            <svg-icon :icon-class="isQueued ? 'check-circle' : 'layer-plus'" />
           </button>
           <!-- [B-31] 下载按钮：未下载 → download；下载中 → 进度%；已下载 → check-circle（点击删除） -->
           <button
@@ -144,8 +144,6 @@ export default {
       listenStats: null,
       // [B-31] 删除下载确认弹窗
       showDeleteDlConfirm: false,
-      // [B-63] 加入播放列表后的短暂高亮反馈
-      justQueued: false,
       // [B-83] 小宇宙截断单集正在后台抓完整文稿时，notes 区显示加载占位(不闪截断版)
       enriching: false,
     };
@@ -270,6 +268,12 @@ export default {
         [];
       return ids.includes(this.episode.id);
     },
+    // [B67-BUG-5 修] 是否已在播放列表：以真实队列成员为持久态(取代瞬时 justQueued)，驱动 toggle 与图标。
+    isQueued() {
+      if (!this.episode) return false;
+      const q = this.$store.state.podcastQueue || [];
+      return q.some(x => x && x.id === this.episode.id);
+    },
   },
   watch: {
     episodeId: {
@@ -287,10 +291,6 @@ export default {
           .catch(() => {});
       }
     },
-  },
-  beforeDestroy() {
-    // [D] 清理 justQueued 反馈定时器，避免离开页面后在已销毁实例上回调
-    clearTimeout(this._queuedTimer);
   },
   methods: {
     async load() {
@@ -480,16 +480,17 @@ export default {
     },
     onQueue() {
       if (!this.episode) return;
+      // [B67-BUG-5 修] toggle：已在队列 → 移出；否则加入。状态由 isQueued(真实队列成员)持久驱动，
+      //   加入高亮跟随队列关系、不再 1.4s 自动消失，且可再点移出。
+      if (this.isQueued) {
+        this.$store.commit('removeFromQueue', this.episode.id);
+        return;
+      }
+      // toast 由 enqueueEpisode action 内部弹出
       this.$store.dispatch('enqueueEpisode', {
         ...this.episode,
         podcastTitle: this.podcast ? this.podcast.title : '',
       });
-      // [B-63] 加入反馈：toast 由 enqueueEpisode action 内部弹出，这里只做按钮短暂高亮变色
-      this.justQueued = true;
-      clearTimeout(this._queuedTimer);
-      this._queuedTimer = setTimeout(() => {
-        this.justQueued = false;
-      }, 1400);
     },
     // [B-31] 下载按钮三态：未下载 → 启动；下载中 → 取消；已下载 → 弹删除确认
     onDownload() {
@@ -704,7 +705,7 @@ export default {
     opacity: 1;
     color: #e74c3c;
   }
-  // [B-63] 加入播放列表瞬时反馈：绿色高亮（1.4s 后复原）
+  // [B67-BUG-5] 已在播放列表：绿色高亮（持久跟随队列成员关系，点击可移出）
   &.queued {
     opacity: 1;
     color: #fff;

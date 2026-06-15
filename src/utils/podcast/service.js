@@ -108,6 +108,8 @@ export async function importOpmlText(opmlText, onProgress) {
   });
   const added = [];
   const failed = [];
+  // [#12 修] 订阅成功的 {title, feedUrl}，供调用方 commit 到 subscribedMap(发现页绿勾即时回显)
+  const subscribed = [];
   const total = entries.length;
   let done = 0;
   // [审P2-9] 原为纯串行 for-await：单档 20s 超时会拖死整队(2000 档约 11h 不可用)。
@@ -118,6 +120,7 @@ export async function importOpmlText(opmlText, onProgress) {
     try {
       const { podcast } = await subscribeByRssUrl(e.xmlUrl);
       added.push(podcast.title || podcast.feedUrl);
+      subscribed.push({ title: podcast.title, feedUrl: podcast.feedUrl });
     } catch (err) {
       failed.push({
         url: e.xmlUrl,
@@ -133,7 +136,7 @@ export async function importOpmlText(opmlText, onProgress) {
   if (typeof onProgress === 'function') {
     onProgress(total, total, '');
   }
-  return { added, failed };
+  return { added, failed, subscribed };
 }
 
 /**

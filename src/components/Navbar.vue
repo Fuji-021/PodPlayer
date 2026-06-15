@@ -313,7 +313,8 @@ export default {
       });
     },
     showUserProfileMenu(e) {
-      this.$refs.userProfileMenu.openMenu(e);
+      // [avatar-scroll-lock 修] 头像下拉菜单不锁全局滚动(传 lockScrolling=false)
+      this.$refs.userProfileMenu.openMenu(e, false);
     },
     // [NAS] 点状态图标 → 立即重新探测连接（手动重连）；结果反映到图标 + toast。
     //   文案带当前档名（随用户改名变）：「托尼的 NAS 已连接」/「…连不上，已用在线音源」。

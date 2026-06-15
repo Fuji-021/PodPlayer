@@ -49,7 +49,9 @@ export default {
       this.$store.commit('enableScrolling', true);
     },
 
-    openMenu(e) {
+    // [avatar-scroll-lock 修] lockScrolling 默认 true=锁全局滚动(右键单集/歌单/专辑等菜单的正确行为)；
+    //   头像下拉菜单(导航栏左键)传 false → 弹出时不锁页面滚动。关菜单时 closeMenu 恒恢复可滚、幂等无害。
+    openMenu(e, lockScrolling = true) {
       this.showMenu = true;
       this.$nextTick(
         function () {
@@ -58,7 +60,9 @@ export default {
         }.bind(this)
       );
       e.preventDefault();
-      this.$store.commit('enableScrolling', false);
+      if (lockScrolling) {
+        this.$store.commit('enableScrolling', false);
+      }
     },
   },
 };
