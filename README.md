@@ -64,8 +64,7 @@ yarn electron:build-linux  # Linux
 
 ## 🙏 致谢
 
-- 基于 [qier222/YesPlayMusic](https://github.com/qier222/YesPlayMusic) 改造（高颜值的第三方网易云播放器）。
-- 网易云音乐 API 来自 [Binaryify/NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi)。
+- 基于 [qier222/YesPlayMusic](https://github.com/qier222/YesPlayMusic)。
 - NAS 就近音源对接 [Audiobookshelf](https://www.audiobookshelf.org/)。
 
 ## 📜 许可
