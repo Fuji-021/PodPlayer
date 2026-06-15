@@ -18,6 +18,17 @@ let lastProbe = 0;
 let probing = null; // 进行中的探测(去重)
 let heartbeat = null;
 
+// [审P3-4] 渲染端卸载/重载(reload)时清掉心跳 interval —— 原仅在停用时清、无卸载清理，
+//   边缘场景(window.location.reload 等)可能叠加游离 interval。危害极小，顺手堵上。
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('beforeunload', () => {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+  });
+}
+
 export function isNasEnabled() {
   return enabled && !!ipcRenderer;
 }

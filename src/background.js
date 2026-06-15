@@ -319,6 +319,11 @@ class Background {
     // hide menu bar on Microsoft Windows and Linux
     this.window.setMenuBarVisibility(false);
 
+    // [审P2-4] 还原上次"最大化"状态：show:false 下先 maximize，再于 ready-to-show 一次性显示，无闪烁。
+    if (this.store.get('window.isMaximized')) {
+      this.window.maximize();
+    }
+
     if (process.env.WEBPACK_DEV_SERVER_URL) {
       // Load the url of the dev server if in development mode
       this.window.loadURL(
@@ -368,11 +373,27 @@ class Background {
     });
   }
 
+  // [审P2-4] 统一持久化窗口状态：最大化时不把"最大化 bounds"写进还原尺寸(否则下次还原=全屏)，
+  //   只记 isMaximized、保留上次正常 bounds；非最大化时存真实 bounds + isMaximized:false。
+  //   还原在 createWindow 末尾按 isMaximized 调 maximize()。
+  saveWindowState() {
+    if (!this.window) return;
+    if (this.window.isMaximized()) {
+      const prev = this.store.get('window') || {};
+      this.store.set('window', { ...prev, isMaximized: true });
+    } else {
+      this.store.set('window', {
+        ...this.window.getBounds(),
+        isMaximized: false,
+      });
+    }
+  }
+
   handleWindowEvents() {
     this.window.once('ready-to-show', () => {
       log('window ready-to-show event');
       this.window.show();
-      this.store.set('window', this.window.getBounds());
+      this.saveWindowState();
     });
 
     this.window.on('close', e => {
@@ -401,18 +422,20 @@ class Background {
     });
 
     this.window.on('resized', () => {
-      this.store.set('window', this.window.getBounds());
+      this.saveWindowState();
     });
 
     this.window.on('moved', () => {
-      this.store.set('window', this.window.getBounds());
+      this.saveWindowState();
     });
 
     this.window.on('maximize', () => {
+      this.saveWindowState(); // [审P2-4] 持久化 isMaximized
       this.window.webContents.send('isMaximized', true);
     });
 
     this.window.on('unmaximize', () => {
+      this.saveWindowState();
       this.window.webContents.send('isMaximized', false);
     });
 

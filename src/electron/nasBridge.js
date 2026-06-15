@@ -116,40 +116,83 @@ function authGet(c, path, timeout) {
   });
 }
 
+// [审P2-11] 在途请求(冷缓存时三入口并发去重)
+let itemsInflight = null;
+const epsInflight = {};
+
 async function ensureItems(c) {
   const now = Date.now();
   if (itemsCache && now - itemsCache.ts < ITEMS_TTL) return itemsCache.map;
-  const res = await authGet(
-    c,
-    '/api/libraries/' + c.libraryId + '/items?limit=500'
-  );
-  const results = (res.data && res.data.results) || [];
-  const map = {};
-  results.forEach(it => {
-    const meta = (it && it.media && it.media.metadata) || {};
-    if (meta.feedUrl && it.id) map[normFeed(meta.feedUrl)] = it.id;
-  });
-  itemsCache = { ts: now, map };
-  return map;
+  // [审P2-11] 在途去重：冷缓存时 resolve/warm/podcastSet 三入口并发 → 复用同一个在途请求，不发 3 份重复。
+  if (itemsInflight) return itemsInflight;
+  itemsInflight = (async () => {
+    const map = {};
+    const LIMIT = 500;
+    let total = Infinity;
+    // [审P2-11] 分页拉全：原 limit=500 硬上限会让库超 500 档静默漏档。按 total 翻页(上限 40 页=2 万档，防失控)。
+    for (let page = 0; page * LIMIT < total && page < 40; page++) {
+      const res = await authGet(
+        c,
+        '/api/libraries/' +
+          c.libraryId +
+          '/items?limit=' +
+          LIMIT +
+          '&page=' +
+          page
+      );
+      const data = (res && res.data) || {};
+      const results = data.results || [];
+      // [审P2-11 修] total 兜底：API 未给 total 时，满页(==LIMIT)→设 Infinity 继续翻(靠下方短页 break 收尾)，
+      //   短页→已到底(=已累计)。否则"满页且无 total"会被误判成 total=本页数而停在首页、漏后续档。
+      total =
+        typeof data.total === 'number'
+          ? data.total
+          : results.length < LIMIT
+          ? page * LIMIT + results.length
+          : Infinity;
+      results.forEach(it => {
+        const meta = (it && it.media && it.media.metadata) || {};
+        if (meta.feedUrl && it.id) map[normFeed(meta.feedUrl)] = it.id;
+      });
+      if (results.length < LIMIT) break;
+    }
+    itemsCache = { ts: Date.now(), map };
+    return map;
+  })();
+  try {
+    return await itemsInflight;
+  } finally {
+    itemsInflight = null;
+  }
 }
 
 async function ensureEps(c, itemId) {
   const now = Date.now();
   const cached = epsCache[itemId];
   if (cached && now - cached.ts < EPS_TTL) return cached;
-  const res = await authGet(c, '/api/items/' + itemId + '?expanded=1');
-  const eps = (res.data && res.data.media && res.data.media.episodes) || [];
-  const byGuid = {};
-  const byUrl = {};
-  eps.forEach(e => {
-    const ino = e && e.audioFile && e.audioFile.ino;
-    if (!ino) return;
-    if (e.guid) byGuid[String(e.guid)] = ino;
-    if (e.enclosure && e.enclosure.url) byUrl[normFeed(e.enclosure.url)] = ino;
-  });
-  const entry = { ts: now, byGuid, byUrl };
-  epsCache[itemId] = entry;
-  return entry;
+  // [审P2-11] 同档在途去重：避免对同一 itemId 并发发多份 expanded 请求。
+  if (epsInflight[itemId]) return epsInflight[itemId];
+  epsInflight[itemId] = (async () => {
+    const res = await authGet(c, '/api/items/' + itemId + '?expanded=1');
+    const eps = (res.data && res.data.media && res.data.media.episodes) || [];
+    const byGuid = {};
+    const byUrl = {};
+    eps.forEach(e => {
+      const ino = e && e.audioFile && e.audioFile.ino;
+      if (!ino) return;
+      if (e.guid) byGuid[String(e.guid)] = ino;
+      if (e.enclosure && e.enclosure.url)
+        byUrl[normFeed(e.enclosure.url)] = ino;
+    });
+    const entry = { ts: Date.now(), byGuid, byUrl };
+    epsCache[itemId] = entry;
+    return entry;
+  })();
+  try {
+    return await epsInflight[itemId];
+  } finally {
+    delete epsInflight[itemId];
+  }
 }
 
 function streamUrl(c, itemId, ino) {

@@ -20,6 +20,14 @@ function longerText(a, b) {
   return sa.length >= sb.length ? sa : sb;
 }
 
+// [审P2-7] 防超大 feed 失控：item 数量安全上限(纯防失控，正常/大档机核都在此之下，不丢真实单集) +
+//   单集 description 长度上限 ~100KB(挡内嵌数 MB base64 灌爆 IndexedDB / v-html 巨型 DOM；真实 shownotes 远小于此)。
+const MAX_ITEMS = 50000;
+const MAX_DESC_LEN = 100000;
+function capLen(s) {
+  return s && s.length > MAX_DESC_LEN ? s.slice(0, MAX_DESC_LEN) : s;
+}
+
 // 取带命名空间的标签，DOMParser 解析 RSS 时这些 itunes:* 标签
 // localName 直接是 'image' / 'duration'，我们手动按 localName 匹配。
 function textNS(el, localName) {
@@ -79,7 +87,10 @@ export function parseRss(xmlText, feedUrl) {
     updatedAt: Date.now(),
   };
 
-  const items = Array.from(channel.getElementsByTagName('item'));
+  const allItems = Array.from(channel.getElementsByTagName('item'));
+  // [审P2-7] item 数量安全上限(RSS 通常新集在前，slice 保留最新)；正常档不受影响。
+  const items =
+    allItems.length > MAX_ITEMS ? allItems.slice(0, MAX_ITEMS) : allItems;
   const episodes = items
     .map(item => {
       const enclosure = item.getElementsByTagName('enclosure')[0];
@@ -106,9 +117,8 @@ export function parseRss(xmlText, feedUrl) {
         // [B-82] 完整 shownotes 优先取 <content:encoded>(localName=encoded)，
         //   回退 <description>。小宇宙等源的 <description> 是带"去小宇宙看完整"尾巴的
         //   截断版，完整富文本在 content:encoded；取更长的一份避免简介不完整。
-        description: longerText(
-          textNS(item, 'encoded'),
-          text(item, 'description')
+        description: capLen(
+          longerText(textNS(item, 'encoded'), text(item, 'description'))
         ),
         coverUrl: epCover,
         link: text(item, 'link'),
@@ -153,10 +163,14 @@ export function parseOpml(xmlText) {
  */
 function parseOpmlLenient(xmlText) {
   const results = [];
+  // [审P2-8] 超大输入只扫前 8MB：宽容正则的 [^>]* 在数十 MB 畸形 OPML(大段无 '>')上会回溯 O(n·m)、卡 UI 数秒。
+  //   8MB 远超任何真实 OPML(通常 KB~几百 KB)，截断仅影响"畸形且超大"的抢救路径，正常订阅不受影响。
+  const MAX_SCAN = 8 * 1024 * 1024;
+  const scan = xmlText.length > MAX_SCAN ? xmlText.slice(0, MAX_SCAN) : xmlText;
   // 抓 <outline ... xmlUrl="..." ...> 整个开标签
   const re = /<outline\b[^>]*\bxmlUrl\s*=\s*(["'])([^"']+)\1[^>]*>/gi;
   let m;
-  while ((m = re.exec(xmlText)) !== null) {
+  while ((m = re.exec(scan)) !== null) {
     const tag = m[0];
     const url = cleanUrl(m[2]);
     if (!url) continue;
