@@ -89,18 +89,27 @@ export async function importOpmlText(opmlText, onProgress) {
   const added = [];
   const failed = [];
   const total = entries.length;
-  for (let i = 0; i < total; i++) {
-    const e = entries[i];
-    if (typeof onProgress === 'function') {
-      onProgress(i, total, e.title || e.xmlUrl);
-    }
+  let done = 0;
+  // [审P2-9] 原为纯串行 for-await：单档 20s 超时会拖死整队(2000 档约 11h 不可用)。
+  //   改并发 runLimited(≤5，与 refreshAllSubscriptions 同口径，RSS 站点对突发并发敏感故限流)。
+  //   进度用完成计数(并发下按完成顺序回报)。source 保持默认 'manual'——按本文件设计(见 subscribeByRssUrl
+  //   注释)manual 即涵盖"粘贴RSS/OPML/文件"，不引入新值以免破坏按 source 的过滤。
+  await runLimited(entries, 5, async e => {
     try {
       const { podcast } = await subscribeByRssUrl(e.xmlUrl);
       added.push(podcast.title || podcast.feedUrl);
     } catch (err) {
-      failed.push({ url: e.xmlUrl, error: String(err?.message || err) });
+      failed.push({
+        url: e.xmlUrl,
+        error: String((err && err.message) || err),
+      });
+    } finally {
+      done += 1;
+      if (typeof onProgress === 'function') {
+        onProgress(done, total, e.title || e.xmlUrl);
+      }
     }
-  }
+  });
   if (typeof onProgress === 'function') {
     onProgress(total, total, '');
   }
