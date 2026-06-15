@@ -145,10 +145,17 @@ export async function getPodcastListenSummary(podcastId) {
     totalCount: 0,
   };
   if (!podcastId) return empty;
-  const eps = await db.episodes.where('podcastId').equals(podcastId).toArray();
-  if (!eps.length) return empty;
-  const ids = eps.map(e => e.id);
-  const stats = await db.episodeListenStats.bulkGet(ids);
+  // [perf·数据层整档重复读] 原本整档 toArray episodes(每行含 description 重文本)只为拿 id 列表+集数。
+  //   改为：① totalCount 用 index count(不反序列化行)；② 统计行用 episodeListenStats 主键前缀
+  //   `${podcastId}::` 直接取该档"已听过"的统计行(feedUrl 不含 '::'，加 '::' 前缀安全；只读已听集，
+  //   免读未听集与 episodes 大文本)。已订阅档 episodes 不会被单独删除→stats 行 ⊆ episodes，求和集合一致。
+  const [totalCount, stats] = await Promise.all([
+    db.episodes.where('podcastId').equals(podcastId).count(),
+    db.episodeListenStats
+      .where('id')
+      .startsWith(podcastId + '::')
+      .toArray(),
+  ]);
   let wallSec = 0;
   let contentSec = 0;
   let finishedCount = 0;
@@ -158,7 +165,7 @@ export async function getPodcastListenSummary(podcastId) {
     contentSec += s.totalPlayContentSec || 0;
     if (s.completed) finishedCount += 1;
   }
-  return { wallSec, contentSec, finishedCount, totalCount: ids.length };
+  return { wallSec, contentSec, finishedCount, totalCount };
 }
 
 /**

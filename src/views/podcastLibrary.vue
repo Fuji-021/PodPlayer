@@ -281,11 +281,19 @@ import { ensureTinyCover } from '@/utils/podcast/coverHalo';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 // [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
-async function getLatestEpisodeTime(podcastId) {
-  const eps = await getEpisodesByPodcast(podcastId);
-  if (!eps.length) return 0;
+// [perf·数据层整档重复读] 优先读 podcast.latestPubTime 冗余字段(upsertEpisodes 维护)，
+//   避免每次进库页对每档整档 toArray 只为取 eps[0]。老数据无该字段 → 回退整档读一次并回写自愈。
+async function getLatestEpisodeTime(podcast) {
+  if (podcast && typeof podcast.latestPubTime === 'number') {
+    return podcast.latestPubTime;
+  }
+  const pid = podcast && podcast.id;
+  if (!pid) return 0;
+  const eps = await getEpisodesByPodcast(pid);
   // getEpisodesByPodcast 已经 reverse 按 pubTime 排序，第一条就是最新
-  return eps[0].pubTime || 0;
+  const t = eps.length ? eps[0].pubTime || 0 : 0;
+  updatePodcast(pid, { latestPubTime: t }).catch(() => {}); // 回写自愈，下次走快路
+  return t;
 }
 
 export default {
@@ -529,7 +537,7 @@ export default {
       list = list || [];
       // [A-28] 每档"最新一集"时间(排序) [B-30] 累计收听摘要 [B-47] 最近收听映射
       const [latest, summaries, lastMap] = await Promise.all([
-        Promise.all(list.map(p => getLatestEpisodeTime(p.id).catch(() => 0))),
+        Promise.all(list.map(p => getLatestEpisodeTime(p).catch(() => 0))),
         Promise.all(
           list.map(p => getPodcastListenSummary(p.id).catch(() => null))
         ),

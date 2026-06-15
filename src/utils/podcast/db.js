@@ -166,11 +166,38 @@ export async function upsertEpisodes(episodes) {
         ? { ...e, description: oldDesc, xyzFull: old.xyzFull }
         : e;
     });
-    return await db.episodes.bulkPut(merged);
+    const res = await db.episodes.bulkPut(merged);
+    // [perf·数据层整档重复读] 顺手维护各档 latestPubTime 冗余字段：
+    //   "我的订阅"页排序/显示"最新一集时间"原本对每档整档 toArray 取 eps[0]，
+    //   现在订阅/刷新写集时记录最大 pubTime，库页直接读 podcasts.latestPubTime 单值。
+    await updateLatestPubTime(merged);
+    return res;
   } catch (e) {
     // [审P2-6] 内部容错(防御纵深)：DB 读写失败记录后静默、不向上抛，避免新增不包 catch 的调用方回归白屏。
     console.error('[db] upsertEpisodes failed:', (e && e.message) || e);
     return undefined;
+  }
+}
+
+// [perf·数据层整档重复读] 维护 podcasts.latestPubTime（各档最新一集 pubTime）。
+//   非索引字段，Dexie 可直接存，无需升 schema 版本。失败不影响 upsert 主流程
+//   （getLatestEpisodeTime 对缺该字段的老数据有整档读回退 + 回写自愈）。
+async function updateLatestPubTime(episodes) {
+  try {
+    const maxByPod = new Map();
+    for (const e of episodes) {
+      if (!e || !e.podcastId) continue;
+      const t = e.pubTime || 0;
+      if (t > (maxByPod.get(e.podcastId) || 0)) maxByPod.set(e.podcastId, t);
+    }
+    for (const [pid, t] of maxByPod) {
+      const pod = await db.podcasts.get(pid);
+      if (pod && t > (pod.latestPubTime || 0)) {
+        await db.podcasts.update(pid, { latestPubTime: t });
+      }
+    }
+  } catch (e) {
+    // 非关键：忽略
   }
 }
 
