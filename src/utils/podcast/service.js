@@ -71,7 +71,16 @@ export async function subscribeByRssUrl(feedUrl, source = 'manual') {
   // [NAS 托管·P0] 订阅成功后旁路托管到 NAS：fire-and-forget，不 await、失败绝不影响订阅返回与播放。
   //   总开关关 / 无 NAS / NAS 不可达 → 内部静默 skip。OPML 批量导入每档各自触发(各自幂等、失败静默)。
   if (nasHandoffOn()) {
-    handoffToNas(url, merged.title).catch(() => {});
+    handoffToNas(url, merged.title)
+      .then(r => {
+        // [NAS 托管·实测期可见] 仅在真发生托管动作或出错时打日志，供真机 ABS 验收在控制台看
+        //   created/updated/error；正式使用无噪声、不阻塞、不影响订阅与播放。
+        if (r && (r.error || r.created || r.updated)) {
+          // eslint-disable-next-line no-console
+          console.log('[nas-handoff]', url, r);
+        }
+      })
+      .catch(() => {});
   }
   return { podcast: merged, episodes };
 }
