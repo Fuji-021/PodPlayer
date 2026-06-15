@@ -299,7 +299,7 @@ class Background {
             x > bounds.x &&
             x < bounds.x + bounds.width &&
             y > bounds.y &&
-            y < bounds.y - bounds.height
+            y < bounds.y + bounds.height // [审P3-2] 原为 -height(恒 false)→副屏窗口重启被拉回主屏；应为 +height
           ) {
             // 检测到APP窗口当前处于一个可用的屏幕里，break
             isResetWindiw = false;

@@ -11,7 +11,9 @@
 //   (该机制已在播放栏标记主色长期生产使用，无需 express 代理)。取色仅切歌时算一次并缓存。
 import * as Vibrant from 'node-vibrant/dist/vibrant.worker.min.js';
 
+// [审P3-3] 同 coverColor：模块级 Map 加 LRU 上限，防连播单调增长。
 const cache = new Map();
+const CACHE_MAX = 100;
 
 function rgbToHsl(r, g, b) {
   r /= 255;
@@ -54,7 +56,12 @@ function popOf(sw) {
 // 返回 { hsl: [[h,s,l],[h,s,l],[h,s,l]], dark: bool } 或 null。
 export async function getCoverPalette(coverUrl) {
   if (!coverUrl) return null;
-  if (cache.has(coverUrl)) return cache.get(coverUrl);
+  if (cache.has(coverUrl)) {
+    const v = cache.get(coverUrl);
+    cache.delete(coverUrl);
+    cache.set(coverUrl, v); // LRU：命中提到最新
+    return v;
+  }
   try {
     const palette = await Vibrant.from(coverUrl, {
       colorCount: 32,
@@ -108,6 +115,7 @@ export async function getCoverPalette(coverUrl) {
 
     const result = { hsl, dark };
     cache.set(coverUrl, result);
+    while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
     return result;
   } catch (e) {
     return null;

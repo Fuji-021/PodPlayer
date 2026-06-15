@@ -15,6 +15,15 @@ import '@/assets/css/nprogress.css';
 import PodImage from '@/components/PodImage.vue';
 Vue.component('PodImage', PodImage);
 
+// [审P1-2] 渲染端全局兜底：未处理的 Promise 拒绝集中记录(仍 console.error 可见、保留 reason 栈)并
+//   preventDefault，避免控制台被刷爆 + 某些配置下被当致命错误。首要修复是给高频写路径补 .catch
+//   (见 Player.js 每秒 saveEpisodeProgress)，这里兜底其余意外 rejection。
+window.addEventListener('unhandledrejection', e => {
+  // eslint-disable-next-line no-console
+  console.error('[unhandledrejection]', (e && e.reason) || e);
+  if (e && typeof e.preventDefault === 'function') e.preventDefault();
+});
+
 // [事故加固] resetApp() 会 deleteDatabase 清空全部本地数据(订阅/进度/统计/收藏)。
 //   2026-06-12 疑似被误触 → 不可恢复的清库。改为：① 必须显式 confirm；② 不再在
 //   console 显眼广告它(去掉吸引误触的彩色提示)。仅作最后的人工自救手段保留。

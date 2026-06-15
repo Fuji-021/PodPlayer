@@ -150,20 +150,28 @@ function isTruncatedDesc(s) {
 //   简介覆盖成截断版(本 bug 的传播链就在这条全量覆盖上)。
 export async function upsertEpisodes(episodes) {
   if (!episodes?.length) return Promise.resolve();
-  const existing = await db.episodes.bulkGet(episodes.map(e => e.id));
-  const exMap = new Map();
-  existing.forEach(e => e && exMap.set(e.id, e));
-  const merged = episodes.map(e => {
-    const old = exMap.get(e.id);
-    if (!old) return e;
-    const oldDesc = old.description || '';
-    const newDesc = e.description || '';
-    const downgrade =
-      oldDesc.length > newDesc.length &&
-      (isTruncatedDesc(newDesc) || newDesc.length < oldDesc.length * 0.6);
-    return downgrade ? { ...e, description: oldDesc, xyzFull: old.xyzFull } : e;
-  });
-  return db.episodes.bulkPut(merged);
+  try {
+    const existing = await db.episodes.bulkGet(episodes.map(e => e.id));
+    const exMap = new Map();
+    existing.forEach(e => e && exMap.set(e.id, e));
+    const merged = episodes.map(e => {
+      const old = exMap.get(e.id);
+      if (!old) return e;
+      const oldDesc = old.description || '';
+      const newDesc = e.description || '';
+      const downgrade =
+        oldDesc.length > newDesc.length &&
+        (isTruncatedDesc(newDesc) || newDesc.length < oldDesc.length * 0.6);
+      return downgrade
+        ? { ...e, description: oldDesc, xyzFull: old.xyzFull }
+        : e;
+    });
+    return await db.episodes.bulkPut(merged);
+  } catch (e) {
+    // [审P2-6] 内部容错(防御纵深)：DB 读写失败记录后静默、不向上抛，避免新增不包 catch 的调用方回归白屏。
+    console.error('[db] upsertEpisodes failed:', (e && e.message) || e);
+    return undefined;
+  }
 }
 
 // [B-83] 单集局部更新(补全 shownotes 后写回 description + xyzFull 标记)。

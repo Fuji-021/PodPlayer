@@ -246,7 +246,9 @@ export default class {
       // [播客改造 bug] 拖动进度条时立即保存到 episodeProgress
       const t = this._currentTrack;
       if (t && t.podcastEpisodeId && value > 0) {
-        saveEpisodeProgress(t.podcastEpisodeId, Math.floor(value));
+        saveEpisodeProgress(t.podcastEpisodeId, Math.floor(value)).catch(
+          () => {}
+        ); // [审P1-2] 拖动 seek 写进度也补 catch(防御纵深)
       }
       if (isCreateMpris) {
         ipcRenderer?.send('seeked', value);
@@ -336,7 +338,12 @@ export default class {
         typeof this._progress === 'number' &&
         this._progress > 0
       ) {
-        saveEpisodeProgress(t.podcastEpisodeId, Math.floor(this._progress));
+        // [审P1-2] 补 .catch：IndexedDB 异常态(锁争用/损坏/配额)下每秒这条若裸跑会一秒一条未捕获
+        //   rejection 刷爆控制台、落在数据事故同故障域。失败静默(下一秒会再写)。
+        saveEpisodeProgress(
+          t.podcastEpisodeId,
+          Math.floor(this._progress)
+        ).catch(() => {});
 
         // [播客改造] 真实收听统计：每秒 tick
         if (this._playing) {
@@ -514,6 +521,17 @@ export default class {
       format: ['mp3', 'flac', 'm4a', 'aac', 'mp4'],
       onend: () => {
         this._nextTrackCallback();
+      },
+      // [审P3-5] 加载成功后「播放期」失败(body 损坏/中途断流/decode 失败)此前无人接 → 不报错不跳集、静默卡住。
+      //   补兜底：NAS 源 → 切 CDN 续播；否则提示并跳下一集(与 loaderror 非可恢复分支同口径)。
+      onplayerror: (_, err) => {
+        console.error('[player] playerror', err);
+        if (this._nasSourceActive) {
+          this._failoverNasToCdn();
+          return;
+        }
+        store.dispatch('showToast', '播放出错，已跳到下一集');
+        this._playNextTrack(this._isPersonalFM);
       },
     });
     // [播客改造] 新建 howler 实例后立即应用当前倍速，避免换曲后被重置为 1.0
@@ -942,7 +960,10 @@ export default class {
       lyrics: lyricContent.lrc.lyric,
     });
 
-    ipcRenderer.on('saveLyricFinished', () => {
+    // [审P2-5] 原 .on 每次切歌(有歌词+OSDLyrics)注册一个不移除的监听 → 累积 IPC 放大 + MaxListeners 警告。
+    //   改 once(收到即自动移除) + 先 removeAllListeners 清掉历史残留，保证任意时刻至多一个监听。
+    ipcRenderer.removeAllListeners('saveLyricFinished');
+    ipcRenderer.once('saveLyricFinished', () => {
       ipcRenderer?.send('metadata', metadata);
     });
   }
@@ -1386,7 +1407,7 @@ export default class {
     if (oldTrack && oldTrack.podcastEpisodeId && this._howler) {
       const curPos = Math.floor(this._howler.seek() || 0);
       if (curPos > 0) {
-        saveEpisodeProgress(oldTrack.podcastEpisodeId, curPos);
+        saveEpisodeProgress(oldTrack.podcastEpisodeId, curPos).catch(() => {}); // [审P1-2] 切歌存旧进度也补 catch
       }
       const dur = (oldTrack.dt || 0) / 1000;
       // 切换到不同 episode 且旧曲没播完 → 入队保留
