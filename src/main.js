@@ -85,8 +85,32 @@ loadAllDownloads()
 
 // [事故加固] 启动数据自动备份调度（30s 后首次 + 每 6 小时；空库自动跳过，
 //   绝不用空数据覆盖历史好备份；落盘 userData\backups\，保留最近 10 份）。
-import { startBackupSchedule } from '@/utils/podcast/backup';
+import {
+  startBackupSchedule,
+  restoreFromLatestBackup,
+  maybeAutoRestore,
+} from '@/utils/podcast/backup';
 startBackupSchedule();
+
+// [事故恢复·自愈] 开机自检：本地订阅为空(或库损坏打不开)但有非空备份 → 弹窗一键恢复。
+//   根治"IndexedDB 损坏/被重置成空库 → 重开订阅全没"的反复事故；新用户(无备份)不触发。
+//   等 openDatabase() 尝试 settle 后再自检，避免与启动期建库竞态(openDatabase 幂等、与 db.js 自动开库共享同一 promise)。
+import { openDatabase } from '@/utils/db';
+openDatabase()
+  .catch(() => {})
+  .then(() => maybeAutoRestore());
+
+// [事故恢复] 手动入口：控制台跑 restoreFromBackup() 从最新备份恢复(自检未触发时的兜底)。
+window.restoreFromBackup = async () => {
+  const r = await restoreFromLatestBackup();
+  // eslint-disable-next-line no-console
+  console.log('[restore] 已恢复:', r);
+  if (typeof window.alert === 'function') {
+    window.alert(`已恢复 ${r.podcasts} 档订阅，即将刷新页面。`);
+  }
+  window.location.reload();
+  return r;
+};
 
 // [事故恢复] 暴露下载重挂（安全/幂等/仅新增）：清库后用 OPML 重订阅，再在控制台
 //   运行一次 relinkDownloads() 即可把磁盘上残留的下载文件挂回、无需重下。

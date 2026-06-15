@@ -76,3 +76,87 @@ export function startBackupSchedule() {
     runBackup().catch(() => {});
   }, 6 * 60 * 60 * 1000);
 }
+
+// [事故恢复] 从最新备份恢复：删掉(可能损坏/空)的当前库 → 重建干净 schema → 回灌备份各表。
+//   补上 app 此前"只写备份、不会读回"的最大缺口。episodeListenStats.bits 在 JSON 里是 {0:..} 普通
+//   对象，需还原成 Uint8Array。单集表(episodes)备份里没存(可由 RSS 重抓)，进入节目时自动补回。
+export async function restoreFromLatestBackup() {
+  if (!ipcRenderer) throw new Error('not-electron');
+  const res = await ipcRenderer.invoke('podcast:backup:readLatest');
+  if (!res || !res.ok || !res.json) {
+    throw new Error((res && res.error) || '没有可用备份');
+  }
+  const data = JSON.parse(res.json);
+  const arr = k => (Array.isArray(data[k]) ? data[k] : []);
+  // bits: JSON 序列化把 Uint8Array 变成了 {0:..,1:..} 普通对象 → 还原回 Uint8Array
+  const stats = arr('episodeListenStats').map(s => {
+    if (s && s.bits && !(s.bits instanceof Uint8Array)) {
+      try {
+        return { ...s, bits: Uint8Array.from(Object.values(s.bits)) };
+      } catch (e) {
+        return { ...s, bits: new Uint8Array(0) };
+      }
+    }
+    return s;
+  });
+  // 删掉当前库(清除损坏/空状态)→ 重建干净 schema → 回灌
+  await db.delete();
+  await db.open();
+  await db.podcasts.bulkPut(arr('podcasts'));
+  await db.favorites.bulkPut(arr('favorites'));
+  await db.episodeProgress.bulkPut(arr('episodeProgress'));
+  await db.episodeListenStats.bulkPut(stats);
+  await db.listenDaily.bulkPut(arr('listenDaily'));
+  await db.episodeDownloads.bulkPut(arr('episodeDownloads'));
+  return {
+    from: res.name,
+    podcasts: arr('podcasts').length,
+    favorites: arr('favorites').length,
+    episodeProgress: arr('episodeProgress').length,
+    episodeListenStats: stats.length,
+    listenDaily: arr('listenDaily').length,
+    episodeDownloads: arr('episodeDownloads').length,
+  };
+}
+
+// [事故恢复·自愈] 开机自检：若订阅库为空(或打不开)、但有非空备份 → 弹窗询问是否一键恢复。
+//   根治"IndexedDB 损坏/被重置成空库 → 重开订阅全没"的反复事故。新用户(无备份)绝不触发、不打扰。
+export async function maybeAutoRestore() {
+  if (!ipcRenderer) return;
+  try {
+    let count = 0;
+    try {
+      count = await db.podcasts.count();
+    } catch (e) {
+      count = 0; // 库打不开也视作空 → 尝试从备份恢复
+    }
+    if (count > 0) return; // 有数据 → 正常，不打扰
+    const res = await ipcRenderer.invoke('podcast:backup:readLatest');
+    if (!res || !res.ok || !res.json) return; // 无备份(新用户) → 不提示
+    let n = 0;
+    try {
+      n = (JSON.parse(res.json).podcasts || []).length;
+    } catch (e) {
+      n = 0;
+    }
+    if (n <= 0) return; // 备份也是空 → 不提示
+    const ok =
+      typeof window.confirm === 'function' &&
+      window.confirm(
+        `检测到本地订阅为空，但发现备份（${res.name}，含 ${n} 档订阅）。\n` +
+          `这通常是数据库损坏或被重置导致。是否从备份恢复？\n` +
+          `（恢复订阅 / 进度 / 统计 / 收藏 / 下载记录；单集会在进入节目时自动重抓）`
+      );
+    if (!ok) return;
+    const r = await restoreFromLatestBackup();
+    // eslint-disable-next-line no-console
+    console.log('[auto-restore] 已从备份恢复:', r);
+    if (typeof window.alert === 'function') {
+      window.alert(`已恢复 ${r.podcasts} 档订阅，即将刷新页面。`);
+    }
+    window.location.reload();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[auto-restore] 失败:', (e && e.message) || e);
+  }
+}

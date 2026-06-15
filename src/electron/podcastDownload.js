@@ -365,4 +365,22 @@ export function registerPodcastDownloadIpc(getWindow) {
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
+
+  // [事故恢复] 读取最新一份备份 JSON(供"从备份恢复"用)。返回最新 *.json 的文件名与内容。
+  ipcMain.handle('podcast:backup:readLatest', async () => {
+    try {
+      const dir = path.join(app.getPath('userData'), 'backups');
+      if (!fs.existsSync(dir)) return { ok: false, error: 'no-backup-dir' };
+      const list = fs
+        .readdirSync(dir)
+        .filter(n => n.endsWith('.json'))
+        .sort();
+      if (!list.length) return { ok: false, error: 'no-backup' };
+      const name = list[list.length - 1];
+      const json = fs.readFileSync(path.join(dir, name), 'utf8');
+      return { ok: true, name, json };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
 }
