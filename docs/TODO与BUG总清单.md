@@ -97,11 +97,11 @@
 ### 🔧 待办（8，本轮未做）
 - 🟠 **#4** 二级页 `discoverList`「换一批」无 shuffle(hot/new/treasure 确定性返回)→ treasure 点了完全不变；hot/new 叫"换一批"语义不当(应"刷新")。`discover.js getSectionFull`。
 - ✅ **#7** 本地"隐藏/显示播放器"快捷键不生效（2026-06-15 修·`fix/buglist`）— `menu.js` Controls 子菜单补 minimize 菜单项(accelerator 取本地键、click 做窗口 hide/show)，改键后重建菜单即时生效。**待真机**。
-- 🟡 **#6** treasure 切片口径 `splitSections`(先 slice 再 filter) vs `reshuffleSection`(先 excludeSubbed 再 slice)不一致 → 订阅越多偏差越大。`discover.js`。
+- ✅ **#6** treasure 切片口径不一致（2026-06-15 修·`fix/buglist`）— `reshuffleSection` treasure 分支改先 `slice(TREASURE_START)` 再排已订阅,与 getSectionFull/splitSections 同序(该分支当前不可达,预防性对齐)。
 - ✅ **#8** repeat 改 **off↔one 两档**（2026-06-15 修·`fix/buglist`）— `switchRepeatMode` 改 off↔one、启动归一化遗留 `'on'→'off'`;图标模板天然正确无需改;核验确认无音乐回归('on' 分支退化为无害死代码)。**待真机**。
 - ✅ **#9** 未加载 howler 时 后退15/前进30 静默无反应（2026-06-15 修·`fix/buglist`）— `Player.js seek` 加 playOrPause 同款兜底(load+autoplay)，**不带 startAt → 保留续播位**。**待真机**。
 - ✅ **#12** 导入订阅后发现页绿勾不即时（2026-06-15 修·`fix/buglist`）— 粘贴RSS/OPML/单档三处订阅成功补 `commit('addSubscribedPodcast')`(键=title、值=feedUrl);`importOpmlText` 多返回 `subscribed[]` 供逐条 commit。**待真机**。
-- 🟡 **#15** 快捷键无冲突检测 + 保存恒提示成功(`globalShortcut.register` 对占用/非法键静默 false)。`settings.vue saveShortcut`。
+- 🟡 **#15** 快捷键冲突检测/保存反馈 — **#2a 已修**(2026-06-15·`fix/buglist`：saveShortcut 同列撞键检测+修饰键归一化,撞则拒存提示)；**#2b 待办**:globalShortcut.register 占用/非法键静默 false 无回馈(需 on→handle 通信契约改,med)。
 - ✅ **#16** NAS「测试连接」总开关关闭时恒报失败（2026-06-15 修·`fix/buglist`）— 新增 `nas:probeActive` IPC(不看 enabled 只测可达) + `testNasReachable()`，settings 改用之;`testNasConnection`(Navbar 手动重连，更新 nasAlive)保留不动。**待真机**。
 
 ### ⚪ 已闭（非 bug）
@@ -143,7 +143,7 @@
 - 🔴 播放音量渐入(久未播+音量>50% 时 3s 渐大)。
 - 🔴 发现页缓存大方向评估(封面/信息/单集/音频)。
 - 🟣 多源发现资源池整方案(paused,**唯一阻塞=注册 PodcastIndex 免费 key**)→ ②命中率spike / ③adapter+解析链 / ④搜索双源 / ⑤推荐池扩容 / ⑥RSSHub兜底。
-- 🔴 音质(musicQuality) dormant mutation 待专门 dead-code 轮删除。
+- ✅ 音质(musicQuality) dormant mutation 删除（2026-06-15·`fix/buglist`）— 删 `mutations.js changeMusicQuality`(无调用方);保留 state key + initLocalStorage 种子 + track.js 读路径(网易云 legacy 不回归)。
 - 🔴 统计动画 v2「有等待」路线 git 锚点待确认锁定(版本溯源记账)。
 
 ---

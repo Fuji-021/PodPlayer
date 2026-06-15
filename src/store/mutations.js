@@ -123,9 +123,8 @@ export default {
   changeLang(state, lang) {
     state.settings.lang = lang;
   },
-  changeMusicQuality(state, value) {
-    state.settings.musicQuality = value;
-  },
+  // [死代码删] changeMusicQuality 全 src 无 commit 调用方(grep 仅定义本身)。注意:state.settings.musicQuality
+  //   仍由 api/track.js 读取(网易云 legacy 路径)→ 保留 state key 与 initLocalStorage 种子,只删此空 mutation。
   changeLyricFontSize(state, value) {
     state.settings.lyricFontSize = value;
   },

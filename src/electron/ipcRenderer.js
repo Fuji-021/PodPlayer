@@ -31,24 +31,41 @@ export function ipcRenderer(vueInstance) {
     self.$refs.navbar.inputFocus = true;
   });
 
+  // [快捷键修 B] 菜单 accelerator 即使焦点在输入框也会触发并吞键(如搜索框/NAS 弹窗打字时按 Ctrl+L
+  //   会触发收藏而非编辑)。播放器动作 handler 入口加"输入聚焦守卫":焦点在 input/textarea/可编辑元素
+  //   时不执行播放器动作(search 不加——它本就是要聚焦输入)。electron/ 不可用可选链,故用 el && 判断。
+  const inEditable = () => {
+    const el = document.activeElement;
+    return !!(
+      el &&
+      (el.tagName === 'INPUT' ||
+        el.tagName === 'TEXTAREA' ||
+        el.isContentEditable)
+    );
+  };
+
   ipcRenderer.on('play', () => {
+    if (inEditable()) return;
     player.playOrPause();
   });
 
   // [播客快捷键] 下一首/上一首对播客无意义(队列导航空操作)→ 改为快进 30 秒 / 快退 15 秒，
   //   与底栏 ±15/30 按钮一致(Player.vue seekForward30 / seekBackward15)。
   ipcRenderer.on('next', () => {
+    if (inEditable()) return;
     const cur = player.seek();
     const dur = player.currentTrackDuration || 0;
     player.seek(Math.min(Math.max(0, dur - 1), (cur || 0) + 30));
   });
 
   ipcRenderer.on('previous', () => {
+    if (inEditable()) return;
     const cur = player.seek();
     player.seek(Math.max(0, (cur || 0) - 15));
   });
 
   ipcRenderer.on('increaseVolume', () => {
+    if (inEditable()) return;
     if (player.volume + 0.1 >= 1) {
       return (player.volume = 1);
     }
@@ -56,6 +73,7 @@ export function ipcRenderer(vueInstance) {
   });
 
   ipcRenderer.on('decreaseVolume', () => {
+    if (inEditable()) return;
     if (player.volume - 0.1 <= 0) {
       return (player.volume = 0);
     }
@@ -64,6 +82,7 @@ export function ipcRenderer(vueInstance) {
 
   // [播客快捷键] 收藏：播客单集 → 本地收藏切换；网易云曲 → 原 likeATrack(同 Player.vue toggleFavorite)。
   ipcRenderer.on('like', () => {
+    if (inEditable()) return;
     const t = player.currentTrack;
     if (!t) return;
     if (t.podcastEpisodeId) {
@@ -74,10 +93,12 @@ export function ipcRenderer(vueInstance) {
   });
 
   ipcRenderer.on('repeat', () => {
+    if (inEditable()) return;
     player.switchRepeatMode();
   });
 
   ipcRenderer.on('shuffle', () => {
+    if (inEditable()) return;
     player.switchShuffle();
   });
 

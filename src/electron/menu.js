@@ -81,14 +81,15 @@ export function createMenu(win, store) {
           },
         },
         {
-          label: 'Next',
+          // [文案] 播客语义=快进 30 秒(非"下一首")，菜单 label 与功能名一致
+          label: '快进 30 秒',
           accelerator: shortcuts.find(s => s.id === 'next').shortcut,
           click: () => {
             win.webContents.send('next');
           },
         },
         {
-          label: 'Previous',
+          label: '快退 15 秒',
           accelerator: shortcuts.find(s => s.id === 'previous').shortcut,
           click: () => {
             win.webContents.send('previous');

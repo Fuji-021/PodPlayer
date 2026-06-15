@@ -273,7 +273,7 @@ export function initIpcMain(win, store, trayEventEmitter) {
     );
   });
 
-  ipcMain.on('removeProxy', (event, arg) => {
+  ipcMain.on('removeProxy', () => {
     log('removeProxy');
     win.webContents.session.setProxy({});
     store.set('proxy', '');
@@ -297,7 +297,10 @@ export function initIpcMain(win, store, trayEventEmitter) {
 
     createMenu(win, store);
     globalShortcut.unregisterAll();
-    registerGlobalShortcut(win, store);
+    // [快捷键修 A] 尊重全局开关：用户关掉全局快捷键后，改键不应又把全局键注册回来抢系统热键。
+    if (store.get('settings.enableGlobalShortcut') !== false) {
+      registerGlobalShortcut(win, store);
+    }
   });
 
   ipcMain.on('restoreDefaultShortcuts', () => {
@@ -306,7 +309,10 @@ export function initIpcMain(win, store, trayEventEmitter) {
 
     createMenu(win, store);
     globalShortcut.unregisterAll();
-    registerGlobalShortcut(win, store);
+    // [快捷键修 A] 同上：恢复默认也尊重全局开关，不强行重注册。
+    if (store.get('settings.enableGlobalShortcut') !== false) {
+      registerGlobalShortcut(win, store);
+    }
   });
 
   if (isCreateTray) {

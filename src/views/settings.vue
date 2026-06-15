@@ -912,20 +912,28 @@ export default {
         this.saveShortcut();
       }
     },
-    handleShortcutKeyup(e) {
-      if (this.recordedShortcut.find(s => s.keyCode === e.keyCode)) {
-        this.recordedShortcut = this.recordedShortcut.filter(
-          s => s.keyCode !== e.keyCode
-        );
-      }
-    },
     saveShortcut() {
       const { id, type } = this.shortcutInput;
-      const payload = {
-        id,
-        type,
-        shortcut: this.recordedShortcutComputed,
-      };
+      const combo = this.recordedShortcutComputed;
+      // [#2a 快捷键冲突检测] 同一列(本地 shortcut / 全局 globalShortcut)内与其它键撞键 → 提示并拒绝保存。
+      //   原来无任何检测、且恒提示"已保存"(实则两键映同一组合)。
+      const list =
+        (this.$store.state.settings && this.$store.state.settings.shortcuts) ||
+        [];
+      // 归一化修饰键:Win 下 CommandOrControl/Command/Cmd/Ctrl 同为 Control → 新录的 "Control+P"
+      //   也能命中默认存储的 "CommandOrControl+P"(同一物理键),避免漏判。
+      const norm = c =>
+        String(c || '').replace(
+          /CommandOrControl|Command|Cmd|Ctrl/gi,
+          'Control'
+        );
+      const dup = list.find(s => s.id !== id && norm(s[type]) === norm(combo));
+      if (dup) {
+        this.showToast(`快捷键与「${dup.name || dup.id}」冲突，未保存`);
+        this.recordedShortcut = [];
+        return;
+      }
+      const payload = { id, type, shortcut: combo };
       this.$store.commit('updateShortcut', payload);
       ipcRenderer.send('updateShortcut', payload);
       this.showToast('快捷键已保存');
@@ -1071,10 +1079,14 @@ select {
   max-width: 220px;
   font-weight: 600;
   border: 1px solid var(--color-secondary);
-  padding: 7px 12px;
+  padding: 7px 34px 7px 12px;
   border-radius: var(--radius-button);
   color: var(--color-text);
-  background: transparent;
+  // [设置控件统一] 补下拉箭头(appearance:none 去掉了原生箭头)→ 看起来像下拉框、与各选择框一致。
+  //   #999 中灰在浅/深色下都清晰;右侧留白 34px 容纳箭头。延续"不要色背景"=底仍透明。
+  background: transparent
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")
+    no-repeat right 12px center;
   appearance: none;
   white-space: nowrap;
   overflow: hidden;

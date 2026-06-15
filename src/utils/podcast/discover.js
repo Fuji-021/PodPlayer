@@ -190,8 +190,10 @@ export function reshuffleSection(
   preferredGenres
 ) {
   if (type === 'treasure') {
+    // [#6 切片口径对齐] 与 getSectionFull 同口径:先 slice(TREASURE_START) 再排已订阅,
+    //   避免"先排已订阅再切片"使边界随订阅数漂移(当前该分支不可达,属预防性对齐)。
     return shuffle(
-      excludeSubbed(items, hardExclude).slice(TREASURE_START)
+      excludeSubbed(items.slice(TREASURE_START), hardExclude)
     ).slice(0, 16);
   }
   return buildForYou(items, hardExclude, softExclude, preferredGenres);
