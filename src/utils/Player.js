@@ -1533,6 +1533,12 @@ export default class {
     const track = this._currentTrack;
     if (!track || !track.podcastAudioUrl) return false;
 
+    // [B69-F5/F1] 切到任意单集前，先把上一集尚未落盘的收听缓冲 flush 出去(自然播完连播 / 手动切歌 /
+    //   上一首 都经此)，不再依赖新集首个 tick 才落盘；随后清空，让新集从干净状态累积、且不污染跨集去重态。
+    //   此刻 _listenBuf 仍持上一集 id，落盘正确(本方法此前 _currentTrack 已是新集，但缓冲只由 tick 更新)。
+    this._flushListenBuf();
+    this._listenBuf = null;
+
     // [播客改造 progress-bug] 立即调 setTitle 让 document.title 含节目名
     // → state.title 一定与原默认值"PodPlayer"不同 → Vue 重渲染读到正确 _progress
     // 之前用 commit('updateTitle', document.title) 不工作的原因：重启时 title 没变化
@@ -1557,11 +1563,7 @@ export default class {
       savedPos = 0;
       saveEpisodeProgress(track.podcastEpisodeId, 0).catch(() => {});
       resetEpisodeListening(track.podcastEpisodeId).catch(() => {});
-      // [B69-F5 降频] 重置已听完单集 → 丢弃该集尚未落盘的收听缓冲，
-      //   避免陈旧秒位置在 reset 清 bits 之后又被 flush 回写（重播是少见边角，丢 ≤几秒缓冲无碍）。
-      if (this._listenBuf && this._listenBuf.id === track.podcastEpisodeId) {
-        this._listenBuf = null;
-      }
+      // 注：上一集缓冲已在本方法开头 flush+清空，reset 后不会再被陈旧缓冲回写覆盖。
     }
     // [B-74] 时间戳跳转：调用方指定起播秒数 → 覆盖续播位置(放在"已听完归零"之后，
     //   保证时间戳必赢)。clamp 到时长内，避免越界；之后由 once('load') 确定性 seek。

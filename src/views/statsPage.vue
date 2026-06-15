@@ -161,17 +161,16 @@ export default {
       //   旧逻辑先把快照渲染上屏：而"周快照"是上次存的，里面可能有现已过期(7 天前听过、出窗)的节目
       //   (如 FView Friday) → 先渲染快照=图1、fresh 到了再移除=图2，即用户报的"先出现后跳没"。
       const fresh = await getListenStatsByPodcast(range === 'week' ? 7 : 'all');
-      if (seq !== this._loadSeq) return;
-      // [perf·数据层整档重复读] 顶部"全部累计"大数字：range==='all' 时 fresh 本身就是全量统计，
-      //   直接复用 fresh.totalWall，免得 loadTotal() 再把 episodeListenStats 全表 toArray 一遍
-      //   (每行含 KB 级 bits 反序列化)。原进页默认 'all' 会全表扫两遍 → 现在只扫一遍。
-      //   range==='week' 时顶部总量是全时段，仍需独立 'all' 查询(loadTotal)。
+      // [perf·数据层整档重复读 + STATS-1 修] 顶部"全部累计"(totalWall)是全时段总量、与当前 range/列表无关，
+      //   必须**无条件设置、不受下面列表 seq 守卫拦截**——否则初载期间切 tab 会让 totalWall 永停 0(master 无此回归)。
+      //   range==='all'：fresh 本身即全量统计，直接复用(省一次 episodeListenStats 全表扫=本次 perf 目标)。
+      //   range==='week'：顶部需全时段总量 → 独立 loadTotal()，**不 await**(其内部赋值与列表渲染解耦，等价 master 旧行为)。
       if (range === 'all') {
         this.totalWall = fresh.totalWall;
       } else {
-        await this.loadTotal();
-        if (seq !== this._loadSeq) return;
+        this.loadTotal().catch(() => {});
       }
+      if (seq !== this._loadSeq) return;
       this.rangeTotal = fresh.totalWall;
       // 快照仅用来给"仍在 fresh 里的条目"提供**起点宽度**(返回页时各条从上次宽度平滑过渡)；
       //   不在 fresh 里的快照条目(过期/已变动)**永不上屏**。
