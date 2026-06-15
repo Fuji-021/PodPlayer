@@ -24,8 +24,10 @@
               >
                 <svg-icon :icon-class="opt.icon" class="lead" />
                 <span class="label">{{ opt.label }}</span>
+                <!-- [审操作#2] 「按最近收听」不显方向箭头：其排序是"听过的按最近降序、没听过的排后"
+                     的固定多键序、不读 sortDir，显示可翻转的箭头会与"列表纹丝不动"矛盾。其余项正常显示。 -->
                 <svg-icon
-                  v-if="sortBy === opt.key"
+                  v-if="sortBy === opt.key && opt.key !== 'lastListen'"
                   class="dir"
                   :icon-class="
                     sortDir === 'asc'
@@ -342,8 +344,10 @@ export default {
         { key: 'updatedAt', icon: 'sort-alt', label: '按订阅时间' },
         // [B-75] 删除"按节目名"：播客名个性化，A→Z 排序无意义，去掉减视觉冗余
         {
+          // [审操作#14] lead 图标改中性 refresh：原 arrow-down-small-big 是方向箭头，
+          //   与右侧动态方向箭头同框时会出现"左↓右↑"相反的视觉矛盾(其它项 lead 本就中性)。
           key: 'episodeTime',
-          icon: 'arrow-down-small-big',
+          icon: 'refresh',
           label: '按最新更新',
         },
         { key: 'listenWall', icon: 'time-past', label: '按累计听过时长' },

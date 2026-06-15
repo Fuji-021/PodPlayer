@@ -471,6 +471,9 @@ export default {
         al: { id: 0, name: title, picUrl: this.episode.coverUrl || '' },
         dt: (this.episode.duration || 0) * 1000,
         podcastAudioUrl: this.episode.audioUrl,
+        // [审操作#3] 带 podcastId(=feedUrl)，防收藏写空 → 被 prunePreviewOrphans 静默清理。
+        podcastId:
+          this.episode.podcastId || (this.episode.id || '').split('::')[0],
         podcastEpisodeId: this.episode.id,
       };
       this.$store.dispatch('togglePodcastFavorite', track);

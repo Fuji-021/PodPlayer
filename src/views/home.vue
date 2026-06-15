@@ -363,6 +363,8 @@ export default {
         (this.sections.treasure || []).forEach(p =>
           exclude.add((p.name || '').trim())
         );
+        // [审操作#5] reroll 也排除「新上线」(this.newItems)，否则 forYou 可能与新上线撞车(违"各栏不重复"承诺)。
+        (this.newItems || []).forEach(p => exclude.add((p.name || '').trim()));
         this.forYouSeq++; // [B-47] 变 key 触发卡片淡入过渡（不硬切）
         this.sections = {
           ...this.sections,

@@ -236,6 +236,8 @@ export default {
         },
         dt: (item.duration || 0) * 1000,
         podcastAudioUrl: item.audioUrl,
+        // [审操作#3] 带 podcastId(=feedUrl)，防收藏写空 → 被 prunePreviewOrphans 静默清理。
+        podcastId: item.podcastId || (item.id || '').split('::')[0],
         podcastEpisodeId: item.id,
       };
       this.$store.dispatch('togglePodcastFavorite', track);

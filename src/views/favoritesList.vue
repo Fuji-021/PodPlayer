@@ -147,6 +147,8 @@ export default {
         },
         dt: (item.duration || 0) * 1000,
         podcastAudioUrl: item.audioUrl,
+        // [审操作#3] 带 podcastId(=feedUrl)，与其它入口一致(此处为取消收藏、不写入，仅防御性补全)。
+        podcastId: item.podcastId || (item.id || '').split('::')[0],
         podcastEpisodeId: item.id,
       };
       await this.$store.dispatch('togglePodcastFavorite', track);

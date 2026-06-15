@@ -41,9 +41,21 @@ export async function subscribeByRssUrl(feedUrl, source = 'manual') {
   const { podcast, episodes } = parseRss(xml, url);
   // [B-48 第1点] 记录来源：'manual'(粘贴RSS/OPML/文件) / 'discover'(首页发现页)
   // [B-50] 显式订阅 → subscribed:true
-  await upsertPodcast({ ...podcast, source, subscribed: true });
+  // [审操作#11] 重复订阅已存在档：upsertPodcast=put 会整条覆盖 → 原 newCount(角标)被清、source 被改
+  //   (原 discover 被 manual 覆盖、发现页溯源黄点消失)、其它已存在字段丢失。改为「合并」：先铺 existing
+  //   保留其全部字段，再用本次 parseRss 的新元数据覆盖(标题/简介/封面等刷新)，最后 source 保留原值、置 subscribed。
+  const existing = await getPodcast(url);
+  const merged = existing
+    ? {
+        ...existing,
+        ...podcast,
+        source: existing.source || source,
+        subscribed: true,
+      }
+    : { ...podcast, source, subscribed: true };
+  await upsertPodcast(merged);
   await upsertEpisodes(episodes);
-  return { podcast: { ...podcast, source, subscribed: true }, episodes };
+  return { podcast: merged, episodes };
 }
 
 /**
@@ -85,7 +97,15 @@ export async function previewByRssUrl(feedUrl) {
  * @returns {Promise<{ added: string[], failed: { url: string, error: string }[] }>}
  */
 export async function importOpmlText(opmlText, onProgress) {
-  const entries = parseOpml(opmlText);
+  // [审操作#10] 按 feedUrl 去重：重复 feed 会被订阅多次(库幂等不重复)但 added 计多次 → "成功 N 档"虚高。
+  //   去重键必须用 cleanUrl 归一化(与 subscribeByRssUrl 同口径)——否则 "url/" 与 "url" 算两个、却入库同一条。
+  const seen = new Set();
+  const entries = parseOpml(opmlText).filter(e => {
+    const u = cleanUrl((e && e.xmlUrl) || '');
+    if (!u || seen.has(u)) return false;
+    seen.add(u);
+    return true;
+  });
   const added = [];
   const failed = [];
   const total = entries.length;

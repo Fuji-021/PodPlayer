@@ -599,6 +599,9 @@ export default {
         },
         dt: (ep.duration || 0) * 1000,
         podcastAudioUrl: ep.audioUrl,
+        // [审操作#3] 必须带 podcastId(=feedUrl)；否则收藏写入 podcastId='' → 启动时
+        //   prunePreviewOrphans 的 favorites.where('podcastId') 保护命中 0 → 该(未订阅)节目连同单集被静默清理。
+        podcastId: ep.podcastId || (ep.id || '').split('::')[0],
         podcastEpisodeId: ep.id,
       };
       this.$store.dispatch('togglePodcastFavorite', track);
@@ -694,6 +697,9 @@ export default {
         al: { id: 0, name: title, picUrl: ep.coverUrl || '' },
         dt: (ep.duration || 0) * 1000,
         podcastAudioUrl: ep.audioUrl,
+        // [审操作#3] 必须带 podcastId(=feedUrl)；否则收藏写入 podcastId='' → 启动时
+        //   prunePreviewOrphans 的 favorites.where('podcastId') 保护命中 0 → 该(未订阅)节目连同单集被静默清理。
+        podcastId: ep.podcastId || (ep.id || '').split('::')[0],
         podcastEpisodeId: ep.id,
       };
       this.$store.dispatch('togglePodcastFavorite', track);
@@ -801,7 +807,8 @@ export default {
       const total = ep.duration || 0;
       const listened = ep.listenedSec || 0;
       if (listened > 30 && total > 0) {
-        return `剩余 ${this.formatDuration(total - listened)}`;
+        // [审操作#13] Math.max(0,…)：position 超过 RSS 声明时长时 total-listened 为负 → "-1:-50" 乱码。
+        return `剩余 ${this.formatDuration(Math.max(0, total - listened))}`;
       }
       return this.formatDuration(total);
     },

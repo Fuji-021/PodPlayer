@@ -2956,4 +2956,18 @@ export default {
     color: #fff;
   }
 }
+
+// [审操作#17] 沉浸页内复用的弹窗(倍速/队列/睡眠/音量)主题隔离：原用 var(--color-body-bg)/--color-text
+//   跟随全局深浅色，浅色模式下"浅底深字"漂在深色沉浸页上、与"沉浸页一个样"相悖。这里在沉浸页作用域内
+//   把这几支主题变量**就地重定义为深色**——弹窗容器与其全部子元素(qp-item 边框/qp-sub 等用 var 的)自动
+//   继承到深色值，无需逐个改。--color-primary(品牌蓝强调色)保留。
+.immersive .rate-menu,
+.immersive .queue-panel,
+.immersive .sleep-menu,
+.immersive .vol-menu {
+  --color-body-bg: #1c1c20;
+  --color-text: rgba(255, 255, 255, 0.92);
+  --color-secondary-bg-for-transparent: rgba(255, 255, 255, 0.1);
+  --color-primary-bg-for-transparent: rgba(83, 94, 234, 0.22);
+}
 </style>

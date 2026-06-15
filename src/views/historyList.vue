@@ -186,6 +186,8 @@ export default {
         al: { id: 0, name: it.podcastTitle || '', picUrl: it.coverUrl || '' },
         dt: (it.duration || 0) * 1000,
         podcastAudioUrl: it.audioUrl,
+        // [审操作#3] 带 podcastId(=feedUrl)，防收藏写空 → 被 prunePreviewOrphans 静默清理。
+        podcastId: it.podcastId || (it.id || '').split('::')[0],
         podcastEpisodeId: it.id,
       };
       this.$store.dispatch('togglePodcastFavorite', track);
