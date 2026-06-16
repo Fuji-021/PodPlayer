@@ -1025,16 +1025,15 @@ export default {
     // [裁切修] 原 overflow:hidden 会裁掉 .sub-this-btn 的 :hover scale 反馈(按钮左缘贴 .meta 边)；
     //   改 min-width:0：同样防 flex 被长标题撑破，但不裁切放大动画。
     min-width: 0;
-    // 标题行：节目名（flex:1 自然换行）+ 订阅按钮右对齐
+    // 标题行：节目名 + 订阅按钮紧跟在文字右侧，不撑到行末
     .title-row {
       display: flex;
-      align-items: flex-start;
-      gap: 12px;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 4px 10px;
       margin-bottom: 8px;
     }
     .t {
-      flex: 1;
-      min-width: 0;
       font-size: 28px;
       font-weight: 700;
     }
@@ -1042,10 +1041,9 @@ export default {
       opacity: 0.7;
       margin-bottom: 12px;
     }
-    // [B-50] 预览节目的"订阅到我的"按钮（与标题同行，底色=封面主色）
+    // [B-50] 预览节目的"订阅到我的"按钮（紧跟标题右侧，底色=封面主色）
     .sub-this-btn {
       flex-shrink: 0;
-      margin-top: 5px; // 对齐 28px 标题第一行视觉中心
       display: inline-flex;
       align-items: center;
       gap: 6px;
