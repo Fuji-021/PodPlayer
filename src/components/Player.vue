@@ -1755,15 +1755,17 @@ export default {
         document.body.classList.add('immersive-open');
       }
       // [P1] 最大化窗口，记录进入前状态（退出时决定是否 unmaximize）
+      this._immWindowMax = false; // IPC 回来前先置 false，回来后置 true
       if (_ipcRenderer) {
         _ipcRenderer
           .invoke('imm:enter')
           .then(r => {
             this.immWasMax = (r && r.wasMax) || false;
+            this._immWindowMax = true; // 进入后窗口已最大化
           })
           .catch(() => {});
       }
-      // [P1] ESC 退出/双击最小化 + 顶部 hover 提示气泡 + 顶边双击退出全屏
+      // [P1] ESC 退出/双击最小化 + 顶部 hover 提示气泡 + 顶边双击还原窗口(留沉浸)
       this._escLastAt = 0;
       this._escTimer = null;
       this._immKeyHandler = ev => this._immKeyDown(ev);
@@ -1780,10 +1782,11 @@ export default {
       if (typeof document !== 'undefined') {
         document.body.classList.remove('immersive-open');
       }
-      // [P1] 还原窗口（进入前未最大化才 unmaximize）
+      // [P1] 还原窗口（进入前未最大化才 unmaximize；双击已窗口化时 immWasMax=true 故 no-op）
       if (_ipcRenderer) {
         _ipcRenderer.send('imm:exit', this.immWasMax);
       }
+      this._immWindowMax = false;
       // [P1] 清除 ESC 防抖计时器 + 移除监听
       if (this._escTimer) {
         clearTimeout(this._escTimer);
@@ -1884,8 +1887,9 @@ export default {
       }
     },
     // [沉浸式播放页 P1] 鼠标移到顶部边界(y≤8px) → 显示退出提示气泡，跟随 x（clamp 窗口内）
+    //   仅当窗口处于最大化状态时显示（已窗口化则不再提示）
     _immMouseMove(ev) {
-      if (ev.clientY <= 8) {
+      if (ev.clientY <= 8 && this._immWindowMax) {
         const W = window.innerWidth || 800;
         const TIP_W = 96;
         this.immTooltipX = Math.min(
@@ -1897,10 +1901,14 @@ export default {
         this.immTooltipVisible = false;
       }
     },
-    // [沉浸式播放页 P1] 顶边双击(y≤40px) → 退出沉浸并还原窗口大小
+    // [沉浸式播放页 P1] 顶边双击(y≤40px) → 仅还原窗口大小，不退出沉浸页
+    //   imm:unmax 与 imm:exit 分开：前者只 unmaximize，沉浸页继续；后者退出沉浸。
     _immDblClick(ev) {
-      if (ev.clientY <= 40) {
-        this.closeImmersive();
+      if (ev.clientY <= 40 && this._immWindowMax) {
+        if (_ipcRenderer) _ipcRenderer.send('imm:unmax');
+        this._immWindowMax = false;
+        this.immWasMax = true; // 已手动窗口化，closeImmersive 时 imm:exit(true)=no-op
+        this.immTooltipVisible = false;
       }
     },
 

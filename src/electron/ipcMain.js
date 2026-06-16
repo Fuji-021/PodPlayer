@@ -285,6 +285,11 @@ export function initIpcMain(win, store, trayEventEmitter) {
     if (!wasMax) win.unmaximize();
   });
 
+  // [沉浸式播放页 P1] 双击顶边 → 仅还原窗口大小，不退出沉浸页（与 imm:exit 分开）
+  ipcMain.on('imm:unmax', () => {
+    if (win.isMaximized()) win.unmaximize();
+  });
+
   ipcMain.on('settings', (event, options) => {
     store.set('settings', options);
     if (options.enableGlobalShortcut) {
