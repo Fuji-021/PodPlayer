@@ -7,6 +7,19 @@ import { rlog } from '@/utils/log';
 // [播客改造] 导出 db 实例，供 utils/podcast/db.js 复用，避免多个 Dexie 实例冲突。
 export const db = new Dexie('yesplaymusic');
 
+// [T7·性能·数据层①] v10：episodes 加复合索引 [podcastId+pubTime]，
+//   供 getEpisodesByPodcast 利用 IDB 游标排序，免除内存 Array.sortBy（机核 1000+ 集从 JS 排序→DB 排序）。
+//   [podcastId+pubTime] 是 Dexie 的"复合索引"语法，IndexedDB 底层建 [feedUrl, pubTime] 联合索引。
+db.version(10).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime, [podcastId+pubTime]',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+  episodeListenStats: '&id, completed, updatedAt',
+  episodeDownloads: '&id, podcastId, addedAt',
+  listenDaily: '&key, date',
+});
+
 // [B-37] v9：新增 listenDaily 表（按天×节目聚合收听时长，用于"最近 N 天"统计）
 //   key = `${YYYY-MM-DD}::${podcastId}`；wallSec 墙钟秒、contentSec 倍速换算秒
 db.version(9).stores({

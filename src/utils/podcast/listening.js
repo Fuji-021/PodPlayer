@@ -217,23 +217,23 @@ export function listenedPercentStepped(row) {
 export async function getListenStatsByPodcast(range = 'all') {
   const byPod = {};
   if (range === 'all') {
-    const [stats, daily] = await Promise.all([
-      db.episodeListenStats.toArray(),
-      db.listenDaily.toArray(),
-    ]);
+    // [T7·数据层①] 用 .each() 代替 .toArray()：逐行处理不一次性把所有 bits 大数组建入内存，
+    //   对含 1000+ 集 & 长集(机核 4h≈1800 bytes bits/集)的订阅库，内存峰值大幅减少。
     const statsByPod = {};
-    stats.forEach(s => {
-      const sec = s.totalPlayContentSec || 0;
-      if (sec <= 0) return;
-      const pid = String(s.id).split('::')[0];
-      statsByPod[pid] = (statsByPod[pid] || 0) + sec;
-    });
     const dailyByPod = {};
-    daily.forEach(r => {
-      const sec = r.contentSec || 0;
-      if (sec <= 0) return;
-      dailyByPod[r.podcastId] = (dailyByPod[r.podcastId] || 0) + sec;
-    });
+    await Promise.all([
+      db.episodeListenStats.each(s => {
+        const sec = s.totalPlayContentSec || 0;
+        if (sec <= 0) return;
+        const pid = String(s.id).split('::')[0];
+        statsByPod[pid] = (statsByPod[pid] || 0) + sec;
+      }),
+      db.listenDaily.each(r => {
+        const sec = r.contentSec || 0;
+        if (sec <= 0) return;
+        dailyByPod[r.podcastId] = (dailyByPod[r.podcastId] || 0) + sec;
+      }),
+    ]);
     new Set([...Object.keys(statsByPod), ...Object.keys(dailyByPod)]).forEach(
       pid => {
         byPod[pid] = Math.max(statsByPod[pid] || 0, dailyByPod[pid] || 0);

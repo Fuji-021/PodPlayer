@@ -1,5 +1,6 @@
 // [播客改造] 播客本地数据访问层（Dexie/IndexedDB）。
 // 表结构在 utils/db.js 版本 5 里声明：podcasts / episodes / episodeProgress。
+import Dexie from 'dexie';
 import { db } from '@/utils/db';
 
 // === 订阅 ===
@@ -207,12 +208,21 @@ export function updateEpisode(id, patch) {
   return db.episodes.update(id, patch);
 }
 
+// [T7·性能·数据层①] 利用 v10 复合索引 [podcastId+pubTime]，DB 层直接排好序后返回，
+//   替代旧的 .sortBy('pubTime')（后者先全量取 → 内存排，机核 1000+ 集情况下耗时明显）。
+//   between([pid, minKey], [pid, maxKey]) = 取该 podcastId 所有集，reverse() = 最新集在前。
 export function getEpisodesByPodcast(podcastId) {
   return db.episodes
-    .where('podcastId')
-    .equals(podcastId)
+    .where('[podcastId+pubTime]')
+    .between([podcastId, Dexie.minKey], [podcastId, Dexie.maxKey])
     .reverse()
-    .sortBy('pubTime');
+    .toArray();
+}
+
+// [T7·性能·数据层①] 仅取主键列表（episode.id），不反序列化行数据。
+//   供 refreshAllSubscriptions 计算新增集数 diff，避免把含 description 等重文本的完整行读进内存。
+export function getEpisodeIdsByPodcast(podcastId) {
+  return db.episodes.where('podcastId').equals(podcastId).primaryKeys();
 }
 
 export function getEpisode(id) {

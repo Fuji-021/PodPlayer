@@ -9,6 +9,7 @@ import {
   getSubscribedPodcasts,
   getPodcast,
   getEpisodesByPodcast,
+  getEpisodeIdsByPodcast,
   deletePodcast,
 } from './db';
 import { handoffToNas } from './nasSource';
@@ -233,10 +234,38 @@ export async function refreshAllSubscriptions(onProgress) {
     let newCount = 0;
     let error = null;
     try {
-      const xml = await ipcFetch('podcast:fetchRss', p.id);
+      // [T7③·ETag/304] 条件请求：将上次存的 ETag/Last-Modified 传给主进程，
+      //   若 RSS 未变化服务端返回 304，直接跳过解析+写库（省带宽+主线程解析开销）。
+      const feedEtag = p.rssEtag || null;
+      const feedLastMod = p.rssLastModified || null;
+      const payload =
+        feedEtag || feedLastMod
+          ? { url: p.id, etag: feedEtag, lastModified: feedLastMod }
+          : p.id;
+      if (!ipcRenderer)
+        throw new Error(
+          '当前不在 Electron 环境，无法抓取第三方 RSS（CORS 限制）'
+        );
+      const res = await ipcRenderer.invoke('podcast:fetchRss', payload);
+      if (!res || !res.ok) throw new Error((res && res.error) || '抓取失败');
+      if (res.notModified) {
+        // 304：本档无新集，跳过解析与写库
+        done++;
+        if (typeof onProgress === 'function') onProgress(done, total, p.title);
+        results.push({ id: p.id, title: p.title, newCount: 0, error: null });
+        return;
+      }
+      // 收到新内容：保存 ETag/Last-Modified 供下次条件请求用
+      if (res.etag || res.lastModified) {
+        const hdrPatch = {};
+        if (res.etag) hdrPatch.rssEtag = res.etag;
+        if (res.lastModified) hdrPatch.rssLastModified = res.lastModified;
+        updatePodcast(p.id, hdrPatch).catch(() => {});
+      }
+      const xml = res.text;
       const { podcast: meta, episodes } = parseRss(xml, p.id);
-      const existing = await getEpisodesByPodcast(p.id);
-      const existingIds = new Set(existing.map(e => e.id));
+      // [T7·数据层①] 只取主键(primaryKeys)做 diff，不加载含 description 等重文本的完整行
+      const existingIds = new Set(await getEpisodeIdsByPodcast(p.id));
       const fresh = episodes.filter(e => !existingIds.has(e.id));
       newCount = fresh.length;
       if (episodes.length) await upsertEpisodes(episodes);
