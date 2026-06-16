@@ -2749,6 +2749,7 @@ export default {
   text-shadow: var(--imm-text-shadow); // 子元素继承，任何封面上都撑住对比
   overflow: hidden;
   user-select: none;
+  -webkit-app-region: no-drag; // 沉浸层覆盖 Win32Titlebar drag 区，必须显式 no-drag 否则顶边 mousemove 被 OS 吞掉
   // 复用的功能键(倍速文字/队列/睡眠/音量/收藏)字色随主题
   ::v-deep .button-icon .svg-icon {
     color: var(--imm-text-2nd);
