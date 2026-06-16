@@ -128,7 +128,7 @@
 
 ### P2
 - 🟡 机核 hover CHUNK→24 真机验收(残留则调 16)。
-- 🔵 **性能优化路线(2026-06-15 全代码库审计后更新·分支 `feature/perf`)** — 详见 [性能审计报告](性能审计报告.md)(原始 57→对抗核实存活 56;3 高/10 中/41 低)。新落地序:①数据层「整档重复读」(podcasts 冗余 `latestPubTime` 去 `getLatestEpisodeTime` 整档读 + episodes `[podcastId+pubTime]` 复合索引免内存 sortBy + 统计页去重全表扫,**性价比最高·含 schema bump**)→②B69-F5 心跳降频(每秒 3 写 Dexie→节流)→③刷新条件请求 ETag/304 + shownotes 预取节流→④F1 真窗口虚拟化(专开一轮)→⑤审P1-7 parseRss 移 Worker。原 L1→L2→F2→L3 内存缓存路线并入④之后。
+- 🔵 **性能优化路线(2026-06-15 全代码库审计后更新·分支 `feature/perf`)** — 详见 [性能审计报告](性能审计报告.md)。**已落地①②③**（2026-06-16·commit `a01cf4e`）：①db v10 `[podcastId+pubTime]` 复合索引+`getEpisodesByPodcast`改 DB 排序+`getEpisodeIdsByPodcast` primaryKeys；②B69-F5 心跳降频（上轮已做）；③ETag/304 条件请求（refreshAllSubscriptions 304 skip 解析）+stats `.each()` 聚合。剩：④F1 真窗口虚拟化（专开一轮）、⑤parseRss Worker。
 - ✅ **定期 OPML+JSON 自动备份(2026-06-16·T8)** — 启动 30s 后首次 + 每 6 小时自动备份；空库跳过；**保留最近 3 份**（超出自动覆盖最旧，原 10 份→3 份）；`podcastDownload.js` + `backup.js` + `main.js` 注释同步。
 - 🔴 **NAS 源节目「第三大板块」** — navbar 第三板块(首页/我的订阅之外),排版区别于二者(样式未定);是 nas §10 #2「我的NAS栏」升级设想。用户 2026-06-14 提,优先级低、设计未定。
 - ✅ **NAS 在档标识(2026-06-16·已满意)** — NAS 在档呼吸点已落地(podcastDetail/podcastLibrary)，用户满意，不再扩展。
