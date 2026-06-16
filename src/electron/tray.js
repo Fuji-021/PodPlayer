@@ -27,7 +27,10 @@ function createMenuTemplate(win) {
       visible: false,
     },
     {
-      label: '上一首',
+      // [文案统一·2026-06-16] 托盘菜单与应用菜单(menu.js)/物理媒体键/全局快捷键一致:
+      //   播客无"上/下一首"语义,'previous'/'next' 实际是 快退15/快进30(见 ipcRenderer),
+      //   label 随功能改、不再写"上/下一首"。点击行为本就是 seek、未变。
+      label: '快退 15 秒',
       icon: nativeImage.createFromPath(
         path.join(__static, 'img/icons/left.png')
       ),
@@ -37,7 +40,7 @@ function createMenuTemplate(win) {
       },
     },
     {
-      label: '下一首',
+      label: '快进 30 秒',
       icon: nativeImage.createFromPath(
         path.join(__static, 'img/icons/right.png')
       ),

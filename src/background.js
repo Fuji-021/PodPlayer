@@ -195,6 +195,9 @@ class Background {
     this.handleAppEvents();
 
     // disable chromium mpris
+    // [SMTC 实测留记·2026-06-16] 曾试在 Windows 启用 HardwareMediaKeyHandling+MediaSessionService
+    //   (+ setAppUserModelId)想让 PodPlayer 出 Windows「正在播放」浮窗 → WinRT 实测仍不注册会话(只有
+    //   Spotify),属 Electron 13 限制,且启用会与 globalShortcut 物理媒体键争键 → 已回退。详见主文档同名 round。
     if (isCreateMpris) {
       app.commandLine.appendSwitch(
         'disable-features',

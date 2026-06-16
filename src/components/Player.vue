@@ -1042,7 +1042,8 @@ export default {
     },
   },
   mounted() {
-    this.setupMediaControls();
+    // [审P2-2] setupMediaControls 已删:媒体会话动作处理器统一由 Player.js _initMediaSession 注册
+    //   (原这份把 play/pause 都绑 playOrPause toggle、又覆盖 Player.js 的正确版 → 系统暂停反成播放)。
     window.addEventListener('keydown', this.handleKeydown);
     // [B-32] 单集名溢出检测：初次挂载 + 切歌 + 窗口缩放 都重新判断，
     // 溢出则 nameOverflow=true → .marquee 自动跑马灯（不再依赖 hover）。
@@ -1795,23 +1796,6 @@ export default {
     immClickPodcast() {
       if (this.isPodcastTrack) this.goToPodcastDetail();
       this.closeImmersive();
-    },
-
-    setupMediaControls() {
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.setActionHandler('play', () => {
-          this.playOrPause();
-        });
-        navigator.mediaSession.setActionHandler('pause', () => {
-          this.playOrPause();
-        });
-        navigator.mediaSession.setActionHandler('previoustrack', () => {
-          this.playPrevTrack();
-        });
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-          this.playNextTrack();
-        });
-      }
     },
 
     handleKeydown(event) {

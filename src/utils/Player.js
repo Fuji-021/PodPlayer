@@ -296,8 +296,12 @@ export default class {
           );
         });
       }
-      this._initMediaSession();
     }
+
+    // [审P2-2] 媒体会话动作处理器**无条件**注册(原先只在 _enabled 时注册，无歌启动则整个缺失)。
+    //   且 Player.vue 的 setupMediaControls 重复版已删 → 此处是唯一来源:play/pause 分开正确、
+    //   next/prev 与 UI 按钮等价(已核 _playNextTrack(isPersonalFM) === Vue playNextTrack)。
+    this._initMediaSession();
 
     this._setIntervals();
 
@@ -318,6 +322,12 @@ export default class {
     // [B69-F5 降频] 暂停/停止(playing true→false) → 把未落盘的收听缓冲写出，避免丢本窗口统计。
     if (!isPlaying && this._playing) this._flushListenBuf();
     this._playing = isPlaying;
+    // [审P2-1] 同步系统媒体卡片(SMTC / mediaSession)的播放态——否则暂停后系统"正在播放"卡片仍显
+    //   播放中、且 OS 据错误态发反向动作。播放时顺带刷新一次位置锚点(OS 据 playbackRate 外推进度条)。
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+      if (isPlaying) this._updateMediaSessionPositionState();
+    }
     if (isCreateTray) {
       ipcRenderer?.send('updateTrayPlayState', this._playing);
     }
@@ -964,25 +974,31 @@ export default class {
       navigator.mediaSession.setActionHandler('pause', () => {
         this.pause();
       });
-      navigator.mediaSession.setActionHandler('previoustrack', () => {
-        this.playPrevTrack();
-      });
-      navigator.mediaSession.setActionHandler('nexttrack', () => {
-        this._playNextTrack(this.isPersonalFM);
-      });
+      // [mediaSession 统一·2026-06-16] 播客无"上/下一首"语义 → prev/next/seekbackward/seekforward
+      //   四个动作统一做 快退15/快进30(back15/fwd30)，与底栏 ±15/30、ipcRenderer、托盘/应用菜单一致。
+      //   作用面=macOS「正在播放」(Control Center)；Windows 的 SMTC 浮窗本 app 未启用(Electron13 不支持，
+      //   见 background.js 注释 + [[windows-no-smtc]])、Linux 走 MPRIS 本段被禁。prev/next 不置 null——
+      //   否则对应平台的卡片按钮/媒体键会失灵。
+      const back15 = () => {
+        const cur = this.seek() || 0;
+        this.seek(Math.max(0, cur - 15));
+        this._updateMediaSessionPositionState();
+      };
+      const fwd30 = () => {
+        const cur = this.seek() || 0;
+        const dur = this.currentTrackDuration || 0;
+        this.seek(Math.min(Math.max(0, dur - 1), cur + 30));
+        this._updateMediaSessionPositionState();
+      };
+      navigator.mediaSession.setActionHandler('previoustrack', back15);
+      navigator.mediaSession.setActionHandler('nexttrack', fwd30);
+      navigator.mediaSession.setActionHandler('seekbackward', back15);
+      navigator.mediaSession.setActionHandler('seekforward', fwd30);
       navigator.mediaSession.setActionHandler('stop', () => {
         this.pause();
       });
       navigator.mediaSession.setActionHandler('seekto', event => {
         this.seek(event.seekTime);
-        this._updateMediaSessionPositionState();
-      });
-      navigator.mediaSession.setActionHandler('seekbackward', event => {
-        this.seek(this.seek() - (event.seekOffset || 10));
-        this._updateMediaSessionPositionState();
-      });
-      navigator.mediaSession.setActionHandler('seekforward', event => {
-        this.seek(this.seek() + (event.seekOffset || 10));
         this._updateMediaSessionPositionState();
       });
     }
@@ -1020,6 +1036,8 @@ export default class {
     };
 
     navigator.mediaSession.metadata = new window.MediaMetadata(metadata);
+    // [审P2-1 配套] 切歌后刷新系统卡片进度条(时长/位置)，否则 scrubber 要等下次 seek 才出现。
+    this._updateMediaSessionPositionState();
     if (isCreateMpris) {
       this._updateMprisState(track, metadata);
     }
@@ -1052,12 +1070,30 @@ export default class {
     if ('mediaSession' in navigator === false) {
       return;
     }
-    if ('setPositionState' in navigator.mediaSession) {
+    if ('setPositionState' in navigator.mediaSession === false) {
+      return;
+    }
+    // [审P2-1 配套] 防御:无 track / 无时长 / position 越界 / 非法 rate 都会让 setPositionState 抛
+    //   DOMException → 守卫 + clamp + try/catch。playbackRate 用真实倍速，OS 进度条外推才准。
+    const track = this._currentTrack;
+    if (!track) return;
+    const duration = ~~((track.dt || 0) / 1000);
+    if (!(duration > 0)) return;
+    let position = this.seek();
+    if (typeof position !== 'number' || isNaN(position) || position < 0) {
+      position = 0;
+    }
+    if (position > duration) position = duration;
+    let rate = this._playbackRate;
+    if (typeof rate !== 'number' || !(rate > 0)) rate = 1.0;
+    try {
       navigator.mediaSession.setPositionState({
-        duration: ~~(this.currentTrack.dt / 1000),
-        playbackRate: 1.0,
-        position: this.seek(),
+        duration,
+        playbackRate: rate,
+        position,
       });
+    } catch (e) {
+      // 边界竞态偶发抛，忽略不影响播放
     }
   }
   _nextTrackCallback() {
@@ -1565,6 +1601,10 @@ export default class {
   async _loadCurrentPodcastEpisode(autoplay, startAt = null) {
     const track = this._currentTrack;
     if (!track || !track.podcastAudioUrl) return false;
+
+    // [审P2-1 配套] 恢复/续播路径也刷新系统媒体卡片(SMTC)元数据(标题/封面)——否则 app 重启后直接
+    //   resume 恢复的那一集，卡片缺标题封面(只有"点新单集播放"的入口 1581 set 过)。idempotent、安全。
+    this._updateMediaSessionMetaData(track);
 
     // [B69-F5/F1] 切到任意单集前，先把上一集尚未落盘的收听缓冲 flush 出去(自然播完连播 / 手动切歌 /
     //   上一首 都经此)，不再依赖新集首个 tick 才落盘；随后清空，让新集从干净状态累积、且不污染跨集去重态。
