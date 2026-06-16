@@ -827,11 +827,6 @@ import { getCoverColor } from '@/utils/podcast/coverColor';
 // [沉浸式播放页 P0] 封面 3 色调色板（沉浸页中层三色柔和径向渐变背景用）
 import { getCoverPalette } from '@/utils/podcast/coverPalette';
 
-// [沉浸式播放页 P1] Electron IPC（maximize/unmaximize 控制沉浸全屏）
-const _electron =
-  process.env.IS_ELECTRON === true ? window.require('electron') : null;
-const _ipcRenderer = _electron ? _electron.ipcRenderer : null;
-
 export default {
   name: 'Player',
   components: {
