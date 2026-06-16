@@ -76,7 +76,9 @@ export async function initNas() {
           if (Date.now() - lastR > 24 * 60 * 60 * 1000) {
             reconcileNas({ trigger: 'daily' }).catch(function () {});
           }
-        } catch (e) {}
+        } catch (e) {
+          /* ignore */
+        }
       }, 5 * 60 * 1000);
     }
   } else {
@@ -401,7 +403,7 @@ function runLimited(items, limit, fn) {
 // [T1 P1] 声明式对账主函数：
 //   对已订阅节目批量 ensureManaged；对宽限期已过的取消订阅节目批量 removeItem（需四重保险）。
 //   触发时机：① NAS 首次/恢复上线(probe false→true) ② 每日心跳 ③ 手动调用。
-export async function reconcileNas(opts) {
+export async function reconcileNas() {
   if (!isNasEnabled() || !ipcRenderer) return { skipped: 'no-nas' };
   var alive;
   try {
@@ -445,7 +447,9 @@ export async function reconcileNas(opts) {
     var armed = false;
     try {
       armed = window.localStorage.getItem('nasDestructiveArmed') === 'true';
-    } catch (e) {}
+    } catch (e) {
+      /* ignore */
+    }
     await runLimited(remove, 2, function (it) {
       return ipcRenderer
         .invoke('nas:removeItem', { feedUrl: it.feedUrl, armed: armed })
@@ -462,7 +466,9 @@ export async function reconcileNas(opts) {
   }
   try {
     window.localStorage.setItem('nasLastReconcileAt', String(now));
-  } catch (e) {}
+  } catch (e) {
+    /* ignore */
+  }
   return {
     ok: true,
     ensured: ensure.length,

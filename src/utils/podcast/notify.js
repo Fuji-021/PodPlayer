@@ -4,7 +4,9 @@ try {
   if (process.env.IS_ELECTRON === true && window.require) {
     _ipc = window.require('electron').ipcRenderer;
   }
-} catch (e) {}
+} catch (e) {
+  /* ignore */
+}
 
 export function showNotification(title, body) {
   if (!_ipc) return;
@@ -13,5 +15,7 @@ export function showNotification(title, body) {
       title: String(title || ''),
       body: String(body || ''),
     });
-  } catch (e) {}
+  } catch (e) {
+    /* ignore */
+  }
 }
