@@ -30,6 +30,7 @@ let localStorage = {
     showLibraryDefault: false,
     subTitleDefault: false,
     nasHandoffEnabled: true, // [NAS 托管] 订阅成功后自动托管到 NAS(默认开；判定一律用 !== false 以兼容老用户)
+    autoCleanCompletedDownloads: false, // [T5] 听完后自动清理已下载单集（默认关，用户主动开启）
     linuxEnableCustomTitlebar: false,
     trayIconTheme: 'auto',
     enabledPlaylistCategories,

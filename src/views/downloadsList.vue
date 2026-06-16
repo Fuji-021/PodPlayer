@@ -1,6 +1,11 @@
 <template>
   <div class="downloads-page">
-    <h1>我的下载</h1>
+    <h1>
+      我的下载
+      <span v-if="list.length" class="storage-hint"
+        >{{ list.length }} 集 · {{ totalStorageText }}</span
+      >
+    </h1>
     <div v-if="!list.length" class="empty">还没有下载的单集</div>
     <div
       v-for="item in list"
@@ -110,6 +115,19 @@ export default {
       menuListener: null,
       delTarget: null,
     };
+  },
+  computed: {
+    // [T6] 已下载单集总占用（bytes → 可读文本）
+    totalStorageText() {
+      const total = this.list.reduce(function (s, ep) {
+        return s + (ep.bytesTotal || 0);
+      }, 0);
+      if (total <= 0) return '';
+      if (total < 1024 * 1024) return Math.round(total / 1024) + ' KB';
+      if (total < 1024 * 1024 * 1024)
+        return (total / (1024 * 1024)).toFixed(1) + ' MB';
+      return (total / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    },
   },
   watch: {
     // [B-35] 下载进度/项变化 → 刷新「正在下载」区；完成（doneIds 变）→ 刷新已下载区
@@ -274,6 +292,13 @@ h1 {
   font-size: 32px;
   font-weight: 700;
   margin-bottom: 24px;
+  .storage-hint {
+    font-size: 14px;
+    font-weight: 500;
+    opacity: 0.4;
+    margin-left: 10px;
+    vertical-align: middle;
+  }
 }
 .empty {
   text-align: center;

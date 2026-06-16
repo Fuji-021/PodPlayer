@@ -29,6 +29,7 @@ import { registerPodcastDiscoverIpc } from './electron/podcastDiscover';
 import { createMenu } from './electron/menu';
 import { createTray } from '@/electron/tray';
 import { createTouchBar } from './electron/touchBar';
+import { createThumbar } from './electron/thumbar';
 import { createDockMenu } from './electron/dockMenu';
 import { registerGlobalShortcut } from './electron/globalShortcut';
 import { autoUpdater } from 'electron-updater';
@@ -489,6 +490,12 @@ class Background {
           this.trayEventEmitter,
           this.store
         );
+      }
+
+      // [T4] Windows 任务栏缩略图三键（快退15/播放·暂停/快进30）；
+      //   播放状态变化由 trayEventEmitter.updatePlayState 驱动，与托盘菜单同源。
+      if (isWindows) {
+        createThumbar(this.window, this.trayEventEmitter);
       }
 
       // init ipcMain

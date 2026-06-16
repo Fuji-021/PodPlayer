@@ -22,6 +22,7 @@ import {
   tickListenBatch,
   resetEpisodeListening,
 } from '@/utils/podcast/listening';
+import { removeDownload } from '@/utils/podcast/downloads';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
 import { Howl, Howler } from 'howler';
 import shuffle from 'lodash/shuffle';
@@ -1650,6 +1651,20 @@ export default class {
     }
     // 每次切到新单集，重置 listening tick 的 lastSec（让首秒不会被错判为跳跃）
     this._lastListenSec = -1;
+    // [T5] 切集：若上一集已听完且用户开启自动清理，在此删除其本地下载文件（此时文件已不在播放中，安全）。
+    //   仅当切到「不同单集」时触发，避免重播同集时误删。
+    if (this._lastListenCompleted) {
+      var _prevId = this._currentTrack && this._currentTrack.podcastEpisodeId;
+      var _newId = track && track.podcastEpisodeId;
+      if (
+        _prevId &&
+        _prevId !== _newId &&
+        store.state.settings &&
+        store.state.settings.autoCleanCompletedDownloads
+      ) {
+        removeDownload(_prevId).catch(function () {});
+      }
+    }
     // [B-31] 切集时重置广播缓存（让 5% 步进 / completed 在新集第一次 tick 就能触发广播）
     this._lastListenStep = -1;
     this._lastListenCompleted = false;

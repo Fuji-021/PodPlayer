@@ -238,6 +238,27 @@
         </div>
       </div>
 
+      <!-- [T5] 听完自动清理已下载单集 -->
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">听完自动清理下载</div>
+          <div class="description"
+            >单集听完后自动删除本地下载文件，释放存储空间</div
+          >
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="auto-clean-completed"
+              v-model="autoCleanCompletedDownloads"
+              type="checkbox"
+              name="auto-clean-completed"
+            />
+            <label for="auto-clean-completed"></label>
+          </div>
+        </div>
+      </div>
+
       <!-- [日志] 出问题时打开日志文件排查/发开发者；落 userData\logs\main.log -->
       <div v-if="isElectron" class="item">
         <div class="left">
@@ -696,6 +717,17 @@ export default {
     // [启动页] 二选一(home/library)。用全新 key startupPage(缺省 home)，**不复用旧 showLibraryDefault**——
     //   老 YesPlayMusic 用户那键多被持久化成 true(B-79 当年正因此强制首页)，复用会把他们误带进我的订阅。
     //   新键缺省即 home、保持现状；main.js onReady 读 settings.startupPage 决定是否 replace 到 /library。
+    autoCleanCompletedDownloads: {
+      get() {
+        return !!this.settings.autoCleanCompletedDownloads;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'autoCleanCompletedDownloads',
+          value,
+        });
+      },
+    },
     startupPageChoice: {
       get() {
         return this.settings.startupPage === 'library' ? 'library' : 'home';

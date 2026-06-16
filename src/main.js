@@ -74,6 +74,7 @@ import {
   registerDownloadListeners,
   loadAllDownloads,
   recoverDownloadsOnce,
+  cleanupCompletedDownloads,
 } from '@/utils/podcast/downloads';
 registerDownloadListeners();
 // [事故恢复·一次性] 实例改名后按"当前身份"修正下载绝对路径 + sha1 反查兜底（只跑一次）。
@@ -142,6 +143,25 @@ window.relinkDownloads = relinkDownloads;
 //   失败静默，绝不影响启动与既有播放。配置已由设置页 NAS 区块接管(window.podNas 临时入口已移除)。
 import { initNas } from '@/utils/podcast/nasSource';
 initNas().catch(() => {});
+
+// [T5] 启动后空闲期批量清理「已听完但仍保留下载」的单集（用户开启设置时）
+setTimeout(function () {
+  if (
+    store.state.settings &&
+    store.state.settings.autoCleanCompletedDownloads
+  ) {
+    cleanupCompletedDownloads()
+      .then(function (r) {
+        if (r && r.cleaned) {
+          store.dispatch(
+            'showToast',
+            '已自动清理 ' + r.cleaned + ' 个听完的下载文件'
+          );
+        }
+      })
+      .catch(function () {});
+  }
+}, 8000);
 
 // [F2 / B69-F2] 启动后空闲清理"预览孤儿"(发现页预览残留的 subscribed:false 零互动节目+单集)，
 //   防其长期堆积拖慢 DB。延迟到启动稳定后跑、低优先、失败静默；只删零互动的预览残留，

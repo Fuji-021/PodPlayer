@@ -262,6 +262,7 @@ export async function getDownloadedEpisodes() {
       ...ep,
       podcastTitle: (podMap[ep.podcastId] && podMap[ep.podcastId].title) || '',
       filePath: r.filePath,
+      bytesTotal: r.bytesTotal || 0, // [T6] 供下载页显示存储占用
       downloadedAt: r.addedAt || 0,
     });
   });
@@ -381,5 +382,36 @@ export async function recoverDownloadsOnce() {
     window.localStorage.setItem(FLAG, '1');
   } catch (e) {
     console.warn('[downloads] recoverDownloadsOnce 失败', e);
+  }
+}
+
+// [T5] 听完自动清理：扫描已下载单集中 episodeListenStats.completed=true 的条目，
+//   删除本地文件 + DB 记录。在启动期/切集后调用（非播放中），安全无副作用。
+//   返回 { cleaned: N }。
+export async function cleanupCompletedDownloads() {
+  try {
+    const rows = await db.episodeDownloads.toArray();
+    const done = rows.filter(function (r) {
+      return r && r.status === 'done';
+    });
+    if (!done.length) return { cleaned: 0 };
+    const ids = done.map(function (r) {
+      return r.id;
+    });
+    const stats = await db.episodeListenStats.bulkGet(ids).catch(function () {
+      return [];
+    });
+    let cleaned = 0;
+    for (let i = 0; i < done.length; i++) {
+      const stat = stats[i];
+      if (stat && stat.completed) {
+        const res = await removeDownload(done[i].id);
+        if (!res || res.ok !== false) cleaned++;
+      }
+    }
+    return { cleaned: cleaned };
+  } catch (e) {
+    console.warn('[downloads] cleanupCompletedDownloads 失败', e);
+    return { cleaned: 0 };
   }
 }
