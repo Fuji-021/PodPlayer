@@ -109,7 +109,19 @@ const exitAskWithoutMac = (e, win) => {
     });
 };
 
-const client = require('discord-rich-presence')('818936529484906596');
+// [启动噪声·2026-06-16] Discord 没开时 discord-rich-presence 连不上，会在内部 EventEmitter 上
+//   emit('error')；无 'error' 监听 → Node 抛 "Unhandled 'error' event" → 每次启动一条
+//   unhandledRejection(已被审P1-1 主进程兜底成一条 log，但仍是噪声)。挂个静默 'error' 监听吃掉;
+//   创建本身也 try/catch 兜底(失败时 client=null，下方两个 presence 调用走守卫 no-op)。
+let client = null;
+try {
+  client = require('discord-rich-presence')('818936529484906596');
+  if (client && typeof client.on === 'function') {
+    client.on('error', () => {});
+  }
+} catch (e) {
+  log('[discord] rich-presence 初始化失败(忽略)：' + (e && e.message));
+}
 
 /**
  * Make data a Buffer.
@@ -273,6 +285,7 @@ export function initIpcMain(win, store, trayEventEmitter) {
   });
 
   ipcMain.on('playDiscordPresence', (event, track) => {
+    if (!client) return; // [启动噪声] client 初始化失败时 no-op
     client.updatePresence({
       details: track.name + ' - ' + track.ar.map(ar => ar.name).join(','),
       state: track.al.name,
@@ -286,6 +299,7 @@ export function initIpcMain(win, store, trayEventEmitter) {
   });
 
   ipcMain.on('pauseDiscordPresence', (event, track) => {
+    if (!client) return; // [启动噪声] client 初始化失败时 no-op
     client.updatePresence({
       details: track.name + ' - ' + track.ar.map(ar => ar.name).join(','),
       state: track.al.name,
