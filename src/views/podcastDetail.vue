@@ -39,21 +39,24 @@
         </div>
       </div>
       <div class="meta">
-        <div class="t">{{ podcast.title }}</div>
+        <!-- [B-50] 标题行：节目名左、订阅按钮右（未订阅时才显示） -->
+        <div class="title-row">
+          <div class="t">{{ podcast.title }}</div>
+          <!-- [B67-BUG-2] 骨架载入态(_loading)先不显示订阅按钮(此时 feedUrl 还是哨兵) -->
+          <button
+            v-if="
+              podcast.subscribed === false &&
+              !podcast._loading &&
+              !podcast._loadError
+            "
+            class="sub-this-btn"
+            :style="{ background: subBtnColor }"
+            @click="subscribeThis"
+          >
+            <svg-icon icon-class="square-plus" />订阅到我的
+          </button>
+        </div>
         <div class="a">{{ podcast.author }}</div>
-        <!-- [B-50] 预览(未订阅)节目：点卡片进来=试听浏览，未自动订阅 → 显示订阅按钮 -->
-        <!-- [B67-BUG-2] 骨架载入态(_loading)先不显示订阅按钮(此时 feedUrl 还是哨兵) -->
-        <button
-          v-if="
-            podcast.subscribed === false &&
-            !podcast._loading &&
-            !podcast._loadError
-          "
-          class="sub-this-btn"
-          @click="subscribeThis"
-        >
-          <svg-icon icon-class="square-plus" />订阅到我的
-        </button>
         <div class="d">{{ cleanDescription }}</div>
       </div>
     </div>
@@ -301,6 +304,7 @@ import {
   removeDownload,
 } from '@/utils/podcast/downloads';
 import { stripHtmlToText } from '@/utils/podcast/sanitizeHtml';
+import { getCoverColor } from '@/utils/podcast/coverColor';
 import { getEpisodeCache, setEpisodeCache } from '@/utils/podcast/episodeCache';
 import { prefetchShownotesForEpisodes } from '@/utils/podcast/shownotesEnrich';
 import {
@@ -333,6 +337,8 @@ export default {
       epDisplayLimit: 50,
       // [NAS] 本档在 NAS 上已归档的单集 guid 集合(连上才非空；空=不显示 wifi 标识)
       nasEpGuids: new Set(),
+      // 订阅按钮底色：加载时用主题色兜底，封面取色后换成封面主色调
+      subBtnColor: 'var(--color-primary)',
     };
   },
   computed: {
@@ -359,6 +365,19 @@ export default {
         if (v === '__preview__') this.startPreview();
         else if (v) this.load();
       },
+    },
+    // 封面主色 → 订阅按钮底色（coverUrl 有值时提取，路由切换时重算）
+    podcast(newVal) {
+      const url = newVal && newVal.coverUrl;
+      if (!url || url === this._subBtnColorSrc) return;
+      this._subBtnColorSrc = url;
+      getCoverColor(url)
+        .then(hsl => {
+          if (hsl && this._subBtnColorSrc === url) {
+            this.subBtnColor = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
+          }
+        })
+        .catch(() => {});
     },
     // [B-31] 监听播放器广播：若广播的 episodeId 在自己列表里 → 重读那一集 listenStats
     '$store.state.podcastListening.listenTick'() {
@@ -1006,29 +1025,39 @@ export default {
     // [裁切修] 原 overflow:hidden 会裁掉 .sub-this-btn 的 :hover scale 反馈(按钮左缘贴 .meta 边)；
     //   改 min-width:0：同样防 flex 被长标题撑破，但不裁切放大动画。
     min-width: 0;
+    // 标题行：节目名（flex:1 自然换行）+ 订阅按钮右对齐
+    .title-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
     .t {
+      flex: 1;
+      min-width: 0;
       font-size: 28px;
       font-weight: 700;
-      margin-bottom: 8px;
     }
     .a {
       opacity: 0.7;
       margin-bottom: 12px;
     }
-    // [B-50] 预览节目的"订阅到我的"按钮
+    // [B-50] 预览节目的"订阅到我的"按钮（与标题同行，底色=封面主色）
     .sub-this-btn {
+      flex-shrink: 0;
+      margin-top: 5px; // 对齐 28px 标题第一行视觉中心
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      margin-bottom: 12px;
-      padding: 8px 16px;
+      padding: 7px 14px;
       border-radius: var(--radius-button);
-      background: var(--color-primary);
-      color: var(--color-primary-bg);
+      background: var(--color-primary); // 兜底；封面取色后被 :style 覆盖
+      color: #fff;
       font-weight: 600;
       font-size: 13px;
       cursor: pointer;
-      transition: 0.15s;
+      transition: transform 0.15s, background 0.4s;
+      white-space: nowrap;
       .svg-icon {
         width: 14px;
         height: 14px;
