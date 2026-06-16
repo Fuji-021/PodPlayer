@@ -84,7 +84,8 @@ export function getPodcast(id) {
 //   "我的订阅"/发现页用 getSubscribedPodcasts 过滤 subscribed===false，所以它不显示在订阅里；
 //   重新订阅时 subscribeByRssUrl put 覆盖回 subscribed:true。（取消订阅频率低，保留数据量可控）
 export async function deletePodcast(id) {
-  await db.podcasts.update(id, { subscribed: false });
+  // [T1 P1-b] nasRemoveAt 记录取消订阅时间，reconcileNas 满 7 天宽限后删 NAS 档（需用户开启且 armed）
+  await db.podcasts.update(id, { subscribed: false, nasRemoveAt: Date.now() });
 }
 
 // [F2 / B69-F2] 预览孤儿清理：发现页"预览"(previewByRssUrl)会把 subscribed:false 节目 +

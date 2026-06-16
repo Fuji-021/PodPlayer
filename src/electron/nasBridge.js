@@ -142,6 +142,18 @@ function authPatch(c, path, body) {
     validateStatus: s => s >= 200 && s < 300,
   });
 }
+// [T1 P1-b] 删除类请求；调用方须先完成四重保险校验才能发出。本文件主进程域，禁可选链 ?.。
+function authDelete(c, path) {
+  return axios.delete(c.baseUrl + path, {
+    timeout: API_TIMEOUT,
+    headers: {
+      Authorization: 'Bearer ' + c.token,
+      'User-Agent': UA,
+      Accept: 'application/json',
+    },
+    validateStatus: s => s >= 200 && s < 300,
+  });
+}
 // [NAS 托管·P0] 取库的首个 folder（创建播客需 folderId+path）。版本差异：folders 可能在
 //   顶层或 library 下，逐层判（禁 ?.）。无则返回 null。
 async function getFirstFolder(c) {
@@ -262,6 +274,57 @@ async function resolveStream(c, podcastId, guid, audioUrl) {
   return streamUrl(c, itemId, ino);
 }
 
+// [T1 P1-a] 确保 feedUrl 在 NAS 上已托管(存在则 PATCH 确认 autoDownload，不存在则 POST 创建)。
+//   从 nas:handoffSubscription 提取，供 nas:ensureManaged(P1 对账) + 原 handoff 共用。
+//   本文件主进程域，禁可选链 ?.（全用 && 守卫）。
+async function ensureManaged(c, feedUrl, title) {
+  const items = await ensureItems(c);
+  let itemId = items[normFeed(feedUrl)] || '';
+  let created = false;
+  if (!itemId) {
+    const folder = await getFirstFolder(c);
+    if (!folder || !folder.id) return { error: 'no-folder' };
+    const safe = sanitizeName(title) || normFeed(feedUrl).slice(0, 64);
+    const folderPath = folder.fullPath
+      ? String(folder.fullPath).replace(/[\\/]+$/, '') + '/' + safe
+      : '';
+    const body = {
+      libraryId: c.libraryId,
+      folderId: folder.id,
+      path: folderPath,
+      media: {
+        metadata: { feedUrl: feedUrl, title: title },
+        autoDownloadEpisodes: true,
+        maxNewEpisodesToDownload: 100,
+        maxEpisodesToKeep: 100,
+      },
+    };
+    const res = await authPost(c, '/api/podcasts', body);
+    itemId = res && res.data && res.data.id ? res.data.id : '';
+    created = true;
+    clearCache();
+  }
+  if (!itemId) return { ok: true, created: created, queued: 0 };
+  await authPatch(c, '/api/items/' + itemId + '/media', {
+    lastEpisodeCheck: 1,
+    autoDownloadEpisodes: true,
+    maxNewEpisodesToDownload: 100,
+    maxEpisodesToKeep: 100,
+  });
+  let queued = 0;
+  try {
+    const ck = await authGet(c, '/api/podcasts/' + itemId + '/checknew?limit=100');
+    const d = (ck && ck.data) || {};
+    if (Array.isArray(d.episodes)) queued = d.episodes.length;
+    else if (typeof d.numNew === 'number') queued = d.numNew;
+  } catch (e) {
+    // checknew 失败不致命：autoDownload 仍会追新集，下次重订/对账可补
+  }
+  return created
+    ? { ok: true, created: true, itemId: itemId, queued: queued }
+    : { ok: true, updated: true, itemId: itemId, queued: queued };
+}
+
 export function registerNasIpc() {
   // 状态(不回传 token，只回 hasToken)；渲染端据此判 enabled + 显示当前连接名/库名。
   ipcMain.handle('nas:getStatus', () => {
@@ -333,71 +396,52 @@ export function registerNasIpc() {
     }
   });
 
-  // [NAS 托管·P0] 订阅成功后把该档托管到 NAS：
-  //   已存在该 feedUrl → 幂等 PATCH /api/items/{id}/media 确保 autoDownload 开 + 上限 100；
-  //   不存在 → 取 folder → POST /api/podcasts 创建(autoDownloadEpisodes:true，靠 ABS 自动抓最近 100 集)。
-  //   **P0 走路 A：不调 download-episodes、不调任何 DELETE**（破坏面最小）。未就绪/出错一律返回对象、绝不抛，
-  //   属订阅后旁路、失败不影响订阅与播放。⚠️ POST body 形态/folder 解析/PATCH 权限需本机 ABS 实测后放量。
+  // [NAS 托管·P0] 订阅成功后旁路托管(现委托 ensureManaged 共用逻辑)。
   ipcMain.handle('nas:handoffSubscription', async (_e, args) => {
     const c = getCfg();
     if (!ready(c)) return { skipped: 'no-nas' };
     const a = args || {};
     const feedUrl = String(a.feedUrl || '');
-    const title = String(a.title || '');
+    if (!feedUrl) return { error: 'no-feedurl' };
+    try {
+      return await ensureManaged(c, feedUrl, String(a.title || ''));
+    } catch (e) {
+      return { error: String((e && e.message) || e) };
+    }
+  });
+
+  // [T1 P1-a] 对账专用托管：reconcileNas 为每个已订阅节目调一次，确保 NAS 上已建档+autoDownload。
+  //   与 handoffSubscription 共用 ensureManaged 逻辑，幂等安全。
+  ipcMain.handle('nas:ensureManaged', async (_e, args) => {
+    const c = getCfg();
+    if (!ready(c)) return { skipped: 'no-nas' };
+    const a = args || {};
+    const feedUrl = String(a.feedUrl || '');
+    if (!feedUrl) return { skipped: 'no-feedurl' };
+    try {
+      return await ensureManaged(c, feedUrl, String(a.title || ''));
+    } catch (e) {
+      return { error: String((e && e.message) || e) };
+    }
+  });
+
+  // [T1 P1-b] 把 feedUrl 对应的 NAS 档删除。
+  //   四重保险(渲染端全检后才发，主进程再校一次 armed)：
+  //   ① removeEnabled(渲染端校) ② scope=local(渲染端校) ③ armed(渲染+主进程双校) ④ 查不到即 skip。
+  ipcMain.handle('nas:removeItem', async (_e, args) => {
+    const a = args || {};
+    if (!a.armed) return { dry_run: true }; // ③ 保险：未武装，干跑
+    const c = getCfg();
+    if (!ready(c)) return { skipped: 'no-nas' };
+    const feedUrl = String(a.feedUrl || '');
     if (!feedUrl) return { error: 'no-feedurl' };
     try {
       const items = await ensureItems(c);
-      let itemId = items[normFeed(feedUrl)] || '';
-      let created = false;
-      if (!itemId) {
-        // 不存在 → 取 folder → POST 创建
-        const folder = await getFirstFolder(c);
-        if (!folder || !folder.id) return { error: 'no-folder' };
-        const safe = sanitizeName(title) || normFeed(feedUrl).slice(0, 64);
-        const path = folder.fullPath
-          ? String(folder.fullPath).replace(/[\\/]+$/, '') + '/' + safe
-          : '';
-        const body = {
-          libraryId: c.libraryId,
-          folderId: folder.id,
-          path: path,
-          media: {
-            metadata: { feedUrl: feedUrl, title: title },
-            autoDownloadEpisodes: true,
-            maxNewEpisodesToDownload: 100,
-            maxEpisodesToKeep: 100,
-          },
-        };
-        const res = await authPost(c, '/api/podcasts', body);
-        itemId = res && res.data && res.data.id ? res.data.id : '';
-        created = true;
-        clearCache(); // 新建后让 itemsCache 失效，下次 ensureItems 重拉
-      }
-      if (!itemId) return { ok: true, created: created, queued: 0 };
-      // [关键·真正触发下载] 仅 autoDownloadEpisodes:true 只追"未来新集"、不回填历史(=之前 ABS 建了
-      //   档却 0 下载的真因)。要真下最近 100 集：把 lastEpisodeCheck 置 1(全部历史集都当"新")再
-      //   GET checknew?limit=100 触发抓取入队。与用户 ABS 看门狗 requeue() 同机制、其 ABS 已实测可用。
-      await authPatch(c, '/api/items/' + itemId + '/media', {
-        lastEpisodeCheck: 1,
-        autoDownloadEpisodes: true,
-        maxNewEpisodesToDownload: 100,
-        maxEpisodesToKeep: 100,
-      });
-      let queued = 0;
-      try {
-        const ck = await authGet(
-          c,
-          '/api/podcasts/' + itemId + '/checknew?limit=100'
-        );
-        const d = (ck && ck.data) || {};
-        if (Array.isArray(d.episodes)) queued = d.episodes.length;
-        else if (typeof d.numNew === 'number') queued = d.numNew;
-      } catch (e) {
-        // checknew 失败不致命：autoDownload 仍会追新集，下次重订/对账可补
-      }
-      return created
-        ? { ok: true, created: true, itemId: itemId, queued: queued }
-        : { ok: true, updated: true, itemId: itemId, queued: queued };
+      const itemId = items[normFeed(feedUrl)] || '';
+      if (!itemId) return { ok: true, not_found: true }; // ④ NAS 上查不到，skip
+      await authDelete(c, '/api/items/' + itemId);
+      clearCache();
+      return { ok: true, itemId: itemId };
     } catch (e) {
       return { error: String((e && e.message) || e) };
     }

@@ -6,6 +6,9 @@
 //
 // 注入点：Player._getAudioSource 的②级（①本地 file:// / ③CDN 两级原文不动）。
 
+// [T1 P1] 订阅对账：读库用
+import { getAllPodcasts, updatePodcast } from './db';
+
 const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
 const ipcRenderer =
@@ -62,8 +65,16 @@ export async function initNas() {
   if (enabled) {
     probe();
     if (!heartbeat) {
-      heartbeat = setInterval(() => {
-        if (enabled) probe();
+      heartbeat = setInterval(function () {
+        if (!enabled) return;
+        probe();
+        // [T1 P1] 每日对账：每 5 分钟检查一次，但满 24h 才真正跑
+        try {
+          var lastR = Number(window.localStorage.getItem('nasLastReconcileAt') || 0);
+          if (Date.now() - lastR > 24 * 60 * 60 * 1000) {
+            reconcileNas({ trigger: 'daily' }).catch(function () {});
+          }
+        } catch (e) {}
       }, 5 * 60 * 1000);
     }
   } else {
@@ -81,11 +92,16 @@ function probe() {
     return Promise.resolve(false);
   }
   if (probing) return probing;
+  var wasAlive = nasAlive; // [T1 P1-a] 捕获当前状态，检测 false→true 恢复
   probing = ipcRenderer
     .invoke('nas:probe')
     .then(r => {
       nasAlive = !!(r && r.ok);
       lastProbe = Date.now();
+      if (!wasAlive && nasAlive) {
+        // NAS 从断线恢复 → 触发一次对账（fire-and-forget）
+        reconcileNas({ trigger: 'recovery' }).catch(function () {});
+      }
       return nasAlive;
     })
     .catch(() => {
@@ -323,4 +339,125 @@ export async function handoffToNas(feedUrl, title) {
   } catch (e) {
     return { error: String((e && e.message) || e) };
   }
+}
+
+// ===== [T1 NAS P1] 声明式对账 =====
+
+// 读"取消订阅后自动从 NAS 删档"开关（默认关；key 确为 'settings'，同 service.js nasHandoffOn 同源）。
+function nasRemoveOn() {
+  try {
+    var s = JSON.parse(window.localStorage.getItem('settings') || '{}');
+    return s.nasRemoveEnabled === true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// 读"设备 scope"（local=只在本设备执行删档，shared=多设备共享不删；默认 local）。
+function nasDeviceScope() {
+  try {
+    var s = JSON.parse(window.localStorage.getItem('settings') || '{}');
+    var v = s.nasDeviceScope;
+    return v === 'shared' ? 'shared' : 'local';
+  } catch (e) {
+    return 'local';
+  }
+}
+
+// 私有并发限制器：对 items 数组最多 limit 个并发地执行 fn，供 reconcileNas 使用。
+// 注：不从 service.js 导入（会形成循环依赖），此处单独维护一份轻量实现。
+function runLimited(items, limit, fn) {
+  if (!items || !items.length) return Promise.resolve([]);
+  var results = [];
+  var idx = 0;
+  function next() {
+    if (idx >= items.length) return Promise.resolve();
+    var item = items[idx++];
+    return Promise.resolve()
+      .then(function () {
+        return fn(item);
+      })
+      .then(function (r) {
+        results.push(r);
+        return next();
+      })
+      .catch(function () {
+        results.push(null);
+        return next();
+      });
+  }
+  var workers = [];
+  var n = Math.min(limit, items.length);
+  for (var i = 0; i < n; i++) {
+    workers.push(next());
+  }
+  return Promise.all(workers).then(function () {
+    return results;
+  });
+}
+
+// [T1 P1] 声明式对账主函数：
+//   对已订阅节目批量 ensureManaged；对宽限期已过的取消订阅节目批量 removeItem（需四重保险）。
+//   触发时机：① NAS 首次/恢复上线(probe false→true) ② 每日心跳 ③ 手动调用。
+export async function reconcileNas(opts) {
+  if (!isNasEnabled() || !ipcRenderer) return { skipped: 'no-nas' };
+  var alive;
+  try {
+    alive = await ensureProbed();
+  } catch (e) {
+    return { skipped: 'probe-error' };
+  }
+  if (!alive) return { skipped: 'nas-down' };
+  var pods;
+  try {
+    pods = await getAllPodcasts();
+  } catch (e) {
+    return { error: 'db' };
+  }
+  if (!pods || !pods.length) return { ok: true, ensured: 0, removed: 0 };
+  var scope = nasDeviceScope();
+  var removeOn = nasRemoveOn();
+  var now = Date.now();
+  var GRACE_MS = 7 * 24 * 60 * 60 * 1000; // 7 天宽限
+  var ensure = [];
+  var remove = [];
+  for (var i = 0; i < pods.length; i++) {
+    var p = pods[i];
+    if (!p || !p.id) continue;
+    var subscribed = p.subscribed !== false;
+    if (!subscribed) {
+      // 已取消订阅：有 nasRemoveAt 且超 7 天宽限才入删档桶
+      if (!p.nasRemoveAt) continue;
+      if (now - p.nasRemoveAt < GRACE_MS) continue;
+      remove.push({ feedUrl: p.id });
+      continue;
+    }
+    ensure.push({ feedUrl: p.id, title: p.title || '' });
+  }
+  // 批量确保托管（最多 3 并发，幂等安全）
+  await runLimited(ensure, 3, function (it) {
+    return ipcRenderer.invoke('nas:ensureManaged', it).catch(function () {});
+  });
+  // 批量删档（scope=local + removeOn + armed 四重保险）
+  if (scope === 'local' && removeOn && remove.length) {
+    var armed = false;
+    try {
+      armed = window.localStorage.getItem('nasDestructiveArmed') === 'true';
+    } catch (e) {}
+    await runLimited(remove, 2, function (it) {
+      return ipcRenderer
+        .invoke('nas:removeItem', { feedUrl: it.feedUrl, armed: armed })
+        .then(function (r) {
+          // 真正删成功后清 nasRemoveAt，让本档不再出现在 remove 桶
+          if (r && r.ok && !r.dry_run && !r.not_found) {
+            return updatePodcast(it.feedUrl, { nasRemoveAt: null }).catch(function () {});
+          }
+        })
+        .catch(function () {});
+    });
+  }
+  try {
+    window.localStorage.setItem('nasLastReconcileAt', String(now));
+  } catch (e) {}
+  return { ok: true, ensured: ensure.length, removed: remove.length, scope: scope };
 }

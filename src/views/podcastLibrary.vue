@@ -278,6 +278,7 @@ import {
   prefetchNasPodcast,
 } from '@/utils/podcast/nasSource';
 import { ensureTinyCover } from '@/utils/podcast/coverHalo';
+import { showNotification } from '@/utils/podcast/notify';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 // [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
@@ -564,6 +565,7 @@ export default {
     },
     // [B-80] 后台静默自动刷新订阅(无打扰)：并发重抓所有 RSS，diff 新单集入库→更新角标。
     //   10 分钟节流(每次进页都跑会狂抓)；无 toast、无转圈，发现新集只让卡片角标静静出现。
+    // [T3] 有基线(列表非空)时对比刷新前后 newCount 合计差，差值>0 则弹桌面通知。
     async autoRefresh() {
       const KEY = 'podcastLibrary.lastAutoRefresh';
       const last = Number(localStorage.getItem(KEY) || 0);
@@ -571,9 +573,25 @@ export default {
       if (this._autoRefreshing) return;
       this._autoRefreshing = true;
       localStorage.setItem(KEY, String(Date.now()));
+      const countBefore = this.list.length
+        ? this.list.reduce(function (s, p) {
+            return s + (p.newCount || 0);
+          }, 0)
+        : -1; // 列表为空 → 无基线，跳过通知
       try {
         await refreshAllSubscriptions();
         await this.loadPodcasts(); // 重读，含更新后的 newCount → 角标自动出现
+        if (countBefore >= 0) {
+          const countAfter = this.list.reduce(function (s, p) {
+            return s + (p.newCount || 0);
+          }, 0);
+          if (countAfter > countBefore) {
+            showNotification(
+              'PodPlayer',
+              '发现 ' + (countAfter - countBefore) + ' 集新单集'
+            );
+          }
+        }
       } catch (e) {
         // 静默失败，不打扰用户(下次进页节流过期后会再试)
       } finally {

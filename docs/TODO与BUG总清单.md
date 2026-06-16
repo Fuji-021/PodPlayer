@@ -118,12 +118,12 @@
 - 🟡🔜 **NAS 订阅托管 + 智能回收** — 声明式 + 对账模型：订阅成功自动托管到 ABS/NAS(autoDownload + 下最近100期)、6 个月未听冷藏(删 NAS 单集留最近1集+所有收藏)、取消订阅 7 天宽限后删整档、首连新 NAS 差异对账(只动我订阅过的)。执行提示词=`docs/NAS订阅托管-执行提示词.md`、设计=`docs/NAS订阅托管方案.md`。
   - **✅ P0 已落地并真机验证 + 已并 master（2026-06-16）**：订阅成功 fire-and-forget 托管到 NAS（已存在 PATCH / 不存在 POST 创建）+ 无 NAS 全程降级 + `settings.nasHandoffEnabled` 可回退开关。**真正触发下载靠** `PATCH .../media {lastEpisodeCheck:1}` + `GET .../checknew?limit=100`（仅 autoDownloadEpisodes 不回填历史=之前"建档却 0 下载"的真因；checknew 与用户 ABS 看门狗 requeue 同机制）。真机复测 ABS 下载队列 94 集在下 ✓;POST body/folder/token 权限均通过。`nasBridge.js`/`nasSource.js`/`service.js`/`initLocalStorage.js`/`settings.vue`。
   - **终检通过**：4 对抗核验 SAFE-TO-MERGE(含**密钥未泄露**确认:全分支 grep `eyJ`/JWT 0 命中)、eslint 0。非阻断记账(留 P1 加固)：重订阅 checknew 幂等节流、大 OPML 批量 handoff 限流、POST body 随 ABS 版本浮动。
-  - **P1+ 待做(规格已备 `docs/NAS订阅托管-P1规格.md`·待 P0 实测过后落地)**：声明式对账(启动/恢复/每日/操作后即时·断联跳过恢复全量)、取消订阅 7 天宽限删整档(DELETE ?hard=1)、6 个月冷藏、多设备「仅本机/共享」开关、首连差异对账、README 教程。破坏性四闸=feature-flag(默认关)+宽限+多设备 scope(默认 local)+`nasDestructiveArmed` dry-run gating(默认关)；时间戳存 `podcasts.nasRemoveAt`(非索引免升版本)；契约收口于抽取的 `ensureManaged()`(随 P0 实测对齐一处)。
-- 🟡 **NAS P3 中途掉线续播** — 代码已落地(并入 master 3b1db90),**待真机断网验收**(≤5s 续 CDN/误差<2s + NAS 关闭态核心回归)。
-- 🔴 桌面通知(新单集/下载完成,须合 Windows 通知框架)。
-- 🔴 托盘菜单 + 任务栏缩略图三键(上一首/暂停/下一首)。
-- 🔴 听完自动清理已下载单集释放空间。
-- 🔴 我的下载页显示存储占用(仅提示)。
+  - **🟡 P1 核心落地（2026-06-16，feature/review-fixes）**：① `ensureManaged()` 从 handoffSubscription 提取 → 供 P0 和 P1 共用；② `nas:ensureManaged` IPC（P1 对账专用幂等 ensure）；③ `nas:removeItem` IPC（四重保险：armed flag + ready + 查不到即 skip）；④ `reconcileNas()` 渲染端声明式对账（ensure bucket 并发 3 + remove bucket 并发 2）；⑤ probe() false→true 触发对账 + 每日心跳；⑥ `deletePodcast` 写 `nasRemoveAt`、重订阅清零；⑦ settings.vue 新增「从 NAS 删档」开关（默认关+红色警告）。冷藏(P1-e)已按规格取消，容量管理交 NAS 侧 watchdog。**P1-d 放量**：真机测试 ensure 无误后在 localStorage 设 `nasDestructiveArmed=true` 解锁真实删档。
+- 🟡 **NAS P3 中途掉线续播** — 代码已落地(并入 master 3b1db90, 已 merge 进 feature/review-fixes),**待真机断网验收**(≤5s 续 CDN/误差<2s + NAS 关闭态核心回归)。
+- ✅ **桌面通知(新单集/下载完成)** — 2026-06-16 落地：`notifications.js`(主进程 IPC 桥) + `notify.js`(渲染端 helper) + `autoRefresh()` 前后 newCount diff 触发新单集通知 + podcastDownload.js 下载完成直接 `new Notification()` 推 Toast；Windows Toast / 系统通知关闭时静默降级。
+- ✅ 任务栏缩略图三键（快退15/播放暂停/快进30）— 2026-06-16 落地，commit `677543a`。
+- ✅ 听完自动清理已下载单集释放空间 — 2026-06-16 落地，commit `677543a`。
+- ✅ 我的下载页显示存储占用（仅提示）— 2026-06-16 落地，commit `677543a`。
 - ✅ **播放 bar 进度条用在播单集封面主色**(2026-06-16,**进度条配色 v1.0**,落地旧账 B-19)：**仅播放 bar**——已播段=`getCoverColor` 封面主色(`coverFillColor`+CSS 变量 `--prog-fill`,取不到回退 #335eea);**标记点改用封面主色的撞色(互补色 `markContrastColor`)**——蓝封面会算出金标、永不蓝配蓝(用户定,初版用固定蓝被否)。**沉浸页按用户要求保持上一轮原样不动**(进度条仍 `--imm-accent`、标记点仍 `markColor`;曾误改已 `git diff` 逐行还原)。Dev DevTools 实测(bar coverFill=hsl(47,46,50)/markContrast=hsl(227,85,55);沉浸 process=rgba(38,38,42,.9) 原值)、eslint 0。详见主文档同名 round。
 
 ### P2

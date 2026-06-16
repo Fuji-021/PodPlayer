@@ -65,6 +65,7 @@ export async function subscribeByRssUrl(feedUrl, source = 'manual') {
         ...podcast,
         source: existing.source || source,
         subscribed: true,
+        nasRemoveAt: null, // [T1 P1-b] 重新订阅：清除宽限期标记，阻止对账误删
       }
     : { ...podcast, source, subscribed: true };
   await upsertPodcast(merged);

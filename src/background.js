@@ -26,6 +26,8 @@ import { registerPodcastIpc } from './electron/podcastFetch';
 import { registerNasIpc } from './electron/nasBridge';
 import { registerPodcastDownloadIpc } from './electron/podcastDownload';
 import { registerPodcastDiscoverIpc } from './electron/podcastDiscover';
+// [T3] 桌面通知：新单集发现 / 下载完成 → Electron Notification
+import { initNotifications } from './electron/notifications';
 import { createMenu } from './electron/menu';
 import { createTray } from '@/electron/tray';
 import { createTouchBar } from './electron/touchBar';
@@ -505,6 +507,8 @@ class Background {
       registerPodcastIpc();
       // [NAS] 注册 NAS 音源桥 IPC（未配置/未启用时所有 handler 返回未就绪，零副作用）
       registerNasIpc();
+      // [T3] 注册桌面通知 IPC（新单集/下载完成 → Electron Notification）
+      initNotifications();
       // [B-31] 注册 podcast 下载相关 IPC（流式下载 + 进度推送 + 删除）
       registerPodcastDownloadIpc(() => this.window);
       // [B-39] 注册首页发现 IPC（热门榜单 + Apple id→feedUrl）

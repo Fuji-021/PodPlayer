@@ -9,7 +9,7 @@
 //   Node 原生 https.get 默认就不读代理环境变量，正好满足「开/不开代理都能下」。
 //
 // 进度 / 完成 / 失败通过 webContents.send 推回 renderer。
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, Notification } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -121,7 +121,7 @@ function streamGet(url, redirects = 0) {
 export function registerPodcastDownloadIpc(getWindow) {
   // 启动下载
   ipcMain.handle('podcast:download:start', async (_e, payload) => {
-    const { episodeId, feedUrl, guid, audioUrl } = payload || {};
+    const { episodeId, feedUrl, guid, audioUrl, title } = payload || {};
     console.log('[download] start request', { episodeId, audioUrl });
     if (!episodeId || !audioUrl) {
       return { ok: false, error: '缺少 episodeId / audioUrl' };
@@ -150,6 +150,7 @@ export function registerPodcastDownloadIpc(getWindow) {
         filePath,
         canceled: false,
         settled: false,
+        title: String(title || ''),
       };
       activeTasks.set(episodeId, task);
 
@@ -229,6 +230,14 @@ export function registerPodcastDownloadIpc(getWindow) {
             bytesTotal: done,
           });
         }
+        // [T3] 下载完成桌面通知
+        try {
+          var notif = new Notification({
+            title: task.title || '下载完成',
+            body: '单集已保存到本地',
+          });
+          notif.show();
+        } catch (e) {}
       });
       res.pipe(writeStream);
       return { ok: true, filePath };

@@ -130,6 +130,26 @@
           </div>
         </div>
       </div>
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">取消订阅后从 NAS 删档</div>
+          <div class="description" style="color: #e74c3c">
+            ⚠️ 危险：取消订阅满 7 天后自动删除 NAS 上该节目及其所有下载文件（需同时在
+            localStorage 设置 <code>nasDestructiveArmed=true</code> 才真正执行）。确认了解风险再开启。
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="nas-remove-enable"
+              v-model="nasRemoveEnabled"
+              type="checkbox"
+              name="nas-remove-enable"
+            />
+            <label for="nas-remove-enable"></label>
+          </div>
+        </div>
+      </div>
       <div v-if="isElectron && activeProfile" class="item">
         <div class="left">
           <div class="title">
@@ -414,7 +434,7 @@
           >地址
           <input
             v-model="nasDialog.baseUrl"
-            placeholder="http://192.168.2.108:13378/audiobookshelf"
+            placeholder="http://192.168.X.XXX:13378/audiobookshelf"
           />
         </label>
         <label class="nd-field"
@@ -710,6 +730,18 @@ export default {
       set(value) {
         this.$store.commit('updateSettings', {
           key: 'nasHandoffEnabled',
+          value,
+        });
+      },
+    },
+    // [T1 P1-c] 取消订阅后自动从 NAS 删档（默认关；需 armed 且 scope=local 才真执行，见 reconcileNas）。
+    nasRemoveEnabled: {
+      get() {
+        return !!this.settings.nasRemoveEnabled;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'nasRemoveEnabled',
           value,
         });
       },
