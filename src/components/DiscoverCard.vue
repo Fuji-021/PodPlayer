@@ -298,8 +298,11 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+// [滚动性能] contain:layout 把每张卡片的布局计算范围隔离在内部，
+//   滚动时不触发全局 layout 回流。
 .disc-card {
   cursor: pointer;
+  contain: layout;
   // [B-48 第2/3点] hover 放大放到 cover-box（整框上浮放大），配合 cover-wrap overflow:hidden →
   //   遮罩(loading/ctx-overlay) inset:0 始终盖满封面，不再"小一圈"（与我的订阅同逻辑）
   &:hover .cover-box {
@@ -319,6 +322,8 @@ export default {
   transition: transform 0.25s;
 }
 // 封面虚化光晕（在 cover-wrap 之外，可超出不被裁切）。随 cover-box 一起 hover 放大。
+// [滚动性能] will-change:transform → 进页即提升为 GPU 合成层；滚动时不再 CPU 光栅化 blur，
+//   仅做 GPU 合成，消除 filter:blur 导致的逐帧重绘卡顿。
 .cover-shadow {
   position: absolute;
   left: 0;
@@ -332,6 +337,7 @@ export default {
   transform: scale(0.92);
   z-index: 0;
   transition: filter 0.25s;
+  will-change: transform;
 }
 .cover-wrap {
   position: relative;

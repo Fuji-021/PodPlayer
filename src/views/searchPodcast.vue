@@ -375,6 +375,7 @@ export default {
 // 本地已订阅卡片（含虚化光晕，与发现页一致观感）
 .local-card {
   cursor: pointer;
+  contain: layout;
   &:hover .lc-cover-box {
     transform: translateY(-4px) scale(1.02);
   }
@@ -396,6 +397,7 @@ export default {
     filter: blur(16px) opacity(0.45);
     transform: scale(0.92);
     z-index: 0;
+    will-change: transform;
   }
   .lc-cover {
     position: relative;

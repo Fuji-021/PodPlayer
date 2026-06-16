@@ -1405,6 +1405,7 @@ export default {
 }
 .podcast-card {
   cursor: pointer;
+  contain: layout;
   transition: 0.2s;
   &:hover {
     transform: translateY(-2px);
@@ -1434,6 +1435,7 @@ export default {
     transform: scale(0.9);
     z-index: 0;
     transition: filter 0.25s, transform 0.25s, top 0.25s;
+    will-change: transform;
   }
   .cover-wrap {
     position: relative;

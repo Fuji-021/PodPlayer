@@ -159,6 +159,7 @@ img {
   background-size: cover;
   border-radius: 0.75em;
   aspect-ratio: 1 / 1;
+  will-change: transform;
 }
 
 .fade-enter-active,
