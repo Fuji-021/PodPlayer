@@ -39,24 +39,22 @@
         </div>
       </div>
       <div class="meta">
-        <!-- [B-50] 标题行：节目名左、订阅按钮右（未订阅时才显示） -->
-        <div class="title-row">
-          <div class="t">{{ podcast.title }}</div>
-          <!-- [B67-BUG-2] 骨架载入态(_loading)先不显示订阅按钮(此时 feedUrl 还是哨兵) -->
-          <button
-            v-if="
-              podcast.subscribed === false &&
-              !podcast._loading &&
-              !podcast._loadError
-            "
-            class="sub-this-btn"
-            :style="{ background: subBtnColor }"
-            @click="subscribeThis"
-          >
-            <svg-icon icon-class="square-plus" />订阅到我的
-          </button>
-        </div>
+        <div class="t">{{ podcast.title }}</div>
         <div class="a">{{ podcast.author }}</div>
+        <!-- [B-50] 预览(未订阅)节目：点卡片进来=试听浏览，未自动订阅 → 显示订阅按钮 -->
+        <!-- [B67-BUG-2] 骨架载入态(_loading)先不显示订阅按钮(此时 feedUrl 还是哨兵) -->
+        <button
+          v-if="
+            podcast.subscribed === false &&
+            !podcast._loading &&
+            !podcast._loadError
+          "
+          class="sub-this-btn"
+          :style="{ background: subBtnColor }"
+          @click="subscribeThis"
+        >
+          <svg-icon icon-class="square-plus" />订阅到我的
+        </button>
         <div class="d">{{ cleanDescription }}</div>
       </div>
     </div>
@@ -1025,28 +1023,21 @@ export default {
     // [裁切修] 原 overflow:hidden 会裁掉 .sub-this-btn 的 :hover scale 反馈(按钮左缘贴 .meta 边)；
     //   改 min-width:0：同样防 flex 被长标题撑破，但不裁切放大动画。
     min-width: 0;
-    // 标题行：节目名 + 订阅按钮紧跟在文字右侧，不撑到行末
-    .title-row {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 4px 10px;
-      margin-bottom: 8px;
-    }
     .t {
       font-size: 28px;
       font-weight: 700;
+      margin-bottom: 8px;
     }
     .a {
       opacity: 0.7;
       margin-bottom: 12px;
     }
-    // [B-50] 预览节目的"订阅到我的"按钮（紧跟标题右侧，底色=封面主色）
+    // [B-50] 预览节目的"订阅到我的"按钮（底色=封面主色）
     .sub-this-btn {
-      flex-shrink: 0;
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      margin-bottom: 12px;
       padding: 7px 14px;
       border-radius: var(--radius-button);
       background: var(--color-primary); // 兜底；封面取色后被 :style 覆盖
