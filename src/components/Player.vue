@@ -438,15 +438,10 @@
           <div class="imm-bg-frost"></div>
         </div>
 
-        <!-- [P1] 顶部退出提示气泡（鼠标移到顶部 ≤8px 时浮现，跟随鼠标 x，clamp 在窗口内不越界） -->
-        <div
-          v-show="immTooltipVisible"
-          class="imm-exit-tip"
-          :style="{ left: immTooltipX + 'px' }"
-          >双击退出全屏</div
-        >
+        <!-- 顶部原生拖拽区：允许 Windows 双击最大化/还原 + 拖动移窗口（z-index 低于收起按钮） -->
+        <div class="imm-drag-bar"></div>
 
-        <!-- 顶部：收起按钮 -->
+        <!-- 顶部：收起按钮（z-index 高于 drag-bar，点击不受 drag 影响） -->
         <div class="imm-top">
           <button-icon
             v-tip="'收起'"
@@ -900,10 +895,7 @@ export default {
       // [沉浸式播放页] 音量弹窗(沉浸页专用：点击弹滑条，区别于 bar 的常驻滑条)
       volMenuOpen: false,
       volOutsideListener: null,
-      // [沉浸式播放页 P1] 进入前是否已最大化(退出时决定是否 unmaximize) + 顶部气泡
-      immWasMax: false,
       immTooltipVisible: false,
-      immTooltipX: 0,
     };
   },
   computed: {
@@ -1754,26 +1746,9 @@ export default {
       if (typeof document !== 'undefined') {
         document.body.classList.add('immersive-open');
       }
-      // [P1] 最大化窗口，记录进入前状态（退出时决定是否 unmaximize）
-      this._immWindowMax = false; // IPC 回来前先置 false，回来后置 true
-      if (_ipcRenderer) {
-        _ipcRenderer
-          .invoke('imm:enter')
-          .then(r => {
-            this.immWasMax = (r && r.wasMax) || false;
-            this._immWindowMax = true; // 进入后窗口已最大化
-          })
-          .catch(() => {});
-      }
-      // [P1] ESC 退出/双击最小化 + 顶部 hover 提示气泡 + 顶边双击还原窗口(留沉浸)
-      this._escLastAt = 0;
-      this._escTimer = null;
+      // [P1] ESC 退出沉浸（单次，不干预窗口状态）
       this._immKeyHandler = ev => this._immKeyDown(ev);
-      this._immMoveHandler = ev => this._immMouseMove(ev);
-      this._immDblHandler = ev => this._immDblClick(ev);
       document.addEventListener('keydown', this._immKeyHandler);
-      document.addEventListener('mousemove', this._immMoveHandler);
-      document.addEventListener('dblclick', this._immDblHandler);
     },
     closeImmersive() {
       if (!this.immersiveOpen) return;
@@ -1782,27 +1757,10 @@ export default {
       if (typeof document !== 'undefined') {
         document.body.classList.remove('immersive-open');
       }
-      // [P1] 还原窗口（进入前未最大化才 unmaximize；双击已窗口化时 immWasMax=true 故 no-op）
-      if (_ipcRenderer) {
-        _ipcRenderer.send('imm:exit', this.immWasMax);
-      }
-      this._immWindowMax = false;
-      // [P1] 清除 ESC 防抖计时器 + 移除监听
-      if (this._escTimer) {
-        clearTimeout(this._escTimer);
-        this._escTimer = null;
-      }
+      // [P1] 移除 ESC 监听
       if (this._immKeyHandler) {
         document.removeEventListener('keydown', this._immKeyHandler);
         this._immKeyHandler = null;
-      }
-      if (this._immMoveHandler) {
-        document.removeEventListener('mousemove', this._immMoveHandler);
-        this._immMoveHandler = null;
-      }
-      if (this._immDblHandler) {
-        document.removeEventListener('dblclick', this._immDblHandler);
-        this._immDblHandler = null;
       }
       this.immTooltipVisible = false;
       // 顺手收起可能开着的功能面板，避免下次进来残留
@@ -1867,49 +1825,13 @@ export default {
       this.closeImmersive();
     },
 
-    // [沉浸式播放页 P1] ESC 退出沉浸 / 双击 ESC(≤350ms) 最小化窗口
-    //   第一击：启动 350ms 防抖计时器；第二击：取消计时器 → 最小化。
-    //   计时器到期无第二击 → 退出沉浸（单击行为）。
+    // [沉浸式播放页 P1] ESC 单次退出沉浸（不干预窗口状态，最大化/还原交给 Windows 原生）
     _immKeyDown(ev) {
       if (ev.repeat) return;
       const exitKey =
         (this.settings && this.settings.immersiveExitKey) || 'Escape';
       if (ev.code !== exitKey && ev.key !== exitKey) return;
-      if (this._escTimer) {
-        clearTimeout(this._escTimer);
-        this._escTimer = null;
-        if (_ipcRenderer) _ipcRenderer.send('minimize');
-      } else {
-        this._escTimer = setTimeout(() => {
-          this._escTimer = null;
-          this.closeImmersive();
-        }, 350);
-      }
-    },
-    // [沉浸式播放页 P1] 鼠标移到顶部边界(y≤8px) → 显示退出提示气泡，跟随 x（clamp 窗口内）
-    //   仅当窗口处于最大化状态时显示（已窗口化则不再提示）
-    _immMouseMove(ev) {
-      if (ev.clientY <= 8 && this._immWindowMax) {
-        const W = window.innerWidth || 800;
-        const TIP_W = 96;
-        this.immTooltipX = Math.min(
-          Math.max(ev.clientX - TIP_W / 2, 8),
-          W - TIP_W - 8
-        );
-        this.immTooltipVisible = true;
-      } else {
-        this.immTooltipVisible = false;
-      }
-    },
-    // [沉浸式播放页 P1] 顶边双击(y≤40px) → 仅还原窗口大小，不退出沉浸页
-    //   imm:unmax 与 imm:exit 分开：前者只 unmaximize，沉浸页继续；后者退出沉浸。
-    _immDblClick(ev) {
-      if (ev.clientY <= 40 && this._immWindowMax) {
-        if (_ipcRenderer) _ipcRenderer.send('imm:unmax');
-        this._immWindowMax = false;
-        this.immWasMax = true; // 已手动窗口化，closeImmersive 时 imm:exit(true)=no-op
-        this.immTooltipVisible = false;
-      }
+      this.closeImmersive();
     },
 
     handleKeydown(event) {
@@ -3102,20 +3024,15 @@ export default {
 //   的最新意见**去掉该隔离** —— 弹窗改为跟随全局深浅色(沉浸页本体也已随主题:深色深磨砂/浅色浅磨砂),
 //   二者一致、不再就地强制深色。如需弹窗与沉浸字色完全统一可后续再调。
 
-// [沉浸式播放页 P1] 顶部退出提示气泡（鼠标 y≤8px 时浮现）
-.imm-exit-tip {
+// 顶部原生拖拽区：z-index 低于 imm-top(z-4) 的收起按钮，故按钮仍可点击；
+//   整个 .immersive 有 no-drag，此元素显式 drag 覆盖 → Windows 可原生双击最大化/还原 + 拖动
+.imm-drag-bar {
   position: absolute;
-  top: 10px;
-  z-index: 20;
-  background: rgba(0, 0, 0, 0.72);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 500;
-  padding: 4px 12px;
-  border-radius: 20px;
-  pointer-events: none;
-  white-space: nowrap;
-  backdrop-filter: blur(6px);
-  letter-spacing: 0.02em;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  z-index: 3;
+  -webkit-app-region: drag;
 }
 </style>
