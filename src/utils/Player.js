@@ -113,6 +113,8 @@ export default class {
     this._playNextList = []; // 当这个list不为空时，会优先播放这个list的歌
     this._isPersonalFM = false; // 是否是私人FM模式
     this._personalFMTrack = { id: 0 }; // 私人FM当前歌曲
+    // [T15] 睡眠「本集结束」队列边界：Vue 层激活 end 模式时置 true；_nextTrackCallback 据此跳过自动续播
+    this._sleepEndMode = false;
     this._personalFMNextTrack = {
       id: 0,
     }; // 私人FM下一首歌曲信息（为了快速加载下一首）
@@ -1097,8 +1099,17 @@ export default class {
       // 边界竞态偶发抛，忽略不影响播放
     }
   }
+  // [T15] 睡眠「本集结束」：Vue 层 applySleep('end') 时置 true，cancelSleep/fireSleep 时置 false。
+  setSleepEndMode(active) {
+    this._sleepEndMode = !!active;
+  }
   _nextTrackCallback() {
     this._scrobble(this._currentTrack, 0, true);
+    // [T15] end 模式：自然播完后不续播队列，让 Vue 层的 1s interval 检测到 leftSec<=2 → fireSleep()
+    if (this._sleepEndMode) {
+      this._sleepEndMode = false;
+      return;
+    }
     if (!this.isPersonalFM && this.repeatMode === 'one') {
       // [播客改造 A-7.3] 播客单曲循环：把已保存进度归零，再走通用重播路径
       const t = this._currentTrack;

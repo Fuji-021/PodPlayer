@@ -237,7 +237,9 @@ export function registerPodcastDownloadIpc(getWindow) {
             body: '单集已保存到本地',
           });
           notif.show();
-        } catch (e) {}
+        } catch (e) {
+          // Notification 不可用时静默忽略
+        }
       });
       res.pipe(writeStream);
       return { ok: true, filePath };
@@ -339,8 +341,7 @@ export function registerPodcastDownloadIpc(getWindow) {
   });
 
   // [事故恢复·加固] 本地数据备份：把渲染端导出的全表 JSON + 订阅 OPML 落盘到
-  //   userData\backups\，保留最近 10 份。app 的 Dexie 数据此前无任何备份机制，
-  //   是本次清库不可恢复的根本缺口。
+  //   userData\backups\，保留最近 3 份（超出自动覆盖最旧）。
   ipcMain.handle('podcast:backup:write', async (_e, { json, opml } = {}) => {
     try {
       const dir = path.join(app.getPath('userData'), 'backups');
@@ -360,7 +361,7 @@ export function registerPodcastDownloadIpc(getWindow) {
         } catch (e) {
           list = [];
         }
-        while (list.length > 10) {
+        while (list.length > 3) {
           const old = list.shift();
           try {
             fs.unlinkSync(path.join(dir, old));

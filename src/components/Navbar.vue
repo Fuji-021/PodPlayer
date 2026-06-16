@@ -225,7 +225,7 @@ export default {
         !this.inputFocus
       );
     },
-    // [NAS] 状态图标着色：在线=绿(呼吸)，断联=红(静止)。（黄=慢 待 TODO）
+    // [NAS] 状态图标着色：在线=绿(呼吸)，断联=红(静止)。局域网不存在慢速，无黄态。
     nasStateClass() {
       return this.nasState.alive ? 'online' : 'offline';
     },

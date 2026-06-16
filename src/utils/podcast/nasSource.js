@@ -70,7 +70,9 @@ export async function initNas() {
         probe();
         // [T1 P1] 每日对账：每 5 分钟检查一次，但满 24h 才真正跑
         try {
-          var lastR = Number(window.localStorage.getItem('nasLastReconcileAt') || 0);
+          var lastR = Number(
+            window.localStorage.getItem('nasLastReconcileAt') || 0
+          );
           if (Date.now() - lastR > 24 * 60 * 60 * 1000) {
             reconcileNas({ trigger: 'daily' }).catch(function () {});
           }
@@ -450,7 +452,9 @@ export async function reconcileNas(opts) {
         .then(function (r) {
           // 真正删成功后清 nasRemoveAt，让本档不再出现在 remove 桶
           if (r && r.ok && !r.dry_run && !r.not_found) {
-            return updatePodcast(it.feedUrl, { nasRemoveAt: null }).catch(function () {});
+            return updatePodcast(it.feedUrl, { nasRemoveAt: null }).catch(
+              function () {}
+            );
           }
         })
         .catch(function () {});
@@ -459,5 +463,10 @@ export async function reconcileNas(opts) {
   try {
     window.localStorage.setItem('nasLastReconcileAt', String(now));
   } catch (e) {}
-  return { ok: true, ensured: ensure.length, removed: remove.length, scope: scope };
+  return {
+    ok: true,
+    ensured: ensure.length,
+    removed: remove.length,
+    scope: scope,
+  };
 }

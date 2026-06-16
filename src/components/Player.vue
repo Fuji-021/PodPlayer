@@ -1443,6 +1443,9 @@ export default {
         this.sleepTimer = setTimeout(() => this.fireSleep(), ms);
       } else {
         this.sleepEndsAt = 0; // 'end' 不用墙钟一次性定时
+        // [T15] 通知 player.js 本集自然播完时跳过续播队列
+        if (this.player && this.player.setSleepEndMode)
+          this.player.setSleepEndMode(true);
       }
       this.updateSleepRemain();
       this.sleepInterval = setInterval(() => this.updateSleepRemain(), 1000);
@@ -1452,6 +1455,9 @@ export default {
       this.sleepMode = 'off';
       this.sleepRemainText = '';
       this.sleepSliderVal = 0;
+      // [T15] 取消睡眠时一并清除 player.js 内的 endMode 标志
+      if (this.player && this.player.setSleepEndMode)
+        this.player.setSleepEndMode(false);
     },
     // [B67-BUG-1] 倒计时格式化：≥1 小时进位成 H:MM:SS，否则 M:SS。
     //   修长单集(如 264 分钟)标签显示成 "264:31" 的 bug（应为 4:24:31）。
@@ -1488,6 +1494,9 @@ export default {
         this.player.playing &&
         typeof this.player.pause === 'function';
       if (wasPlaying) this.player.pause();
+      // [T15] 清除 player.js endMode 标志（end 模式提前 2s 暂停路径）
+      if (this.player && this.player.setSleepEndMode)
+        this.player.setSleepEndMode(false);
       this.clearSleep();
       this.sleepMode = 'off';
       this.sleepRemainText = '';

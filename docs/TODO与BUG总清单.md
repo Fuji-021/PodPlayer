@@ -129,13 +129,13 @@
 ### P2
 - 🟡 机核 hover CHUNK→24 真机验收(残留则调 16)。
 - 🔵 **性能优化路线(2026-06-15 全代码库审计后更新·分支 `feature/perf`)** — 详见 [性能审计报告](性能审计报告.md)(原始 57→对抗核实存活 56;3 高/10 中/41 低)。新落地序:①数据层「整档重复读」(podcasts 冗余 `latestPubTime` 去 `getLatestEpisodeTime` 整档读 + episodes `[podcastId+pubTime]` 复合索引免内存 sortBy + 统计页去重全表扫,**性价比最高·含 schema bump**)→②B69-F5 心跳降频(每秒 3 写 Dexie→节流)→③刷新条件请求 ETag/304 + shownotes 预取节流→④F1 真窗口虚拟化(专开一轮)→⑤审P1-7 parseRss 移 Worker。原 L1→L2→F2→L3 内存缓存路线并入④之后。
-- 🔵 定期 OPML+JSON 自动备份(userData\backups 已就绪,定期导出待做)。
+- ✅ **定期 OPML+JSON 自动备份(2026-06-16·T8)** — 启动 30s 后首次 + 每 6 小时自动备份；空库跳过；**保留最近 3 份**（超出自动覆盖最旧，原 10 份→3 份）；`podcastDownload.js` + `backup.js` + `main.js` 注释同步。
 - 🔴 **NAS 源节目「第三大板块」** — navbar 第三板块(首页/我的订阅之外),排版区别于二者(样式未定);是 nas §10 #2「我的NAS栏」升级设想。用户 2026-06-14 提,优先级低、设计未定。
-- 🔴 NAS-在档标识(#4:单集/节目「NAS 上有」呼吸点,需设计,别复用来源点)。
-- 🔵 NAS 图标黄(慢)态 + 长断联换 wifi-password 图标 + 自动重试/原因提示(#7)。
-- 🟡 沉浸式播放页：**P0 已完成**(分支 feature/immersive-player，6 轮打磨，已 push、待用户验收)；剩 **P1**(全屏 maximize+隐顶栏 + ESC 单击退/双击最小化 + 顶部跟随鼠标退出气泡 + 快捷键)、P2 动态流体背景、P3 图标 FLIP 飞入飞出。
+- ✅ **NAS 在档标识(2026-06-16·已满意)** — NAS 在档呼吸点已落地(podcastDetail/podcastLibrary)，用户满意，不再扩展。
+- ✅ **NAS 图标黄(慢)态(2026-06-16·已优化取消)** — 局域网 NAS 不存在慢速连接，黄态无实际意义；状态图标简化为在线=绿/断联=红两态（Navbar.vue 注释已更新）。P2/P3 图标换图+提示待 NAS 需求明确后另议。
+- 🟡 沉浸式播放页：**P0 已完成**(分支 feature/immersive-player，6 轮打磨，已 push、待用户验收)；剩 **P1**(全屏 maximize+隐顶栏 + ESC 单击退/双击最小化 + 顶部跟随鼠标退出气泡 + 快捷键)；~~P2 动态流体背景/P3 图标 FLIP 飞入飞出(用户 2026-06-16 取消，暂不做)~~。
 - 🔴 设置页完善(导出收听数据 CSV/JSON、全局媒体热键、同时下载集数1-10 UI、键盘可达)。
-- 🔴 睡眠「本集结束」与自动续播队列边界。
+- ✅ **睡眠「本集结束」队列边界(2026-06-16·修)** — `player.js` 新增 `_sleepEndMode` 标志 + `setSleepEndMode()`；`_nextTrackCallback` 检测到 end 模式时跳过自动续播，让 Vue 1s 轮询检测 leftSec≤2→`fireSleep()` 暂停并 toast；`applySleep('end')` 置 true，`cancelSleep`/`fireSleep` 置 false。
 - 🟣 多源资源池·Apple 官方榜 adapter(首页板块,paused)。
 
 ### P3

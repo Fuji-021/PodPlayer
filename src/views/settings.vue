@@ -134,8 +134,10 @@
         <div class="left">
           <div class="title">取消订阅后从 NAS 删档</div>
           <div class="description" style="color: #e74c3c">
-            ⚠️ 危险：取消订阅满 7 天后自动删除 NAS 上该节目及其所有下载文件（需同时在
-            localStorage 设置 <code>nasDestructiveArmed=true</code> 才真正执行）。确认了解风险再开启。
+            ⚠️ 危险：取消订阅满 7 天后自动删除 NAS
+            上该节目及其所有下载文件（需同时在 localStorage 设置
+            <code>nasDestructiveArmed=true</code>
+            才真正执行）。确认了解风险再开启。
           </div>
         </div>
         <div class="right">
@@ -276,6 +278,20 @@
             />
             <label for="auto-clean-completed"></label>
           </div>
+        </div>
+      </div>
+
+      <!-- [T14] 导出收听数据：把收听统计/进度/每日记录导出为 CSV(Excel 可读) 或 JSON(完整备份) -->
+      <div class="item">
+        <div class="left">
+          <div class="title">导出收听数据</div>
+          <div class="description"
+            >把收听进度、统计、每日记录导出为文件（可用于数据分析或迁移）</div
+          >
+        </div>
+        <div class="right" style="display: flex; gap: 8px">
+          <button @click="exportListenStatsCsv">导出 CSV</button>
+          <button @click="exportListenStatsJson">导出 JSON</button>
         </div>
       </div>
 
@@ -491,6 +507,7 @@ import { isLooseLoggedIn, doLogout } from '@/utils/auth';
 import { changeAppearance } from '@/utils/common';
 import defaultShortcuts from '@/utils/shortcuts';
 import pkg from '../../package.json';
+import { db } from '@/utils/db';
 // [NAS] 配置中心：多档连接 + 自动发现库 + 一键切换（token 仅主进程）
 import {
   listNasProfiles,
@@ -805,6 +822,100 @@ export default {
   },
   methods: {
     ...mapActions(['showToast']),
+    // [T14] 导出收听数据 CSV(Excel 可读·UTF-8 BOM)
+    async exportListenStatsCsv() {
+      try {
+        const [stats, podcasts] = await Promise.all([
+          db.episodeListenStats.toArray(),
+          db.podcasts.toArray(),
+        ]);
+        const podMap = {};
+        podcasts.forEach(function (p) {
+          podMap[p.id] = p.title || p.id;
+        });
+        var esc = function (s) {
+          return '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+        };
+        var lines = [
+          [
+            '节目名',
+            '节目RSS',
+            '单集ID',
+            '累计收听(分钟)',
+            '已听完',
+            '最后收听日期',
+          ]
+            .map(esc)
+            .join(','),
+        ];
+        stats.forEach(function (s) {
+          lines.push(
+            [
+              podMap[s.podcastId] || s.podcastId,
+              s.podcastId,
+              s.id,
+              Math.round(((s.totalPlayContentSec || 0) / 60) * 10) / 10,
+              s.completed ? '是' : '否',
+              s.listenedAt
+                ? new Date(s.listenedAt).toLocaleDateString('zh-CN')
+                : '',
+            ]
+              .map(esc)
+              .join(',')
+          );
+        });
+        var bom = '﻿'; // UTF-8 BOM：让 Excel 正确识别中文
+        var blob = new Blob([bom + lines.join('\n')], {
+          type: 'text/csv;charset=utf-8',
+        });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'podplayer-listen-stats.csv';
+        a.click();
+        setTimeout(function () {
+          URL.revokeObjectURL(url);
+        }, 10000);
+      } catch (e) {
+        alert('导出失败：' + ((e && e.message) || e));
+      }
+    },
+    // [T14] 导出收听数据 JSON(完整·含每日/进度)
+    async exportListenStatsJson() {
+      try {
+        var _stats = await db.episodeListenStats.toArray();
+        // bits(Uint8Array) → 普通数组，JSON 可序列化
+        var stats = _stats.map(function (s) {
+          if (s && s.bits && s.bits instanceof Uint8Array) {
+            return Object.assign({}, s, { bits: Array.from(s.bits) });
+          }
+          return s;
+        });
+        var listenDaily = await db.listenDaily.toArray();
+        var episodeProgress = await db.episodeProgress.toArray();
+        var json = JSON.stringify(
+          {
+            _meta: { app: 'PodPlayer', exportedAt: Date.now(), v: 1 },
+            episodeListenStats: stats,
+            listenDaily: listenDaily,
+            episodeProgress: episodeProgress,
+          },
+          null,
+          2
+        );
+        var blob = new Blob([json], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'podplayer-listen-stats.json';
+        a.click();
+        setTimeout(function () {
+          URL.revokeObjectURL(url);
+        }, 10000);
+      } catch (e) {
+        alert('导出失败：' + ((e && e.message) || e));
+      }
+    },
     // [日志] 打开日志文件夹(主进程 shell 定位 main.log)；非 electron 无操作。
     openLogFolder() {
       if (!this.isElectron) return;

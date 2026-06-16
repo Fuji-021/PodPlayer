@@ -313,7 +313,10 @@ async function ensureManaged(c, feedUrl, title) {
   });
   let queued = 0;
   try {
-    const ck = await authGet(c, '/api/podcasts/' + itemId + '/checknew?limit=100');
+    const ck = await authGet(
+      c,
+      '/api/podcasts/' + itemId + '/checknew?limit=100'
+    );
     const d = (ck && ck.data) || {};
     if (Array.isArray(d.episodes)) queued = d.episodes.length;
     else if (typeof d.numNew === 'number') queued = d.numNew;

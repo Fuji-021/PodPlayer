@@ -92,7 +92,7 @@ loadAllDownloads()
   .catch(() => {});
 
 // [事故加固] 启动数据自动备份调度（30s 后首次 + 每 6 小时；空库自动跳过，
-//   绝不用空数据覆盖历史好备份；落盘 userData\backups\，保留最近 10 份）。
+//   绝不用空数据覆盖历史好备份；落盘 userData\backups\，保留最近 3 份）。
 import {
   startBackupSchedule,
   restoreFromLatestBackup,
