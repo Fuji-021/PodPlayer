@@ -443,7 +443,7 @@
           v-show="immTooltipVisible"
           class="imm-exit-tip"
           :style="{ left: immTooltipX + 'px' }"
-          >按 Esc 退出沉浸</div
+          >双击退出全屏</div
         >
 
         <!-- 顶部：收起按钮 -->
@@ -1763,13 +1763,15 @@ export default {
           })
           .catch(() => {});
       }
-      // [P1] ESC 退出/双击最小化 + 顶部 hover 提示气泡
+      // [P1] ESC 退出/双击最小化 + 顶部 hover 提示气泡 + 顶边双击退出全屏
       this._escLastAt = 0;
       this._escTimer = null;
       this._immKeyHandler = ev => this._immKeyDown(ev);
       this._immMoveHandler = ev => this._immMouseMove(ev);
+      this._immDblHandler = ev => this._immDblClick(ev);
       document.addEventListener('keydown', this._immKeyHandler);
       document.addEventListener('mousemove', this._immMoveHandler);
+      document.addEventListener('dblclick', this._immDblHandler);
     },
     closeImmersive() {
       if (!this.immersiveOpen) return;
@@ -1794,6 +1796,10 @@ export default {
       if (this._immMoveHandler) {
         document.removeEventListener('mousemove', this._immMoveHandler);
         this._immMoveHandler = null;
+      }
+      if (this._immDblHandler) {
+        document.removeEventListener('dblclick', this._immDblHandler);
+        this._immDblHandler = null;
       }
       this.immTooltipVisible = false;
       // 顺手收起可能开着的功能面板，避免下次进来残留
@@ -1881,7 +1887,7 @@ export default {
     _immMouseMove(ev) {
       if (ev.clientY <= 8) {
         const W = window.innerWidth || 800;
-        const TIP_W = 110;
+        const TIP_W = 96;
         this.immTooltipX = Math.min(
           Math.max(ev.clientX - TIP_W / 2, 8),
           W - TIP_W - 8
@@ -1889,6 +1895,12 @@ export default {
         this.immTooltipVisible = true;
       } else {
         this.immTooltipVisible = false;
+      }
+    },
+    // [沉浸式播放页 P1] 顶边双击(y≤40px) → 退出沉浸并还原窗口大小
+    _immDblClick(ev) {
+      if (ev.clientY <= 40) {
+        this.closeImmersive();
       }
     },
 
