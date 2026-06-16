@@ -274,6 +274,17 @@ export function initIpcMain(win, store, trayEventEmitter) {
     win.isMaximized() ? win.unmaximize() : win.maximize();
   });
 
+  // [沉浸式播放页 P1] 进入沉浸 → 最大化；退出 → 按进入前状态决定是否 unmaximize
+  ipcMain.handle('imm:enter', () => {
+    const wasMax = win.isMaximized();
+    if (!wasMax) win.maximize();
+    return { wasMax };
+  });
+
+  ipcMain.on('imm:exit', (_event, wasMax) => {
+    if (!wasMax) win.unmaximize();
+  });
+
   ipcMain.on('settings', (event, options) => {
     store.set('settings', options);
     if (options.enableGlobalShortcut) {

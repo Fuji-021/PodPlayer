@@ -425,7 +425,7 @@
     <!-- ============ [沉浸式播放页 P0] 全屏沉浸 overlay ============
          背景=C 混合(模糊封面打底 + 三色柔和径向渐变 + 磨砂层，静态)；大封面居中 + 细胶囊进度条 +
          一行控制(三大金刚居中、倍速/队列/睡眠在左、音量在右)。所有控制复用本组件方法与状态。
-         P1 再做：全屏 maximize/ESC 退出/顶部 hover 提示；P2 动态背景。 -->
+         P1 已落地：全屏 maximize/ESC 退出(单击退出/双击最小化)/顶部 hover 提示气泡；P2 动态背景。 -->
     <transition name="imm-fade">
       <div v-if="immersiveOpen" class="immersive">
         <!-- 背景三层(静态) -->
@@ -438,7 +438,15 @@
           <div class="imm-bg-frost"></div>
         </div>
 
-        <!-- 顶部：收起按钮(P1 会加 ESC/顶部 hover 提示) -->
+        <!-- [P1] 顶部退出提示气泡（鼠标移到顶部 ≤8px 时浮现，跟随鼠标 x，clamp 在窗口内不越界） -->
+        <div
+          v-show="immTooltipVisible"
+          class="imm-exit-tip"
+          :style="{ left: immTooltipX + 'px' }"
+          >按 Esc 退出沉浸</div
+        >
+
+        <!-- 顶部：收起按钮 -->
         <div class="imm-top">
           <button-icon
             v-tip="'收起'"
@@ -824,6 +832,11 @@ import { getCoverColor } from '@/utils/podcast/coverColor';
 // [沉浸式播放页 P0] 封面 3 色调色板（沉浸页中层三色柔和径向渐变背景用）
 import { getCoverPalette } from '@/utils/podcast/coverPalette';
 
+// [沉浸式播放页 P1] Electron IPC（maximize/unmaximize 控制沉浸全屏）
+const _electron =
+  process.env.IS_ELECTRON === true ? window.require('electron') : null;
+const _ipcRenderer = _electron ? _electron.ipcRenderer : null;
+
 export default {
   name: 'Player',
   components: {
@@ -887,6 +900,10 @@ export default {
       // [沉浸式播放页] 音量弹窗(沉浸页专用：点击弹滑条，区别于 bar 的常驻滑条)
       volMenuOpen: false,
       volOutsideListener: null,
+      // [沉浸式播放页 P1] 进入前是否已最大化(退出时决定是否 unmaximize) + 顶部气泡
+      immWasMax: false,
+      immTooltipVisible: false,
+      immTooltipX: 0,
     };
   },
   computed: {
@@ -1737,6 +1754,22 @@ export default {
       if (typeof document !== 'undefined') {
         document.body.classList.add('immersive-open');
       }
+      // [P1] 最大化窗口，记录进入前状态（退出时决定是否 unmaximize）
+      if (_ipcRenderer) {
+        _ipcRenderer
+          .invoke('imm:enter')
+          .then(r => {
+            this.immWasMax = (r && r.wasMax) || false;
+          })
+          .catch(() => {});
+      }
+      // [P1] ESC 退出/双击最小化 + 顶部 hover 提示气泡
+      this._escLastAt = 0;
+      this._escTimer = null;
+      this._immKeyHandler = ev => this._immKeyDown(ev);
+      this._immMoveHandler = ev => this._immMouseMove(ev);
+      document.addEventListener('keydown', this._immKeyHandler);
+      document.addEventListener('mousemove', this._immMoveHandler);
     },
     closeImmersive() {
       if (!this.immersiveOpen) return;
@@ -1745,6 +1778,24 @@ export default {
       if (typeof document !== 'undefined') {
         document.body.classList.remove('immersive-open');
       }
+      // [P1] 还原窗口（进入前未最大化才 unmaximize）
+      if (_ipcRenderer) {
+        _ipcRenderer.send('imm:exit', this.immWasMax);
+      }
+      // [P1] 清除 ESC 防抖计时器 + 移除监听
+      if (this._escTimer) {
+        clearTimeout(this._escTimer);
+        this._escTimer = null;
+      }
+      if (this._immKeyHandler) {
+        document.removeEventListener('keydown', this._immKeyHandler);
+        this._immKeyHandler = null;
+      }
+      if (this._immMoveHandler) {
+        document.removeEventListener('mousemove', this._immMoveHandler);
+        this._immMoveHandler = null;
+      }
+      this.immTooltipVisible = false;
       // 顺手收起可能开着的功能面板，避免下次进来残留
       this.closeRateMenu();
       this.closeSleepMenu();
@@ -1805,6 +1856,40 @@ export default {
     immClickPodcast() {
       if (this.isPodcastTrack) this.goToPodcastDetail();
       this.closeImmersive();
+    },
+
+    // [沉浸式播放页 P1] ESC 退出沉浸 / 双击 ESC(≤350ms) 最小化窗口
+    //   第一击：启动 350ms 防抖计时器；第二击：取消计时器 → 最小化。
+    //   计时器到期无第二击 → 退出沉浸（单击行为）。
+    _immKeyDown(ev) {
+      if (ev.repeat) return;
+      const exitKey =
+        (this.settings && this.settings.immersiveExitKey) || 'Escape';
+      if (ev.code !== exitKey && ev.key !== exitKey) return;
+      if (this._escTimer) {
+        clearTimeout(this._escTimer);
+        this._escTimer = null;
+        if (_ipcRenderer) _ipcRenderer.send('minimize');
+      } else {
+        this._escTimer = setTimeout(() => {
+          this._escTimer = null;
+          this.closeImmersive();
+        }, 350);
+      }
+    },
+    // [沉浸式播放页 P1] 鼠标移到顶部边界(y≤8px) → 显示退出提示气泡，跟随 x（clamp 窗口内）
+    _immMouseMove(ev) {
+      if (ev.clientY <= 8) {
+        const W = window.innerWidth || 800;
+        const TIP_W = 110;
+        this.immTooltipX = Math.min(
+          Math.max(ev.clientX - TIP_W / 2, 8),
+          W - TIP_W - 8
+        );
+        this.immTooltipVisible = true;
+      } else {
+        this.immTooltipVisible = false;
+      }
     },
 
     handleKeydown(event) {
@@ -2995,4 +3080,21 @@ export default {
 // [TODO3] 原 [审操作#17] 把沉浸页内弹窗(倍速/队列/睡眠/音量)主题隔离为固定深色;按"改回随主题"
 //   的最新意见**去掉该隔离** —— 弹窗改为跟随全局深浅色(沉浸页本体也已随主题:深色深磨砂/浅色浅磨砂),
 //   二者一致、不再就地强制深色。如需弹窗与沉浸字色完全统一可后续再调。
+
+// [沉浸式播放页 P1] 顶部退出提示气泡（鼠标 y≤8px 时浮现）
+.imm-exit-tip {
+  position: absolute;
+  top: 10px;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 20px;
+  pointer-events: none;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+  letter-spacing: 0.02em;
+}
 </style>
