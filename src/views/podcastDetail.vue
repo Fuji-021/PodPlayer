@@ -50,7 +50,8 @@
             !podcast._loadError
           "
           class="sub-this-btn"
-          :style="{ background: subBtnColor }"
+          :class="{ ready: subBtnReady }"
+          :style="subBtnColor ? { background: subBtnColor } : {}"
           @click="subscribeThis"
         >
           <svg-icon icon-class="square-plus" />订阅到我的
@@ -335,8 +336,9 @@ export default {
       epDisplayLimit: 50,
       // [NAS] 本档在 NAS 上已归档的单集 guid 集合(连上才非空；空=不显示 wifi 标识)
       nasEpGuids: new Set(),
-      // 订阅按钮底色：加载时用主题色兜底，封面取色后换成封面主色调
-      subBtnColor: 'var(--color-primary)',
+      // 订阅按钮底色：取色完成前隐藏(opacity:0)，取色后淡入，避免蓝色闪烁
+      subBtnColor: null,
+      subBtnReady: false,
     };
   },
   computed: {
@@ -373,6 +375,7 @@ export default {
         .then(hsl => {
           if (hsl && this._subBtnColorSrc === url) {
             this.subBtnColor = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
+            this.subBtnReady = true;
           }
         })
         .catch(() => {});
@@ -1032,7 +1035,7 @@ export default {
       opacity: 0.7;
       margin-bottom: 12px;
     }
-    // [B-50] 预览节目的"订阅到我的"按钮（底色=封面主色）
+    // [B-50] 预览节目的"订阅到我的"按钮（底色=封面主色；取色前隐藏避免蓝色闪烁）
     .sub-this-btn {
       display: inline-flex;
       align-items: center;
@@ -1040,16 +1043,20 @@ export default {
       margin-bottom: 12px;
       padding: 7px 14px;
       border-radius: var(--radius-button);
-      background: var(--color-primary); // 兜底；封面取色后被 :style 覆盖
+      background: var(--color-primary);
       color: #fff;
       font-weight: 600;
       font-size: 13px;
       cursor: pointer;
-      transition: transform 0.15s, background 0.4s;
+      opacity: 0;
+      transition: opacity 0.25s, transform 0.15s, background 0.4s;
       white-space: nowrap;
       .svg-icon {
         width: 14px;
         height: 14px;
+      }
+      &.ready {
+        opacity: 1;
       }
       &:hover {
         transform: scale(1.04);

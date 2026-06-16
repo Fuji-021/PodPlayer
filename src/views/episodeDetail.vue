@@ -33,7 +33,8 @@
           <!-- [S-3] 主播放 button：状态机 正在播放(暂停图标)/继续播放/点击播放 -->
           <button
             class="play-btn"
-            :class="{ 'is-playing': isThisPlaying }"
+            :class="{ 'is-playing': isThisPlaying, ready: playBtnReady }"
+            :style="playBtnColor ? { background: playBtnColor } : {}"
             @click="play"
           >
             <svg-icon :icon-class="isThisPlaying ? 'pause' : 'play-circle'" />
@@ -131,6 +132,7 @@ import {
   removeDownload,
 } from '@/utils/podcast/downloads';
 import { sanitizeHtml } from '@/utils/podcast/sanitizeHtml';
+import { getCoverColor } from '@/utils/podcast/coverColor';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 export default {
@@ -146,6 +148,9 @@ export default {
       showDeleteDlConfirm: false,
       // [B-83] 小宇宙截断单集正在后台抓完整文稿时，notes 区显示加载占位(不闪截断版)
       enriching: false,
+      // 播放按钮底色：封面取色后替换，取色前隐藏避免蓝色闪烁
+      playBtnColor: null,
+      playBtnReady: false,
     };
   },
   computed: {
@@ -281,6 +286,20 @@ export default {
       handler(v) {
         if (v) this.load();
       },
+    },
+    // 封面主色 → 播放按钮底色（episode.coverUrl 有值时提取，路由切换时重算）
+    episode(newVal) {
+      const url = newVal && newVal.coverUrl;
+      if (!url || url === this._playBtnColorSrc) return;
+      this._playBtnColorSrc = url;
+      getCoverColor(url)
+        .then(hsl => {
+          if (hsl && this._playBtnColorSrc === url) {
+            this.playBtnColor = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
+            this.playBtnReady = true;
+          }
+        })
+        .catch(() => {});
     },
     // [B-31] 监听播放器广播：当前显示的这一集发生 5%/completed 变化 → 重读 listenStats
     '$store.state.podcastListening.listenTick'() {
@@ -653,7 +672,7 @@ export default {
 }
 .play-btn {
   background: var(--color-primary);
-  color: var(--color-primary-bg);
+  color: #fff;
   padding: 8px 16px;
   border-radius: var(--radius-button);
   font-weight: 700;
@@ -662,10 +681,14 @@ export default {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: 0.15s;
+  opacity: 0;
+  transition: opacity 0.25s, transform 0.15s, background 0.4s;
   .svg-icon {
     width: 14px;
     height: 14px;
+  }
+  &.ready {
+    opacity: 1;
   }
   &:hover {
     transform: scale(1.04);
@@ -705,11 +728,10 @@ export default {
     opacity: 1;
     color: #e74c3c;
   }
-  // [B67-BUG-5] 已在播放列表：绿色高亮（持久跟随队列成员关系，点击可移出）
+  // [B67-BUG-5] 已在播放列表：图标变绿即可，不要绿色圆圈背景
   &.queued {
     opacity: 1;
-    color: #fff;
-    background: #27ae60;
+    color: #27ae60;
   }
   // [B-31] 下载三态
   &.downloaded {
