@@ -73,7 +73,11 @@ function setTitle(track) {
   if (isCreateTray) {
     ipcRenderer?.send('updateTrayTooltip', document.title);
   }
-  store.commit('updateTitle', document.title);
+  // [启动竞态修 2026-06-16] store=@/store 默认导出；启动期 new Player() 在 store 模块求值完成前被调到
+  //   (store/index.js: new Player()→_init→_loadCurrentPodcastEpisode→setTitle)，此刻 store 仍 undefined。
+  //   用 ?. 跳过这一次 commit(document.title 已设好、Vuex 也尚未就绪)，避免 'commit of undefined' 未捕获异常
+  //   把整个 _loadCurrentPodcastEpisode 中断(连进度读取/音频预置一起没了)。init 完成后的 setTitle 正常 commit。
+  store?.commit('updateTitle', document.title);
 }
 
 function setTrayLikeState(isLiked) {

@@ -141,7 +141,11 @@ export function cacheTrackSource(trackInfo, url, bitRate, from = 'netease') {
 }
 
 export function getTrackSource(id) {
-  return db.trackSources.get(Number(id)).then(track => {
+  // [启动竞态修 2026-06-16] 非数字 id(如播客单集 id)→ Number()=NaN → IndexedDB get 抛
+  //   "not a valid key" DataError。网易云缓存以数字 id 为键，播客 id 必不命中 → 返回 null(=未命中)。
+  const nid = Number(id);
+  if (!Number.isFinite(nid)) return Promise.resolve(null);
+  return db.trackSources.get(nid).then(track => {
     if (!track) return null;
     console.debug(
       `[debug][db.js] get track from cache 👉 ${track.name} by ${track.artist}`
@@ -188,7 +192,11 @@ export function cacheLyric(id, lyrics) {
 }
 
 export function getLyricFromCache(id) {
-  return db.lyric.get(Number(id)).then(result => {
+  // [启动竞态修 2026-06-16] 播客当前曲 id 非数字 → Number()=NaN → get 抛 DataError(=本轮启动期那条未捕获异常)。
+  //   播客无网易云歌词缓存 → 直接返回 undefined。
+  const nid = Number(id);
+  if (!Number.isFinite(nid)) return Promise.resolve(undefined);
+  return db.lyric.get(nid).then(result => {
     if (!result) return undefined;
     return result.lyrics;
   });
@@ -203,7 +211,10 @@ export function cacheAlbum(id, album) {
 }
 
 export function getAlbumFromCache(id) {
-  return db.album.get(Number(id)).then(result => {
+  // [启动竞态修 2026-06-16] 非数字 id → NaN → get 抛 DataError；播客无网易云专辑缓存 → 返回 undefined。
+  const nid = Number(id);
+  if (!Number.isFinite(nid)) return Promise.resolve(undefined);
+  return db.album.get(nid).then(result => {
     if (!result) return undefined;
     return result.album;
   });

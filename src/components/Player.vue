@@ -11,6 +11,7 @@
           nyancat: settings.nyancatStyle,
           'nyancat-stop': settings.nyancatStyle && !player.playing,
         }"
+        :style="{ '--prog-fill': coverFillColor }"
         @click.stop
         @mousemove="onProgressHover"
         @mouseleave="hoverTime = null"
@@ -48,7 +49,7 @@
           v-for="(mk, i) in currentMarks"
           :key="'mk' + i"
           class="prog-mark"
-          :style="{ left: markPct(mk) + '%', background: markColor }"
+          :style="{ left: markPct(mk) + '%', background: markContrastColor }"
         ></div>
         <!-- [B-77] 标记提示：hover 标记键时在**播放头正上方**浮出"标记此刻"(随进度跟着走)，
            替代原来贴在按钮上、又方又带异色描边的原生 title。 -->
@@ -839,9 +840,15 @@ export default {
       // [播客改造 A-7.8] 进度条 hover 预览
       hoverTime: null,
       hoverX: 0,
-      // [B-75] 标记位置：封面主色(细蓝标 + 按钮变色用)、长按充能态、短按 pulse 反馈。
+      // [B-75] 标记位置：封面主色(标记按钮 >5 变色彩蛋用)、长按充能态、短按 pulse 反馈。
       //   _markColorSrc/_markTimer/_markPulseTimer/_markPressed 用裸实例属性(不入 data，免响应式+避开保留键)
       markColor: '#e67e22',
+      // [进度条主色] 播放 bar「已播段」颜色 = 当前封面主色(切歌时由 refreshMarkColor 算出)。
+      //   null = 还没取到色 → CSS 回退原蓝 #335eea。(沉浸页进度条按用户要求保持原样，不用此色。)
+      coverFillColor: null,
+      // [进度条主色] 播放 bar 标记点颜色 = 封面主色的「撞色(互补色)」，保证蓝封面下也撞得出来、看得清(用户定)。
+      //   切歌时由 refreshMarkColor 算出；默认橙(对蓝色回退底色也成立)。沉浸页标记点仍用 markColor(封面主色)。
+      markContrastColor: '#e67e22',
       markCharging: false,
       markPulse: false,
       markCleared: false, // [修] 长按充能满(清空标记)时给 icon 一记"清空"反馈动画(两端共用)
@@ -1152,14 +1159,18 @@ export default {
       if (dur <= 0) return 0;
       return Math.min(100, Math.max(0, (sec / dur) * 100));
     },
-    // 封面主色：换封面时算一次缓存（细蓝标 + 按钮变色用）
+    // 封面主色：换封面时算一次缓存（进度条已播段 + 标记按钮 >5 变色彩蛋，两端共用）
     refreshMarkColor(src) {
       if (!src || src === this._markColorSrc) return;
       this._markColorSrc = src;
       getCoverColor(src)
         .then(hsl => {
           if (hsl && this._markColorSrc === src) {
-            this.markColor = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
+            const c = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
+            this.markColor = c; // 标记按钮 >5 变封面主色(彩蛋#2) + 沉浸页标记点
+            this.coverFillColor = c; // 播放 bar 已播段 = 封面主色
+            // 播放 bar 标记点 = 封面主色的撞色(互补色 hue+180)，高饱和高对比 → 任何封面(含蓝)都看得清
+            this.markContrastColor = `hsl(${(hsl[0] + 180) % 360}, 85%, 55%)`;
           }
         })
         .catch(() => {});
@@ -1859,7 +1870,14 @@ export default {
   width: 100%;
   position: relative; // [播客改造 A-7.8] 让 hover-tip absolute 相对它定位
 }
-// [B-75] 标记位置：进度条上的细蓝标(封面主色)。极细(比进度条略粗)、纯展示、不挡点击。
+// [进度条主色/B-19] 播放 bar 已播段 = 封面主色(--prog-fill，模板按当前封面注入)，未取到色回退原蓝 #335eea。
+//   :not(.nyancat) → 彩虹猫开启时让位给全局 .nyancat 彩虹渐变；标记点用封面主色的撞色(见 .prog-mark)与已播段区分。
+.progress-bar:not(.nyancat) ::v-deep .vue-slider-process {
+  background-color: var(--prog-fill, #335eea);
+  transition: background-color 0.35s ease; // 切歌时蓝→封面色柔和过渡
+}
+// [B-75/进度条主色] 标记点：进度条上每个标记一条细竖标。沉浸页=封面主色(inline markColor，原样保留)；
+//   播放 bar=封面主色的撞色(inline markContrastColor)，蓝封面下也撞得出来。极细、纯展示、不挡点击。
 .prog-mark {
   position: absolute;
   top: 50%;
@@ -1867,7 +1885,8 @@ export default {
   width: 2px;
   height: 8px;
   border-radius: 1px;
-  background: var(--color-primary); // 兜底，实际 inline markColor 覆盖
+  // 兜底色，实际由 inline 覆盖(沉浸页=markColor / 播放 bar=markContrastColor)
+  background: var(--color-primary);
   pointer-events: none;
   z-index: 4;
 }
@@ -2615,9 +2634,9 @@ export default {
 }
 
 // ============ [沉浸式播放页 P0] 全屏沉浸 overlay ============
-// [TODO3] 字色随主题(改回随主题，弃旧"固定深色"隔离)+ 柔和(非刺眼纯白)+ 可读兜底。
-//   背景是封面采样色(偏暗为主、但有的封面偏亮)，故:深色模式=柔和近白字 + 深磨砂底 + 轻暗描边;
-//   浅色模式=柔和近黑字 + 浅磨砂遮罩(把偏暗封面提亮让深字可读)+ 轻亮描边。所有字色集中到 4 个变量。
+// [沉浸页主题] 2026-06-16 用户拍板：**固定深色表现**(不随 app 深/浅色切换)。
+//   深色那套=柔和近白字 + 深磨砂压暗封面 + 轻暗描边(用户满意);浅色那套(浅磨砂提亮背景=发白)被否、已删(见下)。
+//   下方 --imm-* 默认值即唯一一套(深色);已无 body[data-theme='light'] 覆盖。
 .immersive {
   // 深色模式默认值(浅色模式见下方 body[data-theme='light'] 覆盖)
   --imm-text: rgba(245, 245, 247, 0.92); // 主字(标题/播放键):柔和近白
@@ -2630,7 +2649,7 @@ export default {
     255,
     255,
     0.92
-  ); // 进度条已播/把手(随主题，浅色下不再白到看不见)
+  ); // 进度条已播/把手(沉浸页固定深色，此即深色值=近白)
   --imm-rail: rgba(255, 255, 255, 0.18); // 进度条未播轨
   position: fixed;
   inset: 0;
@@ -2648,16 +2667,10 @@ export default {
     background: rgba(127, 127, 127, 0.16); // 中性 hover 底，深浅色都可见
   }
 }
-// [TODO3] 浅色模式:柔和近黑字 + 浅色磨砂遮罩(压亮偏暗封面、保深字可读) + 轻亮描边
-body[data-theme='light'] .immersive {
-  --imm-text: rgba(28, 28, 30, 0.92);
-  --imm-text-2nd: rgba(44, 44, 48, 0.82);
-  --imm-text-weak: rgba(66, 66, 72, 0.62);
-  --imm-text-shadow: 0 1px 2px rgba(255, 255, 255, 0.55);
-  --imm-frost: rgba(236, 238, 243, 0.62);
-  --imm-accent: rgba(38, 38, 42, 0.9);
-  --imm-rail: rgba(0, 0, 0, 0.14);
-}
+// [2026-06-16 用户拍板] 沉浸页**固定深色表现**：原 TODO3 的浅色覆盖(浅磨砂 --imm-frost rgba(236,238,243,.62)
+//   把背景洗发白 + 近黑字)被用户否(浅色模式背景"非常不满意");深色那套(深磨砂压暗 + 近白字)用户非常满意。
+//   故删掉 body[data-theme='light'] .immersive 覆盖 → 沉浸页在 app 深/浅色下都走上方 .immersive 默认(深色)值,
+//   两端同款深色。深色模式表现完全不变。要恢复"分深浅"见 git review-fixes 轮 abb40dc(TODO3)。
 .imm-fade-enter-active,
 .imm-fade-leave-active {
   transition: opacity 0.32s ease, transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -2693,7 +2706,7 @@ body[data-theme='light'] .immersive {
 .imm-bg-frost {
   position: absolute;
   inset: 0;
-  background: var(--imm-frost); // [TODO3] 随主题:深色压暗 / 浅色提亮
+  background: var(--imm-frost); // 固定深色磨砂压暗(--imm-frost 唯一深色值)
   backdrop-filter: blur(24px) saturate(1.05);
   // 极轻噪点：内联 svg feTurbulence(高级磨砂感)
   &::after {

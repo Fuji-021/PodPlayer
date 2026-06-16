@@ -31,8 +31,8 @@
 - ✅ last.fm 子窗 nodeIntegration+webSecurity:false 历史高危（2026-06-15 修·`fix/buglist`）— `background.js` new-window 删整段 last.fm 高危内嵌子窗死分支，统一 `shell.openExternal` 走系统浏览器。behaviorChange=false。**待真机**(scrobble 仍正常)。
 
 ### P3（低/边缘/记录）
-- 🔴 **[启动竞态·日志查出 2026-06-16]** `setTitle`(Player.js:101)在 `store` 模块求值完成前被 `new Player()→_init→_loadCurrentPodcastEpisode` 调到 → `store.commit` 报 `Cannot read property 'commit' of undefined`;同路径还用无效 key 查 Dexie → `IDBObjectStore get not a valid key (DataError)`。**每次启动各报一次、被 unhandledrejection 兜底,不崩不影响功能**;正式版应清(setTitle 加 `store &&` 守卫 / 启动期跳过无效 key)。PRE-EXISTING(上游 fork 遗留)。
-- 🔴 **[启动·噪声]** discord-rpc 连不上(Discord 没开)的 `[main] Could not connect` unhandledRejection,每次启动一条。无害,可后续静音(connect 失败 catch)。
+- ✅ **[启动竞态·2026-06-16 修]** ① `setTitle`(`Player.js`)启动期 `store`(@/store 默认导出·循环依赖)仍 undefined → `store.commit` 报 `commit of undefined`:改 **`store?.commit`**(顺带让 `_loadCurrentPodcastEpisode` 不再中断在 setTitle)。② Dexie `not a valid key`:临时给原生 `IDBObjectStore.get` 包 DIAG 实测定位=**`store=lyric key=NaN`**——`getLyricFromCache(id)` 对播客(当前曲)非数字 id 做 `db.lyric.get(Number(id))`=NaN;`getTrackSource`/`getAlbumFromCache` 同 `db.x.get(Number(id))` 模式同病 → 三处加 `Number.isFinite` 守卫(非数字 id 返 null/undefined=未命中)。**Dev `Ctrl+R` 重载实测控制台干净**(两条红 unhandledRejection 全消、eslint 0;DIAG 已删、误加的 podcast/db.js 守卫已回退)。PRE-EXISTING(上游 fork)。详见主文档同名 round。
+- 🔴 **[启动·噪声]** discord-rpc 连不上(Discord 没开)的 `[main] Could not connect` unhandledRejection,每次启动一条。无害(已被审P1-1 主进程 unhandledRejection 兜底为一条 log)。**本轮(2026-06-16 启动竞态轮)聚焦渲染端两条竞态、此条主进程留下轮**:`ipcMain.js:112` `require('discord-rich-presence')(...)` 建 client 时连接,给 client 挂 error handler / try-catch 静音;需整 app 重启验(非 Ctrl+R)。
 - 🔴 搜索栏再右移 + 宽度再缩对齐 navbar。[B67-BUG-7]
 - 🔴 subscribedMap 以节目名为键→同名节目互相覆盖(评估暂不修)。[B56-5]
 - 🔴 searchLocalEpisodes 全表 JS filter 无索引。[B69-F4]
@@ -124,7 +124,7 @@
 - 🔴 托盘菜单 + 任务栏缩略图三键(上一首/暂停/下一首)。
 - 🔴 听完自动清理已下载单集释放空间。
 - 🔴 我的下载页显示存储占用(仅提示)。
-- 🔴 播放 bar 进度条用在播单集封面主色(已有 getCoverColor)。
+- ✅ **播放 bar 进度条用在播单集封面主色**(2026-06-16,**进度条配色 v1.0**,落地旧账 B-19)：**仅播放 bar**——已播段=`getCoverColor` 封面主色(`coverFillColor`+CSS 变量 `--prog-fill`,取不到回退 #335eea);**标记点改用封面主色的撞色(互补色 `markContrastColor`)**——蓝封面会算出金标、永不蓝配蓝(用户定,初版用固定蓝被否)。**沉浸页按用户要求保持上一轮原样不动**(进度条仍 `--imm-accent`、标记点仍 `markColor`;曾误改已 `git diff` 逐行还原)。Dev DevTools 实测(bar coverFill=hsl(47,46,50)/markContrast=hsl(227,85,55);沉浸 process=rgba(38,38,42,.9) 原值)、eslint 0。详见主文档同名 round。
 
 ### P2
 - 🟡 机核 hover CHUNK→24 真机验收(残留则调 16)。
