@@ -1049,7 +1049,7 @@ export default {
       font-size: 13px;
       cursor: pointer;
       opacity: 0;
-      transition: opacity 0.25s, transform 0.15s, background 0.4s;
+      transition: opacity 0.25s, transform 0.15s;
       white-space: nowrap;
       .svg-icon {
         width: 14px;

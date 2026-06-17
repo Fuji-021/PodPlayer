@@ -682,7 +682,7 @@ export default {
   align-items: center;
   gap: 6px;
   opacity: 0;
-  transition: opacity 0.25s, transform 0.15s, background 0.4s;
+  transition: opacity 0.25s, transform 0.15s;
   .svg-icon {
     width: 14px;
     height: 14px;
