@@ -573,8 +573,8 @@ export default {
       if (this._autoRefreshing) return;
       this._autoRefreshing = true;
       localStorage.setItem(KEY, String(Date.now()));
-      const countBefore = this.list.length
-        ? this.list.reduce(function (s, p) {
+      const countBefore = this.podcasts.length
+        ? this.podcasts.reduce(function (s, p) {
             return s + (p.newCount || 0);
           }, 0)
         : -1; // 列表为空 → 无基线，跳过通知
@@ -582,7 +582,7 @@ export default {
         await refreshAllSubscriptions();
         await this.loadPodcasts(); // 重读，含更新后的 newCount → 角标自动出现
         if (countBefore >= 0) {
-          const countAfter = this.list.reduce(function (s, p) {
+          const countAfter = this.podcasts.reduce(function (s, p) {
             return s + (p.newCount || 0);
           }, 0);
           if (countAfter > countBefore) {
