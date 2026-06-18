@@ -577,8 +577,9 @@ export default class {
     this._nasLastPos = null;
     this._nasStallSec = 0;
 
-    // [播客改造 C-14] 标记进入加载态，让 UI 显示缓冲条
-    store.commit('setAudioBuffering', true);
+    // [播客改造 C-14] 仅 autoplay=true 时显示缓冲条；重启恢复(autoplay=false)
+    // Howler 只是静默 preload，不需要给用户显示"加载中"（且不显示就不会永久停留）
+    if (autoplay) store.commit('setAudioBuffering', true);
     // [播客改造 A-7.10] 切集淡入淡出：若旧 howler 还在播，先做 ~180ms 淡出再 unload，
     // 避免硬切的"啪嗒"感。淡入由 play() 内已有的 fade(0, volume, PLAY_PAUSE_FADE_DURATION) 完成。
     const old = this._howler;
@@ -1282,7 +1283,8 @@ export default class {
   }
   play() {
     if (this._howler?.playing()) return;
-
+    // [C-14] 用户主动点播放 → 立即显示缓冲，出声后(once 'play')清除
+    store.commit('setAudioBuffering', true);
     this._howler?.play();
 
     this._howler?.once('play', () => {
