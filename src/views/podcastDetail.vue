@@ -309,6 +309,7 @@ import { prefetchShownotesForEpisodes } from '@/utils/podcast/shownotesEnrich';
 import {
   prefetchNasPodcast,
   nasEpisodeGuidSet,
+  normFeedUrl,
 } from '@/utils/podcast/nasSource';
 import SvgIcon from '@/components/SvgIcon.vue';
 
@@ -657,8 +658,15 @@ export default {
       return ids.includes(ep.id);
     },
     // [NAS] 该单集在 NAS 上是否已归档(决定是否显示 wifi 标识)。
+    //   [修10集标识] guid 或归一化 audioUrl 任一命中即算在档：ABS 老集无 guid，单 guid 匹配会
+    //   漏掉绝大多数已归档老集(实测督工 285 集仅 21 集有 guid)→ 只亮一小撮。nasEpGuids 现含
+    //   url 键(见 nasEpisodeGuidSet)，与播放解析的 guid→url 双路兜底同口径。
     nasEpOn(ep) {
-      return !!(ep && ep.guid && this.nasEpGuids.has(ep.guid));
+      if (!ep) return false;
+      if (ep.guid && this.nasEpGuids.has(ep.guid)) return true;
+      if (ep.audioUrl && this.nasEpGuids.has(normFeedUrl(ep.audioUrl)))
+        return true;
+      return false;
     },
     // [呼吸灯 v2.0] 由稳定 id 派生「周期 + 负相位」→ 同点恒定、彼此不同，萤火虫式错落呼吸(不齐步)。
     //   必须 id 派生(非 Math.random)：单集列表重渲(分页/水合)不摇号、不闪。

@@ -181,14 +181,20 @@ export async function nasPodcastSet() {
   }
 }
 
-// [NAS·状态点] 取某档在 NAS 上已归档的单集 guid 集合。未启用/不可用 → 空集。
+// [NAS·状态点] 取某档在 NAS 上已归档的单集匹配键集合。未启用/不可用 → 空集。
+//   [修10集标识] 集合同时含 guid 与归一化 enclosure url(两类键空间不冲突)：ABS 老集无 guid,
+//   仅 guid 匹配会漏掉绝大多数已归档老集 → wifi 标识只亮一小撮。补 url 键(同 nasBridge byUrl
+//   口径)后，详情页 nasEpOn 用 guid 或 normFeedUrl(audioUrl) 任一命中即亮，与播放解析双路一致。
 export async function nasEpisodeGuidSet(podcastId) {
   if (!isNasEnabled() || !podcastId) return new Set();
   const alive = await ensureProbed();
   if (!alive) return new Set();
   try {
     const r = await ipcRenderer.invoke('nas:episodeGuids', podcastId);
-    return new Set((r && r.guids) || []);
+    const s = new Set((r && r.guids) || []);
+    const urls = (r && r.urls) || [];
+    for (let i = 0; i < urls.length; i++) s.add(urls[i]);
+    return s;
   } catch (e) {
     return new Set();
   }

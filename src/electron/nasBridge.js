@@ -477,18 +477,21 @@ export function registerNasIpc() {
     }
   });
 
-  // [NAS·状态点] 某档在 NAS 上已归档的单集 guid 集合（供详情页标"NAS 上有此单集"）。
+  // [NAS·状态点] 某档在 NAS 上已归档的单集匹配键集合（供详情页标"NAS 上有此单集"）。
+  //   [修10集标识] 同时回 guids + urls 两类键：ABS 老集常无 guid 字段(实测督工 285 集仅 21 集有
+  //   guid)，只回 byGuid → 详情页只亮一小撮。byUrl(enclosure.url 归一化)对全部已下载集都有,
+  //   渲染端用 guid 或 url 双路匹配(与 resolveStream 同口径)→ 老集也能正确亮灯。
   ipcMain.handle('nas:episodeGuids', async (_e, podcastId) => {
     const c = getCfg();
-    if (!ready(c)) return { guids: [] };
+    if (!ready(c)) return { guids: [], urls: [] };
     try {
       const items = await ensureItems(c);
       const itemId = items[normFeed(podcastId)];
-      if (!itemId) return { guids: [] };
+      if (!itemId) return { guids: [], urls: [] };
       const eps = await ensureEps(c, itemId);
-      return { guids: Object.keys(eps.byGuid) };
+      return { guids: Object.keys(eps.byGuid), urls: Object.keys(eps.byUrl) };
     } catch (e) {
-      return { guids: [] };
+      return { guids: [], urls: [] };
     }
   });
 
