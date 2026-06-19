@@ -143,14 +143,14 @@ def check_storage():
     except Exception as e:
         log("storage query fail %s"%e);return
     arr=(it.get("results") or it.get("items") or []) if isinstance(it,dict) else []
-    total=sum((x.get("size") or 0) for x in arr)
-    tg=total/GB
-    log("storage: %.1fGB / cap %.0fGB (%d podcasts)"%(tg,CAP,len(arr)))
-    if tg<=CAP:return
-    if not EVICT:
-        log("OVER CAP but EVICT_ENABLED=0, monitor-only");return
-    log("OVER CAP %.1f>%.0f, evicting oldest episodes down to %.0fGB ..."%(tg,CAP,TGT))
-    eps=[];cnt={}
+    # [防缓存死循环·2026-06-19 真机事故根因] item.size 是 ABS 缓存值，**软删(无 hard)后不更新**、
+    #   hard 删后也可能延迟更新。只拿它做"可能超限"的快筛；真超限必须用 libraryFiles 真实大小复核，
+    #   否则缓存虚高 → 每轮误判超限 → 把全库 evict 到 FLOOR(=之前每档只剩10集的事故)。
+    cache_total=sum((x.get("size") or 0) for x in arr)
+    if cache_total/GB<=CAP:
+        log("storage(cache): %.1fGB / cap %.0fGB (%d podcasts), ok"%(cache_total/GB,CAP,len(arr)));return
+    # 缓存显示超限 → expanded 复核真实占用(libraryFiles 之和) + 顺便收集可删集
+    eps=[];cnt={};real_total=0
     for x in arr:
         iid=x.get("id")
         if not iid:continue
@@ -159,6 +159,8 @@ def check_storage():
         except Exception:
             continue
         es=(j.get("media",{}) or {}).get("episodes",[]) if isinstance(j,dict) else []
+        lf=j.get("libraryFiles",[]) if isinstance(j,dict) else []
+        real_total+=sum(((f.get("metadata") or {}).get("size") or 0) for f in lf)
         cnt[iid]=len(es)
         for e in es:
             sz=e.get("size")
@@ -166,14 +168,23 @@ def check_storage():
                 af=e.get("audioFile") or {}
                 sz=(af.get("metadata") or {}).get("size") or 0
             eps.append((e.get("publishedAt") or e.get("addedAt") or 0,iid,e.get("id"),sz))
+    tg=real_total/GB
+    log("storage(real): %.1fGB / cap %.0fGB (cache said %.1f, %d podcasts)"%(tg,CAP,cache_total/GB,len(arr)))
+    if tg<=CAP:
+        log("cache 虚高但真实未超 cap → 不驱逐(已防误删死循环)");return
+    if not EVICT:
+        log("OVER CAP but EVICT_ENABLED=0, monitor-only");return
+    log("OVER CAP(real) %.1f>%.0f, evicting oldest down to %.0fGB (HARD delete=真删文件释放磁盘) ..."%(tg,CAP,TGT))
     eps.sort(key=lambda r:r[0])
     tb=TGT*GB;freed=0;dl=0;zero=0
     for pub,iid,epid,sz in eps:
-        if (total-freed)<=tb:break
+        if (real_total-freed)<=tb:break
         if cnt.get(iid,0)<=FLOOR:continue
         if not epid:continue
         try:
-            api("/api/podcasts/%s/episode/%s"%(iid,epid),"DELETE")
+            # [核心修] 加 ?hard=1：ABS 默认 DELETE 只删 DB 记录、不删磁盘文件(软删)→ 空间不释放、
+            #   rescan 又复活、缓存不降 → evict 死循环把库削到 FLOOR。hard=1 才真删文件、真释放。
+            api("/api/podcasts/%s/episode/%s?hard=1"%(iid,epid),"DELETE")
             dl+=1;cnt[iid]-=1;time.sleep(0.3)
             if sz>0:
                 freed+=sz;zero=0
@@ -183,7 +194,7 @@ def check_storage():
                     log("evict SANITY abort: 20 consecutive zero-size deletes (size missing?), stop round");break
         except Exception as e:
             log("evict del fail %s"%e)
-    log("evicted %d episodes, ~%.1fGB freed (floor=%d/podcast, shows kept)"%(dl,freed/GB,FLOOR))
+    log("evicted %d episodes, ~%.1fGB freed (floor=%d/podcast, hard delete)"%(dl,freed/GB,FLOOR))
 def trim_per_podcast():
     # [治本] 每档主动裁剪到 KEEP 集：删最老的超量集。ABS 的 maxEpisodesToKeep 不回溯历史
     #   (实测每档几百集远超设定的 100)→ 总量只增不减逼近 CAP。主动维持每档 KEEP 集后，总量
@@ -214,7 +225,8 @@ def trim_per_podcast():
             epid=e.get("id")
             if not epid:continue
             try:
-                api("/api/podcasts/%s/episode/%s"%(iid,epid),"DELETE")
+                # [核心修] ?hard=1 真删磁盘文件(无 hard=软删只删DB记录、文件残留撑爆+rescan复活)
+                api("/api/podcasts/%s/episode/%s?hard=1"%(iid,epid),"DELETE")
                 deleted+=1;time.sleep(0.3)
             except Exception as ex:
                 log("trim del fail %s"%ex)
