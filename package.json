@@ -1,9 +1,17 @@
 {
-  "name": "yesplaymusic",
+  "name": "podplayer",
   "version": "0.4.10",
   "private": true,
-  "description": "A third party music player for Netease Music",
-  "author": "qier222<qier222@outlook.com>",
+  "description": "A personal desktop podcast client (forked from YesPlayMusic)",
+  "author": "Fujii",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fuji-021/PodPlayer.git"
+  },
+  "homepage": "https://github.com/Fuji-021/PodPlayer",
+  "bugs": {
+    "url": "https://github.com/Fuji-021/PodPlayer/issues"
+  },
   "scripts": {
     "serve": "vue-cli-service serve",
     "build": "vue-cli-service build",

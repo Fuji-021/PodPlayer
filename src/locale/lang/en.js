@@ -89,7 +89,7 @@ export default {
     loginWithPhone: 'Login with Phone',
     notice: `PodPlayer promises not to save any of your account information to the cloud.<br />
       Your password will be MD5 encrypted locally and then transmitted to NetEase Music API.<br />
-      PodPlayer is not the official website of NetEase Music, please consider carefully before entering account information. You can also go to <a href="https://github.com/qier222/YesPlayMusic">PodPlayer's GitHub repository</a> to build and use the self-hosted NetEase Music API.`,
+      PodPlayer is not the official website of NetEase Music, please consider carefully before entering account information. You can also go to <a href="https://github.com/Fuji-021/PodPlayer">PodPlayer's GitHub repository</a> to build and use the self-hosted NetEase Music API.`,
     noticeElectron: `Your password will be MD5 encrypted locally and then transmitted to NetEase Music API.<br />
       PodPlayer promises not to save any of your account information to the cloud.<br />`,
   },
