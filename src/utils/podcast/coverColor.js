@@ -2,6 +2,10 @@
 // 返回 [h, s, l]（h:0-360, s/l:0-100），并把 s/l 夹到安全区间，避免纯黑/纯白/灰影响阅读。
 // webSecurity:false 让跨域封面也能被 canvas 取色。worker 版异步、不阻塞 UI。
 import * as Vibrant from 'node-vibrant/dist/vibrant.worker.min.js';
+// [性能·取色降解码] node-vibrant 是"半 worker"：仅量化进 worker，图片解码 + getImageData 仍在
+//   主线程。播客封面常 ≥1400px，解码是大头。复用 coverHalo 已生成的 64px 降采样图(光晕共用)→
+//   命中则 vibrant 只解码 64px、主线程解码成本降 ~99%；未命中(无光晕 tiny)用原图、行为不变(零回归)。
+import { peekTinyCover } from './coverHalo';
 
 // [审P3-3] LRU 上限：取色结果(仅 [h,s,l] 三个数)很小，但模块级 Map 只增不淘汰会随连播单调增长。
 //   套用 episodeCache.js 同款 LRU(命中提到最新、超量淘汰最旧)，cap 100 对个人自用足够。
@@ -37,8 +41,11 @@ export async function getCoverColor(coverUrl) {
     return v;
   }
   try {
-    const palette = await Vibrant.from(coverUrl, {
+    // 命中降采样小图则喂小图(省解码)；maxDimension 进一步限 getImageData 画布(省量化数据量)
+    const src = peekTinyCover(coverUrl) || coverUrl;
+    const palette = await Vibrant.from(src, {
       colorCount: 1,
+      maxDimension: 128,
     }).getPalette();
     const sw =
       palette.Vibrant ||

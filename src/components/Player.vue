@@ -2690,6 +2690,14 @@ export default {
 .imm-fade-enter-active,
 .imm-fade-leave-active {
   transition: opacity 0.32s ease, transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1);
+  will-change: opacity, transform; // 仅 active 类，动画结束自动移除，不常驻提层
+}
+// [性能·降热] 进出 0.32s 期间临时去掉磨砂层 backdrop-filter——否则 opacity 动画每帧都重算
+//   blur(24px)(叠加 imm-bg-cover blur64 双层滤镜)→ CPU 尖峰/掉帧(疑与双击最大化时鼠标缓慢/
+//   闪退相关，见 known-bugs)。动画期用 --imm-frost 纯色压暗兜底(视觉几乎无损)，落定后恢复 blur。
+.imm-fade-enter-active .imm-bg-frost,
+.imm-fade-leave-active .imm-bg-frost {
+  backdrop-filter: none;
 }
 .imm-fade-enter,
 .imm-fade-leave-to {
@@ -2770,6 +2778,9 @@ export default {
   width: min(58vh, 86vw, 620px);
   display: flex;
   flex-direction: column;
+  // [性能·补动画] 窗口最大化/还原时列宽随视口(vh/vw)变化平滑缓动(原硬切瞬跳)；只此收敛容器
+  //   过渡 width、子元素百分比跟随。绝不给 .immersive/.imm-bg 加尺寸过渡(会逼双层滤镜逐帧重算发烫)。
+  transition: width 0.26s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 // 大封面：方槽内 scale，播放 1 / 暂停 0.82，下方布局不跳动
@@ -2781,6 +2792,7 @@ export default {
   justify-content: center;
   // [批注] 加大封面↔下方块间距 → 「节目名+进度条+控制」整块下移、封面上提，呼吸更足
   margin-bottom: clamp(28px, 5vh, 58px);
+  transition: margin-bottom 0.26s cubic-bezier(0.2, 0.7, 0.2, 1); // [性能·补动画] 最大化时间距平滑
 }
 .imm-cover {
   width: 100%;
@@ -2802,6 +2814,7 @@ export default {
 .imm-meta {
   // [批注] 再加大「节目名↔进度条」间距 → 进度条+控制整块再下移；hover 时间提示也不会撞到节目名
   margin-bottom: clamp(20px, 3.4vh, 40px);
+  transition: margin-bottom 0.26s cubic-bezier(0.2, 0.7, 0.2, 1); // [性能·补动画] 最大化时间距平滑
   .imm-text {
     min-width: 0;
   }

@@ -351,6 +351,20 @@ export default {
       if (this.epDisplayLimit >= this.episodes.length) return this.episodes;
       return this.episodes.slice(0, this.epDisplayLimit);
     },
+    // [性能·机核止血] 已下载/已收藏/已选 三态用 Set 缓存：原 isDownloaded/isFavorited/isSelected
+    //   各自 array.includes(ep.id) 是 O(n)，模板每行都调 → 机核 1000+ 集 = O(n²)，水合期把主线程
+    //   钉死、:hover 输入被饿死。改 computed Set：store/选择变化时只重建一次 O(n)，每行查 O(1)。
+    _downloadedSet() {
+      const d = this.$store.state.podcastDownloads;
+      return new Set((d && d.doneIds) || []);
+    },
+    _favoritedSet() {
+      const f = this.$store.state.podcastFavorites;
+      return new Set((f && f.episodeIds) || []);
+    },
+    _selectedSet() {
+      return new Set(this.selectedEpIds);
+    },
     // [B-33] 节目简介去 HTML 标签 → 纯文本（避免 RSS 描述里的 <p style> 源码当文字显示）
     cleanDescription() {
       return stripHtmlToText((this.podcast && this.podcast.description) || '');
@@ -650,12 +664,7 @@ export default {
     },
     // [B-31] 下载状态判定 + 进度（-1 = 没在下载）
     isDownloaded(ep) {
-      if (!ep) return false;
-      const ids =
-        (this.$store.state.podcastDownloads &&
-          this.$store.state.podcastDownloads.doneIds) ||
-        [];
-      return ids.includes(ep.id);
+      return !!ep && this._downloadedSet.has(ep.id); // [性能] O(1)，见 _downloadedSet
     },
     // [NAS] 该单集在 NAS 上是否已归档(决定是否显示 wifi 标识)。
     //   [修10集标识] guid 或归一化 audioUrl 任一命中即算在档：ABS 老集无 guid，单 guid 匹配会
@@ -717,12 +726,7 @@ export default {
     },
     // [S-3] 当前 episode 是否已收藏
     isFavorited(ep) {
-      if (!ep) return false;
-      const ids =
-        (this.$store.state.podcastFavorites &&
-          this.$store.state.podcastFavorites.episodeIds) ||
-        [];
-      return ids.includes(ep.id);
+      return !!ep && this._favoritedSet.has(ep.id); // [性能] O(1)，见 _favoritedSet
     },
     // [B-33] 单集行收藏按钮：toggle 收藏（点击已收藏的红心 = 取消收藏）
     toggleFav(ep) {
@@ -786,7 +790,7 @@ export default {
       this.selectedEpIds = [];
     },
     isSelected(ep) {
-      return this.selectedEpIds.includes(ep.id);
+      return !!ep && this._selectedSet.has(ep.id); // [性能] O(1)，见 _selectedSet
     },
     toggleSelect(ep) {
       if (this.isDownloaded(ep)) return; // 已下载不可选

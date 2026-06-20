@@ -10,6 +10,8 @@
 // CORS：复用 coverColor.js 同款 node-vibrant worker 版 + Electron webSecurity:false → 跨域封面也能取色
 //   (该机制已在播放栏标记主色长期生产使用，无需 express 代理)。取色仅切歌时算一次并缓存。
 import * as Vibrant from 'node-vibrant/dist/vibrant.worker.min.js';
+// [性能·取色降解码] 复用 coverHalo 64px 降采样图喂 vibrant，命中省 ~99% 解码、未命中用原图不变。
+import { peekTinyCover } from './coverHalo';
 
 // [审P3-3] 同 coverColor：模块级 Map 加 LRU 上限，防连播单调增长。
 const cache = new Map();
@@ -63,8 +65,10 @@ export async function getCoverPalette(coverUrl) {
     return v;
   }
   try {
-    const palette = await Vibrant.from(coverUrl, {
+    const src = peekTinyCover(coverUrl) || coverUrl;
+    const palette = await Vibrant.from(src, {
       colorCount: 32,
+      maxDimension: 128,
     }).getPalette();
     const order = [
       'Vibrant',

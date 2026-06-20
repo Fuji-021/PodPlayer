@@ -7,10 +7,23 @@
       :style="{ overflow: enableScrolling ? 'auto' : 'hidden' }"
       @scroll="handleScroll"
     >
-      <keep-alive>
-        <router-view v-if="$route.meta.keepAlive"></router-view>
-      </keep-alive>
-      <router-view v-if="!$route.meta.keepAlive"></router-view>
+      <!-- [性能·路由过渡] 给页面切换加淡入+轻微上移过渡，消除"硬切"主观卡顿。
+           :key=$route.name 让同为 keepAlive 的菜单互切(home↔library↔explore)也能触发过渡。
+           keepAlive 仍按 name 缓存各页 DOM，过渡只补视觉、不重渲。 -->
+      <transition name="page" mode="out-in">
+        <keep-alive>
+          <router-view
+            v-if="$route.meta.keepAlive"
+            :key="$route.name"
+          ></router-view>
+        </keep-alive>
+      </transition>
+      <transition name="page" mode="out-in">
+        <router-view
+          v-if="!$route.meta.keepAlive"
+          :key="$route.name"
+        ></router-view>
+      </transition>
     </main>
     <transition name="slide-up">
       <Player v-if="enablePlayer" v-show="showPlayer" ref="player" />
@@ -135,6 +148,22 @@ main {
 
 main::-webkit-scrollbar {
   width: 0px;
+}
+
+// [性能·路由过渡] 页面切换淡入+轻微上移，消除硬切。出场快(0.13s)入场稍长(0.18s)，
+//   mode=out-in 下总时长 ~0.3s 不拖沓；只动 opacity/transform(合成器属性)，不引发重排。
+.page-enter-active {
+  transition: opacity 0.18s ease, transform 0.18s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.page-leave-active {
+  transition: opacity 0.13s ease;
+}
+.page-enter {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-leave-to {
+  opacity: 0;
 }
 
 .slide-up-enter-active,

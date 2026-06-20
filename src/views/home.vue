@@ -99,8 +99,13 @@
           </div>
           <!-- [B-44] 固定两行 + 列数随窗口自适应（去掉横向滚轮）；切到 2*cols 项，多的进二级页 -->
           <!-- [B-47] forYou 的 key 随"再推荐一次"变化 → 网格重挂触发淡入过渡(非硬切) -->
-          <div
+          <!-- [性能·补动画] 用 transition-group 让窗口缩放跨列数(5↔6)时卡片 FLIP 平滑滑到新位，
+               而非瞬移。:key 不变(resize)→走 *-move 位移;:key 变(reroll)→整组重建、重播
+               discGridFade 淡入(原机制保留)。move 走 transform 不触发重排，60fps。 -->
+          <transition-group
             :key="sec.key === 'forYou' ? 'forYou' + forYouSeq : sec.key"
+            name="disc-flip"
+            tag="div"
             class="disc-grid"
             :style="{ '--disc-cols': cols }"
           >
@@ -110,7 +115,7 @@
               :podcast="p"
               @changed="onCardChanged"
             />
-          </div>
+          </transition-group>
         </section>
       </template>
     </div>
@@ -242,14 +247,20 @@ export default {
   },
   methods: {
     // [B-44] 按容器宽度算每行列数：card 最小 168px + gap 18px
+    // [性能] rAF 节流：resize 高频触发，原每次同步读 clientWidth 会强制 reflow、多次抖动；
+    //   合并到下一帧只读一次，配合 disc-flip move 让缩放更顺。
     computeCols() {
-      const el = this.$refs.discRoot;
-      if (!el) return;
-      const w = el.clientWidth;
-      if (!w) return;
-      const card = 168;
-      const gap = 18;
-      this.cols = Math.max(1, Math.floor((w + gap) / (card + gap)));
+      if (this._colsRaf) cancelAnimationFrame(this._colsRaf);
+      this._colsRaf = requestAnimationFrame(() => {
+        this._colsRaf = null;
+        const el = this.$refs.discRoot;
+        if (!el) return;
+        const w = el.clientWidth;
+        if (!w) return;
+        const card = 168;
+        const gap = 18;
+        this.cols = Math.max(1, Math.floor((w + gap) / (card + gap)));
+      });
     },
     // [B-44] 卡片订阅状态变化（订阅/取消订阅）后，重算偏好分类等可选刷新；
     //   subscribedMap 已由卡片直接更新 store，回显是响应式的，这里无需重拉。
@@ -581,6 +592,11 @@ footer {
     gap: 24px 18px;
     // [B-47] 网格淡入上滑：首屏加载 + "再推荐一次"重挂时都有平滑过渡（不硬切）
     animation: discGridFade 0.32s ease;
+  }
+  // [性能·补动画] 窗口缩放跨列数时卡片 FLIP 平滑滑动(transform-only，不重排)。
+  //   transition-group 自动给位置变化的子元素挂 .disc-flip-move 并补 translate。
+  .disc-flip-move {
+    transition: transform 0.34s cubic-bezier(0.2, 0.7, 0.2, 1);
   }
 }
 @keyframes discGridFade {
