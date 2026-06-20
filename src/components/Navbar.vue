@@ -383,7 +383,7 @@ export default {
       this.$store.dispatch('showToast', '已恢复默认头像');
     },
     toGitHub() {
-      window.open('https://github.com/qier222/YesPlayMusic');
+      window.open('https://github.com/Fuji-021/PodPlayer');
     },
     toLogin() {
       if (process.env.IS_ELECTRON === true) {

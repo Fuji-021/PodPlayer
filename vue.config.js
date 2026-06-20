@@ -100,8 +100,8 @@ module.exports = {
         publish: [
           {
             provider: 'github',
-            owner: 'qier222',
-            repo: 'YesPlayMusic',
+            owner: 'Fuji-021',
+            repo: 'PodPlayer',
             vPrefixedTagName: true,
             releaseType: 'draft',
           },

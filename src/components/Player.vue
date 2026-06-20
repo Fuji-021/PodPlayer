@@ -557,6 +557,7 @@
                   @click.stop
                 >
                   <button
+                    v-tip="'倍速'"
                     class="rate-button"
                     :class="{ active: playbackRate !== 1 }"
                     @click="toggleRateMenu"
@@ -590,6 +591,7 @@
                 <!-- 播放列表(复用 queuePanelOpen/toggleQueuePanel + 队列状态/方法) -->
                 <div ref="queueControlImm" class="queue-control" @click.stop>
                   <button-icon
+                    v-tip="'播放列表'"
                     :class="{ active: queuePanelOpen }"
                     @click.native="toggleQueuePanel"
                     ><svg-icon icon-class="queue"
@@ -650,6 +652,7 @@
                 <!-- 睡眠(复用 sleepMenuOpen/toggleSleepMenu + 睡眠状态/方法) -->
                 <div ref="sleepControlImm" class="sleep-control" @click.stop>
                   <button-icon
+                    v-tip="'睡眠定时'"
                     :class="{ active: sleepMode !== 'off' }"
                     @click.native="toggleSleepMenu"
                     ><svg-icon icon-class="moon"
@@ -2755,6 +2758,11 @@ export default {
   justify-content: flex-end;
   padding: 0 clamp(12px, 2vw, 28px);
   z-index: 4;
+  // [修·收回按钮点不动] 收回按钮落在顶部 32px 的 .imm-drag-bar(app-region:drag)区上方，
+  //   OS 级拖拽区会吞掉 click(z-index 高也没用)。给按钮显式 no-drag 夺回点击；其余顶边仍可拖。
+  .imm-collapse {
+    -webkit-app-region: no-drag;
+  }
   .imm-collapse .svg-icon {
     width: 22px;
     height: 22px;
