@@ -72,120 +72,113 @@
       <div v-else-if="podcast && podcast._loading" class="ep-loading">
         正在载入单集…
       </div>
-      <!-- [F1·方案C] 固定行高窗口虚拟化：top/bottom spacer 撑出 n×rowH 的恒定真实总高，
-           中间 v-for 只渲染可视窗口 [winStart,winEnd) ~30~50 行。ref="epList" 给方法读 rect/测行高用。 -->
       <div
-        ref="epList"
-        class="ep-window"
-        :style="{
-          paddingTop: spacerTopH + 'px',
-          paddingBottom: spacerBottomH + 'px',
+        v-for="ep in visibleEpisodes"
+        :key="ep.id"
+        class="episode-row"
+        :class="{
+          selected: isSelected(ep),
+          'is-downloaded': selectMode && isDownloaded(ep),
         }"
+        @click="onRowClick(ep)"
+        @dblclick="onRowDblClick(ep)"
+        @contextmenu.prevent="openEpisodeMenu($event, ep)"
       >
+        <!-- [B-34] 多选框：已下载的显示绿勾禁用；未下载可勾选 -->
         <div
-          v-for="ep in windowEpisodes"
-          :key="ep.id"
-          class="episode-row"
-          :class="{
-            selected: isSelected(ep),
-            'is-downloaded': selectMode && isDownloaded(ep),
-          }"
-          @click="onRowClick(ep)"
-          @dblclick="onRowDblClick(ep)"
-          @contextmenu.prevent="openEpisodeMenu($event, ep)"
+          v-if="selectMode"
+          class="ep-checkbox"
+          :class="{ checked: isSelected(ep), disabled: isDownloaded(ep) }"
         >
-          <!-- [B-34] 多选框：已下载的显示绿勾禁用；未下载可勾选 -->
-          <div
-            v-if="selectMode"
-            class="ep-checkbox"
-            :class="{ checked: isSelected(ep), disabled: isDownloaded(ep) }"
-          >
-            <svg-icon
-              v-if="isSelected(ep) || isDownloaded(ep)"
-              icon-class="check"
-            />
-          </div>
-          <!-- [B-31] 下载中：整行背景灰色进度条（弱视觉，不影响文字可读性） -->
-          <div
-            v-if="downloadPercent(ep) >= 0"
-            class="ep-dl-bar"
-            :style="{ width: Math.max(2, downloadPercent(ep)) + '%' }"
-          ></div>
-          <div class="ep-main">
-            <div class="ep-title">
-              {{ ep.title
-              }}<span
-                v-if="nasEpOn(ep)"
-                v-tip="'NAS 上有此单集（音源就近）'"
-                class="nas-dot"
-                :style="nasGlow(ep.guid)"
-                ><svg-icon icon-class="wifi"
-              /></span>
-            </div>
-            <div class="ep-sub">
-              <span>{{ formatDate(ep.pubDate) }}</span>
-              <!-- [C-4 改] 时长 / 剩余 / 听过X%(黄) / 已听完(绿) -->
-              <span
-                v-if="ep.duration"
-                class="ep-prog"
-                :class="progressLabelClass(ep)"
-              >
-                · {{ formatProgressLabel(ep) }}
-              </span>
-            </div>
-          </div>
-          <!-- [B-33] 状态按钮排序原则：从右到左变动频率递减。
-             更多(最右,常驻) ← 播放(常驻) ← 收藏 ← 已下载。DOM 左到右即：已下载 收藏 播放 更多 -->
-          <!-- [B-34] 多选模式下隐藏右侧操作按钮，只留多选框 + 内容 -->
-          <!-- [B-59] 排队中：显式状态图标，只提示不操作（取消请用更多菜单里的"取消下载"） -->
-          <div
-            v-if="!selectMode && isQueued(ep)"
-            v-tip="'排队中'"
-            class="ep-queued"
-          >
-            <svg-icon icon-class="queue-alt" />
-          </div>
-          <!-- 已下载（点击 → 中央确认删除弹窗） -->
-          <button
-            v-if="!selectMode && isDownloaded(ep)"
-            v-tip="'已下载（点击删除）'"
-            class="ep-downloaded-btn"
-            @click.stop="askDeleteDownload(ep)"
-            @dblclick.stop
-          >
-            <svg-icon icon-class="check-circle" />
-          </button>
-          <!-- 已收藏（点击 → 取消收藏） -->
-          <button
-            v-if="!selectMode && isFavorited(ep)"
-            v-tip="'已收藏（点击取消）'"
-            class="ep-fav-btn"
-            @click.stop="toggleFav(ep)"
-            @dblclick.stop
-          >
-            <svg-icon icon-class="heart-solid" />
-          </button>
-          <!-- 播放 + 更多 -->
-          <button
-            v-if="!selectMode"
-            class="ep-play-btn"
-            @click.stop="playEpisode(ep)"
-            @dblclick.stop
-          >
-            <svg-icon icon-class="play-circle" />
-          </button>
-          <button
-            v-if="!selectMode"
-            class="ep-menu-btn"
-            @click.stop="openEpisodeMenu($event, ep)"
-            @dblclick.stop
-          >
-            <svg-icon icon-class="menu-dots-vertical" />
-          </button>
+          <svg-icon
+            v-if="isSelected(ep) || isDownloaded(ep)"
+            icon-class="check"
+          />
         </div>
+        <!-- [B-31] 下载中：整行背景灰色进度条（弱视觉，不影响文字可读性） -->
+        <div
+          v-if="downloadPercent(ep) >= 0"
+          class="ep-dl-bar"
+          :style="{ width: Math.max(2, downloadPercent(ep)) + '%' }"
+        ></div>
+        <div class="ep-main">
+          <div class="ep-title">
+            {{ ep.title
+            }}<span
+              v-if="nasEpOn(ep)"
+              v-tip="'NAS 上有此单集（音源就近）'"
+              class="nas-dot"
+              :style="nasGlow(ep.guid)"
+              ><svg-icon icon-class="wifi"
+            /></span>
+          </div>
+          <div class="ep-sub">
+            <span>{{ formatDate(ep.pubDate) }}</span>
+            <!-- [C-4 改] 时长 / 剩余 / 听过X%(黄) / 已听完(绿) -->
+            <span
+              v-if="ep.duration"
+              class="ep-prog"
+              :class="progressLabelClass(ep)"
+            >
+              · {{ formatProgressLabel(ep) }}
+            </span>
+          </div>
+        </div>
+        <!-- [B-33] 状态按钮排序原则：从右到左变动频率递减。
+             更多(最右,常驻) ← 播放(常驻) ← 收藏 ← 已下载。DOM 左到右即：已下载 收藏 播放 更多 -->
+        <!-- [B-34] 多选模式下隐藏右侧操作按钮，只留多选框 + 内容 -->
+        <!-- [B-59] 排队中：显式状态图标，只提示不操作（取消请用更多菜单里的"取消下载"） -->
+        <div
+          v-if="!selectMode && isQueued(ep)"
+          v-tip="'排队中'"
+          class="ep-queued"
+        >
+          <svg-icon icon-class="queue-alt" />
+        </div>
+        <!-- 已下载（点击 → 中央确认删除弹窗） -->
+        <button
+          v-if="!selectMode && isDownloaded(ep)"
+          v-tip="'已下载（点击删除）'"
+          class="ep-downloaded-btn"
+          @click.stop="askDeleteDownload(ep)"
+          @dblclick.stop
+        >
+          <svg-icon icon-class="check-circle" />
+        </button>
+        <!-- 已收藏（点击 → 取消收藏） -->
+        <button
+          v-if="!selectMode && isFavorited(ep)"
+          v-tip="'已收藏（点击取消）'"
+          class="ep-fav-btn"
+          @click.stop="toggleFav(ep)"
+          @dblclick.stop
+        >
+          <svg-icon icon-class="heart-solid" />
+        </button>
+        <!-- 播放 + 更多 -->
+        <button
+          v-if="!selectMode"
+          class="ep-play-btn"
+          @click.stop="playEpisode(ep)"
+          @dblclick.stop
+        >
+          <svg-icon icon-class="play-circle" />
+        </button>
+        <button
+          v-if="!selectMode"
+          class="ep-menu-btn"
+          @click.stop="openEpisodeMenu($event, ep)"
+          @dblclick.stop
+        >
+          <svg-icon icon-class="menu-dots-vertical" />
+        </button>
       </div>
-      <!-- [F1·方案C] 固定行高虚拟化下，任意位置即时可达、无"还没补满"状态 → 删 ep-more-hint。
-           [B-76] 原"滑到底彩虹猫"彩蛋#1 早已移除(吉祥物以后另觅合适场景)。 -->
+      <!-- [B-75/F1] 后台水合中(还没补满) → 底部轻提示，补满即消失 -->
+      <div v-if="episodes.length > visibleEpisodes.length" class="ep-more-hint">
+        载入中 · {{ visibleEpisodes.length }} / {{ episodes.length }}
+      </div>
+      <!-- [B-76] 原"滑到底彩虹猫"彩蛋#1 已移除：改后台水合后不再有加载空白，
+           该彩蛋失去语境、属冗余 → 删之（吉祥物以后另觅合适场景）。 -->
     </div>
 
     <!-- [B-34] 多选模式固定下载栏（滚动时固定在播放栏上方） -->
@@ -320,19 +313,6 @@ import {
 } from '@/utils/podcast/nasSource';
 import SvgIcon from '@/components/SvgIcon.vue';
 
-// [F1·方案C] 单集行固定高度兜底(px)。真实值 mounted 后测量并写 localStorage，此处仅供首帧 spacer 估算。
-const ROW_H_FALLBACK = 69;
-const ROW_H_LS_KEY = 'podcastDetailRowH';
-const VIRTUAL_BUFFER = 8; // 可视区上下各多渲染的缓冲行数(防快速滚动白边)
-function readCachedRowH() {
-  try {
-    const v = parseFloat(window.localStorage.getItem(ROW_H_LS_KEY));
-    return v > 0 && v < 400 ? v : 0;
-  } catch (e) {
-    return 0;
-  }
-}
-
 export default {
   name: 'PodcastDetail',
   components: { SvgIcon },
@@ -352,14 +332,9 @@ export default {
       // [B-34] 多选下载模式
       selectMode: false,
       selectedEpIds: [],
-      // [F1·方案C] 固定行高窗口虚拟化：episodes 始终全量(批量下载/选择/播放广播都用它)，
-      //   只渲染可视窗口 [winStart,winEnd) 一段。配 top/bottom spacer 撑出 n×rowH 的恒定总高，
-      //   故 main.scrollHeight 数学恒定不抖、自绘条不跳(根治 B-74 命门:Scrollbar 每帧实时读 main.scrollHeight)。
-      //   前提=单集行永远单行等高(.ep-title nowrap+ellipsis)，由 _measureRowH 断言守住。
-      winStart: 0,
-      winEnd: 0,
-      // 固定行高(px)：首帧用 localStorage 缓存或常量兜底，mounted 后测真实值并 ResizeObserver 跟随字号/缩放
-      rowH: readCachedRowH() || ROW_H_FALLBACK,
+      // [B-75/F1] 单集渐进渲染上限：首屏 50 条即时上屏(秒开)，随后 _startHydration 在后台
+      //   逐帧补满到全量。episodes 始终全量(批量下载/选择/播放广播都用它)，只限制**渲染**节奏。
+      epDisplayLimit: 50,
       // [NAS] 本档在 NAS 上已归档的单集 guid 集合(连上才非空；空=不显示 wifi 标识)
       nasEpGuids: new Set(),
       // 订阅按钮底色：取色完成前隐藏(opacity:0)，取色后淡入，避免蓝色闪烁
@@ -371,17 +346,10 @@ export default {
     feedUrl() {
       return decodeURIComponent(this.$route.params.feedUrlEncoded || '');
     },
-    // [F1·方案C] 实际渲染的窗口子集 [winStart,winEnd)。全量始终在 this.episodes(C7)。
-    windowEpisodes() {
-      return this.episodes.slice(this.winStart, this.winEnd);
-    },
-    // 窗口上方未渲染部分占位高度(=winStart 行) → 把可见行顶到正确滚动位置
-    spacerTopH() {
-      return Math.max(0, this.winStart) * this.rowH;
-    },
-    // 窗口下方未渲染部分占位高度(=剩余行) → 撑出完整真实总高、自绘条不缩
-    spacerBottomH() {
-      return Math.max(0, this.episodes.length - this.winEnd) * this.rowH;
+    // [B-75/F1] 实际渲染的单集子集（前 epDisplayLimit 条）。全量在 this.episodes。
+    visibleEpisodes() {
+      if (this.epDisplayLimit >= this.episodes.length) return this.episodes;
+      return this.episodes.slice(0, this.epDisplayLimit);
     },
     // [性能·机核止血] 已下载/已收藏/已选 三态用 Set 缓存：原 isDownloaded/isFavorited/isSelected
     //   各自 array.includes(ep.id) 是 O(n)，模板每行都调 → 机核 1000+ 集 = O(n²)，水合期把主线程
@@ -454,123 +422,50 @@ export default {
         .catch(() => {});
     },
   },
-  mounted() {
-    // [F1·方案C] 滚动监听挂外层唯一滚动容器 <main>(同 podcastLibrary 模式)，passive + rAF 节流重算窗口
-    this._scrollEl = this.$el && this.$el.closest('main');
-    if (this._scrollEl) {
-      this._scrollEl.addEventListener('scroll', this._onMainScroll, {
-        passive: true,
-      });
-    }
-    // 窗口缩放改变可视高度/列表宽度(可能改行高) → 一并重算
-    window.addEventListener('resize', this._onMainScroll);
-    // 中文字体异步加载完成会改变行高 → ready 后重测一次
-    if (document.fonts && document.fonts.ready) {
-      document.fonts.ready
-        .then(() => {
-          if (this._isDestroyed) return;
-          this._measureRowH();
-          this._recalcWindow();
-        })
-        .catch(() => {});
-    }
-    // 若 load() 在 mounted 前已填好数据(缓存命中)，这里补一次测量 + 窗口
-    this.$nextTick(() => {
-      this._measureRowH();
-      this._recalcWindow();
-    });
-  },
   beforeDestroy() {
     // [B-34] 离开页面时清理浮层/菜单的 document 监听，避免泄漏
     this.closeCoverMenu();
     this.closeEpisodeMenu();
-    // [F1·方案C] 解绑滚动/resize 监听 + 取消挂起 rAF
-    if (this._scrollEl) {
-      this._scrollEl.removeEventListener('scroll', this._onMainScroll);
-    }
-    window.removeEventListener('resize', this._onMainScroll);
-    if (this._winRaf) cancelAnimationFrame(this._winRaf);
+    this._stopHydration(); // [B-75] 取消后台水合，避免在已销毁实例上回调
     if (this._rowClickTimer) clearTimeout(this._rowClickTimer); // [TODO4] 清挂起的单击定时器
   },
   methods: {
-    // [F1·方案C 2026-06-21·根治 B-74] 固定行高窗口虚拟化：监听外层 <main> 滚动 → rAF 节流重算
-    //   可视窗口 [winStart,winEnd) 一段。top/bottom spacer 撑出 n×rowH 的恒定总高 →
-    //   main.scrollHeight 数学恒定不抖、自绘滚动条不跳。前提=单集行永远单行等高(.ep-title nowrap+ellipsis)。
-    //   历史否决说明：B-74 当年用底部 spacer + **硬编码行高估测**→拖动按变化 scrollHeight 跳动/脱手；
-    //   本方案 rowH 是 ResizeObserver 实测真实值(非估测)且行高物理恒定(标题 nowrap)，故 scrollHeight 不变、
-    //   与自绘条天然解耦(已核 Scrollbar.vue 每帧实时除 main.scrollHeight 算拇指)。
-    _onMainScroll() {
-      if (this._winRaf) return;
-      this._winRaf = requestAnimationFrame(() => {
-        this._winRaf = null;
-        this._recalcWindow();
-      });
-    },
-    // 按 main 与列表的实时相对位置(getBoundingClientRect 自适应封面区高度漂移)算 [winStart,winEnd)。
-    _recalcWindow() {
-      if (this._isDestroyed) return;
-      const main = this._scrollEl || (this.$el && this.$el.closest('main'));
-      const listEl = this.$refs.epList;
-      const n = this.episodes.length;
-      if (!main || !listEl || n === 0) {
-        this.winStart = 0;
-        this.winEnd = n;
-        return;
-      }
-      const rowH = this.rowH || ROW_H_FALLBACK;
-      // 列表顶已滚出 main 视口顶的距离(>0=列表顶在视口上方)。实时读 rect→自适应封面异步加载/取色致的 offset 漂移
-      const scrolledIn =
-        main.getBoundingClientRect().top - listEl.getBoundingClientRect().top;
-      let start = Math.floor(scrolledIn / rowH) - VIRTUAL_BUFFER;
-      if (start < 0) start = 0;
-      if (start > n) start = n;
-      const count = Math.ceil(main.clientHeight / rowH) + VIRTUAL_BUFFER * 2;
-      let end = start + count;
-      if (end > n) end = n;
-      this.winStart = start;
-      this.winEnd = end;
-      // 顺手重测真实行高(字体/缩放/主题切换的自愈点)。改变≥1px 才更新→nextTick 重算一次窗口
-      this.$nextTick(() => {
-        const before = this.rowH;
-        this._measureRowH();
-        if (this.rowH !== before) this._recalcWindow();
-      });
-    },
-    // 测一条真实单集行高 → 固定 rowH(写 localStorage 供冷启动首帧直接用、消首测跳变)。
-    _measureRowH() {
-      const listEl = this.$refs.epList;
-      if (!listEl) return;
-      const rows = listEl.querySelectorAll('.episode-row');
-      if (!rows.length) return;
-      const h = rows[0].offsetHeight;
-      if (!(h > 0)) return;
-      // [命门断言] 开发期校验单集行确实等高:某行明显偏离首行=有人加了换行/变高内容打破前提
-      if (process.env.NODE_ENV !== 'production' && rows.length > 1) {
-        const last = rows[rows.length - 1].offsetHeight;
-        if (Math.abs(last - h) >= 2) {
-          // eslint-disable-next-line no-console
-          console.warn(
-            '[F1·方案C] 单集行高不一致(' +
-              h +
-              ' vs ' +
-              last +
-              ')，固定行高虚拟化前提被破坏，检查是否有换行/变高内容'
-          );
+    // [B-75/F1] 后台渐进水合：首屏 50 上屏后，用 rAF 逐帧把 epDisplayLimit 补满到全量。
+    //   为何这样：B-73.2 靠滚动触发 + B-74 底部占位(spacer)，会让自绘滚动条拖到一片"未渲染的
+    //   空白占位"里、且托条按变化的 scrollHeight 算位移而跳动/脱手(用户反馈"还不如上一版")。
+    //   改后台水合后：列表很快是**完整真实高度** → 滚动条/拖动稳、永不留空白；首屏仍是即时 50 条。
+    // [机核封面 hover 慢半拍根治 2026-06-14 · 对抗式评审收敛]
+    //   原 +120/帧：机核(1000+集)每帧 patch 120 行子树(每行约 10 个模板方法) → 单帧远超 16ms，
+    //   rAF 连帧背靠背把主线程钉死约 1~2s；这期间头部封面 :hover 的 pointer 事件被排在渲染之后
+    //   → 反馈慢半拍(水合完就好、退出再进又复现)。注：单集行不含 PodImage 封面，慢源在「行数×方法」
+    //   的 patch 量，非图片。上轮改辉光动画治错了层(饿死的是「输入派发」，改 hover 动什么都没用)。
+    //   根治=每帧块 120 → **24**：单帧 patch(~24 行)稳稳 <8ms，留足时间派发输入 + 提交封面合成
+    //   → hover 不再排队；1000+ 集约 42 帧(~0.7~1s)填满，仍快到滚动条很快达完整真实高度(B-75)、
+    //   且更小步增长更稳。残留可降到 16，过慢可升到 ≤36(勿超 48)。requestIdleCallback+监听器方案
+    //   在持续输入下不可靠且反增主线程负担(已否决)；虚拟列表会重新引入 B-74 占位/硬编码行高(已否决)。
+    _startHydration() {
+      this._stopHydration();
+      const CHUNK = 24; // 原 120；小块 = 单帧渲染 <8ms、不饿死输入(封面 hover 即时)
+      const step = () => {
+        if (this._isDestroyed) return;
+        if (this.epDisplayLimit >= this.episodes.length) {
+          this._hydrateRaf = null;
+          return;
         }
-      }
-      if (Math.abs(h - this.rowH) >= 1) {
-        this.rowH = h;
-        try {
-          window.localStorage.setItem(ROW_H_LS_KEY, String(h));
-        } catch (e) {
-          /* ignore */
-        }
+        this.epDisplayLimit = Math.min(
+          this.episodes.length,
+          this.epDisplayLimit + CHUNK
+        );
+        this._hydrateRaf = requestAnimationFrame(step);
+      };
+      this._hydrateRaf = requestAnimationFrame(step);
+    },
+    _stopHydration() {
+      if (this._hydrateRaf) {
+        cancelAnimationFrame(this._hydrateRaf);
+        this._hydrateRaf = null;
       }
     },
-    // 字体/缩放/主题变化会改行高。原想 ResizeObserver 持续盯第 0 行，但 winStart 变化时 v-for 切片重生成
-    //   DOM 节点回收=观察对象失效；改为「每次 _recalcWindow 后顺手 _measureRowH」(O(1) offsetHeight 读)：
-    //   变化≥1px 时更新 rowH 并重算一次 → 一帧自愈，省去 observer 生命周期。
-    //   resize + 字体 ready 已在 mounted 中显式触发。
     // [B67-BUG-2] 未订阅节目秒跳进来：先用卡片"种子"渲染骨架(头图/标题/作者立即可见)，
     //   后台跑预览(resolveFeed+抓RSS+入库)，完成后 replace 到真实 feedUrl →
     //   feedUrl watcher 再以真实值走正常 load() 填充单集。失败则 toast + 返回，绝不留空白。
@@ -590,8 +485,7 @@ export default {
         _loading: true, // 骨架态：隐藏订阅按钮、单集区显示"载入中"
       };
       this.episodes = [];
-      this.winStart = 0;
-      this.winEnd = 0; // [F1·方案C] 预览态先清空窗口
+      this.epDisplayLimit = 50; // [B-73.2/F1] 预览态也复位渲染量
       // [B69-P1] 在途令牌 + 守卫：previewPodcast 抓 RSS 可达数秒，期间用户可能已离开骨架页/
       //   返回首页/又点了别的卡片。$router 是全局对象、组件销毁后调用仍生效 → 不加守卫会
       //   "数秒后把用户强行拉回本节目"或 A/B 串台。await 后校验：组件已销毁 / 又发起了新预览 /
@@ -681,30 +575,16 @@ export default {
           if (feedUrl === this.feedUrl) this.nasEpGuids = s;
         })
         .catch(() => {});
-      if (cached) {
-        // [F1·方案C] 缓存命中已 _presentEpisodes 过；权威数据回来仅重算窗口(不复位滚动位)
-        this.$nextTick(() => {
-          this._measureRowH();
-          this._recalcWindow();
-        });
-      } else this._presentEpisodes(); // 未命中：复位滚顶 + 顶部窗口 + 测量
+      if (cached) this._startHydration();
+      // 命中过：仅更新数据 + 续水合，不再复位滚动位
+      else this._presentEpisodes(); // 未命中：首次复位渲染量/滚顶/水合
     },
     // [B-75/F1] 新节目视图：渲染量回首屏 50、滚动条回顶部(不沿用上个节目深滚动位)，随后后台逐帧水合
     _presentEpisodes() {
-      const main = this._scrollEl || (this.$el && this.$el.closest('main'));
+      this.epDisplayLimit = 50;
+      const main = this.$el && this.$el.closest('main');
       if (main) main.scrollTop = 0;
-      // [F1·方案C] 新节目从顶部开始：先按"顶部一屏窗口"渲染秒开，nextTick 后测真实行高 + 精确重算窗口
-      const rowH = this.rowH || ROW_H_FALLBACK;
-      const viewH = main ? main.clientHeight : 800;
-      this.winStart = 0;
-      this.winEnd = Math.min(
-        this.episodes.length,
-        Math.ceil(viewH / rowH) + VIRTUAL_BUFFER * 2
-      );
-      this.$nextTick(() => {
-        this._measureRowH();
-        this._recalcWindow();
-      });
+      this.$nextTick(() => this._startHydration());
     },
     playEpisode(ep) {
       const title = this.podcast ? this.podcast.title : '';
@@ -1268,11 +1148,6 @@ export default {
 .episode-list {
   border-top: 1px solid var(--color-secondary-bg);
 }
-// [F1·方案C] 虚拟化窗口容器：自身无 layout 影响，仅靠 padding-top/bottom 充当 top/bottom spacer
-//   撑出"未渲染窗口外"的真实高度。content-box 让 padding 加在高度之外(不吞内容)。
-.ep-window {
-  box-sizing: content-box;
-}
 // [B67-BUG-2] 缓存优先骨架态：单集后台载入中的轻提示
 .ep-loading {
   padding: 28px 4px;
@@ -1458,11 +1333,6 @@ export default {
     font-weight: 600;
     font-size: 15px;
     margin-bottom: 4px;
-    // [F1·方案C·命门] 单行省略：行高物理恒定 → spacer=n×rowH 数学精确 → main.scrollHeight 不抖 → 自绘条不跳
-    //   未来若加可展开摘要/多行副标题等变高内容会破前提(_measureRowH 开发期断言会 warn)。
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     // [NAS] "NAS 上有此单集"标识：小 wifi 图标接名字后，绿(饱和与 navbar 同步) + 萤火虫式呼吸(nasGlow 按集错相位/微变周期)
     .nas-dot {
       display: inline-flex;
@@ -1498,10 +1368,6 @@ export default {
     opacity: 0.6;
     display: flex;
     gap: 4px;
-    // [F1·方案C] 兜底单行：日期+进度标签固定就是一行，挡未来误改换行致行高漂移
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   // [C-4 改] 时长 / 听过X%（黄） / 已听完（绿）
   .ep-prog {
