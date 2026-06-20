@@ -153,14 +153,14 @@ main::-webkit-scrollbar {
 // [性能·路由过渡] 页面切换淡入+轻微上移，消除硬切。出场快(0.13s)入场稍长(0.18s)，
 //   mode=out-in 下总时长 ~0.3s 不拖沓；只动 opacity/transform(合成器属性)，不引发重排。
 .page-enter-active {
-  transition: opacity 0.18s ease, transform 0.18s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition: opacity 0.13s ease, transform 0.13s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 .page-leave-active {
-  transition: opacity 0.13s ease;
+  transition: opacity 0.09s ease;
 }
 .page-enter {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(6px);
 }
 .page-leave-to {
   opacity: 0;

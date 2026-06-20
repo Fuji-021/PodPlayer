@@ -2930,9 +2930,9 @@ export default {
 .imm-side ::v-deep .button-icon.active .svg-icon {
   color: var(--color-primary);
 }
-// 收藏：已收藏变红(覆盖通用浅色)
+// 收藏：已收藏=纯白实心(沉浸页固定深色不用红色按钮打扰；纯白 heart-solid 区别于未收藏的浅描边 heart)
 .imm-like.favorited ::v-deep .svg-icon {
-  color: #e74c3c;
+  color: #fff;
 }
 // 标记键：浅色 + hover 底；充能圈/彩蛋复用 .mark-control，去默认左右 margin、统一 36×36(与其余 5 键等宽)
 .imm-mark {
