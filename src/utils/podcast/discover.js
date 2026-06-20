@@ -200,10 +200,14 @@ export function reshuffleSection(
 }
 
 // [B-42] 二级页全量：hot=全部榜单（榜单序）；treasure=腰部及以后（排除已订阅）
+// [修] 操作#4：「换一批」对 new/treasure 之前无 shuffle、点了内容不变 →
+//   new/treasure 改为每次 shuffle(复用本文件 shuffle 工具)，返回不同随机顺序的全集；
+//   hot=热门排行保持确定性榜单序(按热度，乱序不符合排行榜语义，不 shuffle)。
+//   排除已订阅(excludeSubbed)逻辑与切片口径均保持不变。
 export function getSectionFull(items, type, excludeNames) {
   if (!items || !items.length) return [];
   if (type === 'treasure')
-    return excludeSubbed(items.slice(TREASURE_START), excludeNames);
-  if (type === 'new') return excludeSubbed(items, excludeNames); // 新上线全部(排除已订阅)
-  return items.slice();
+    return shuffle(excludeSubbed(items.slice(TREASURE_START), excludeNames));
+  if (type === 'new') return shuffle(excludeSubbed(items, excludeNames)); // [修] 新上线全部(排除已订阅) + 每次重洗
+  return items.slice(); // hot=热门排行：确定性榜单序，不 shuffle
 }

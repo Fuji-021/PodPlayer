@@ -382,18 +382,30 @@ export default {
       },
     },
     // 封面主色 → 订阅按钮底色（coverUrl 有值时提取，路由切换时重算）
+    // [修][R13教训]按钮可见性绝不绑死取色成功：无封面/取色为空/出错都置 ready=true 回落默认底色，
+    //   避免取色失败时 opacity:0 永久隐形。取色成功才额外覆盖底色为封面主色。
     podcast(newVal) {
       const url = newVal && newVal.coverUrl;
-      if (!url || url === this._subBtnColorSrc) return;
+      if (!url) {
+        // [修]无封面：用默认底色(不设 subBtnColor)，按钮仍淡入可见
+        this.subBtnReady = true;
+        return;
+      }
+      if (url === this._subBtnColorSrc) return;
       this._subBtnColorSrc = url;
       getCoverColor(url)
         .then(hsl => {
-          if (hsl && this._subBtnColorSrc === url) {
+          if (this._subBtnColorSrc !== url) return;
+          if (hsl) {
             this.subBtnColor = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
-            this.subBtnReady = true;
           }
+          // [修]取色为空也置 ready：回落默认底色，按钮可见
+          this.subBtnReady = true;
         })
-        .catch(() => {});
+        .catch(() => {
+          // [修]取色出错也置 ready：回落默认底色，按钮可见
+          if (this._subBtnColorSrc === url) this.subBtnReady = true;
+        });
     },
     // [B-31] 监听播放器广播：若广播的 episodeId 在自己列表里 → 重读那一集 listenStats
     '$store.state.podcastListening.listenTick'() {

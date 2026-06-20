@@ -288,18 +288,30 @@ export default {
       },
     },
     // 封面主色 → 播放按钮底色（episode.coverUrl 有值时提取，路由切换时重算）
+    // [修][R13教训]按钮可见性绝不绑死取色成功：无封面/取色为空/出错都置 ready=true 回落默认底色，
+    //   避免取色失败时 opacity:0 永久隐形。取色成功才额外覆盖底色为封面主色。
     episode(newVal) {
       const url = newVal && newVal.coverUrl;
-      if (!url || url === this._playBtnColorSrc) return;
+      if (!url) {
+        // [修]无封面：用默认底色(不设 playBtnColor)，按钮仍淡入可见
+        this.playBtnReady = true;
+        return;
+      }
+      if (url === this._playBtnColorSrc) return;
       this._playBtnColorSrc = url;
       getCoverColor(url)
         .then(hsl => {
-          if (hsl && this._playBtnColorSrc === url) {
+          if (this._playBtnColorSrc !== url) return;
+          if (hsl) {
             this.playBtnColor = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
-            this.playBtnReady = true;
           }
+          // [修]取色为空也置 ready：回落默认底色，按钮可见
+          this.playBtnReady = true;
         })
-        .catch(() => {});
+        .catch(() => {
+          // [修]取色出错也置 ready：回落默认底色，按钮可见
+          if (this._playBtnColorSrc === url) this.playBtnReady = true;
+        });
     },
     // [B-31] 监听播放器广播：当前显示的这一集发生 5%/completed 变化 → 重读 listenStats
     '$store.state.podcastListening.listenTick'() {

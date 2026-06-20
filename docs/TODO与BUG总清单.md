@@ -3,6 +3,13 @@
 > 2026-06-14 汇总 + 06-15 更新(沉浸式播放页 + 打包测试版 + **周末稳定性专项审查 24 条确认 bug 并入**，见下方专属段)。
 > 单一参考清单;具体细节仍以各源文档为准。状态:🔴open / 🟡pending-verify(已做待真机验) / 🔵in-progress / 🟣paused / ✅done(留痕一轮后删)。
 > ⚠️ 用户提醒:清单部分条目与现实有出入(碰到再据实核对、勿盲信);**把基础功能做好最重要**。
+>
+> ⚠️ **2026-06-20 审查 session 全局核对（请主 session 据此更新正文 + 留痕一轮）**：
+> 1. **文末「关键状态锚点」严重过时**：`master=c2cd29d`、「沉浸在 off-master 分支」、「下轮 NAS 切分支」均不实——实际 **master 已并入沉浸页 P0/P1 + NAS 托管 P0/P1 + 全部审查修复（最新 `ee9d29d`）**。请据实更新分支/commit 锚点。
+> 2. **NAS 暂停开发（用户 2026-06-20 定）**：维持主 session 上次修改现状、不再推进。TODO 的「NAS 订阅托管 P1 放量」「中途掉线续播」「第三板块」「从 NAS 下载」等转 🟣 暂停。
+> 3. **「所有节目只剩 10 集」已三证查清+修复**（开发文档 06-19 轮 + `c6be7bc`/`9eef483`/`ee9d29d`），可记 ✅：三因叠加——① DELETE 缺 `?hard=1`=软删（只删 DB 不删盘文件、容量没释放）；② evict 用 item.size **缓存**（虚高 485GB vs 真实 59GB）判 total 永远超限 → 每轮删到 FLOOR=10 死循环；③ wifi 标识只用 guid 匹配（老集无 guid）显示残缺。修：hard=1 + 真实大小复核 + trim_per_podcast + guid∪url 双路。**待真机最终确认**（rescan 复活软删集、容量真释放、不再死循环）。〔审查 session 更正：我「evict 删库」最初方向对、上轮因 wifi 修复一度认错过头——实测证明 evict 确实删了，机制是 item.size 缓存虚高、非 freed=0。〕
+> 4. **新增待录 BUG（本轮审查发现）**：单集详情页「播放」+ 节目详情页「订阅到我的」按钮，**封面取色失败/无封面时 `opacity:0` 永久隐形**（`a2ced91` 引入；`.ready` 门控仅 `getCoverColor` 非空才置 true）。修：取色失败也置 `*BtnReady=true` 回落默认底色（同 R13「别把可见性绑死取色成功」）。建议 **P2**。
+> 5. 审查 session 上轮提的 UI 4 项主 session 已处理（进入沉浸左右对称 / tooltip 统一 / 单集双击播放 已做；沉浸页字色随深浅模式 **试后否决**、改回固定深色，合理）——可在对应段补 ✅ 留痕。
 
 ---
 
@@ -155,7 +162,9 @@
 ---
 
 ## 关键状态锚点（接手先看）
-- 分支:沉浸式在 **`feature/immersive-player`**(off master、已 push、待用户验收后并入);**下一轮 NAS 将切 `feature/nas-handoff`**;master=`c2cd29d`,仓库 `Fuji-021/PodPlayer`。
+- **分支/进度(2026-06-20 大更新)**：**全部已在 `master`**——沉浸页 P0/P1 + NAS 托管 P0/P1 + 全部审查修复 + 性能/动画优化(路由过渡/机核止血/沉浸动画/取色降解码/resize FLIP) + 沉浸交互修复 + **品牌化(自托管更新源 Fuji-021/PodPlayer)** + **新 logo(cyan ON AIR)**。仓库 `Fuji-021/PodPlayer`。**勿再用 off-master 分支 / `c2cd29d` 旧锚点**(已严重过时)。
+- **NAS：用户 2026-06-20 搁置**(觉得不完善)，不再主动推进；已落地修复保留。真源 `docs/NAS总文档.md`(原 5 文档已合并)。
+- **本轮(2026-06-20)修复留痕**：✅ 取色按钮取色失败永久隐形(审查#4，episodeDetail/podcastDetail) · ✅ PodImage 加载失败占位防空白+http→https(R13 安全子项) · ✅ discoverList new/treasure「换一批」shuffle(操作#4 部分，hot 保持排行)。
 - 实例隔离:prod=PodPlayer/10754/27232 · dev=PodPlayerDev/10755/27233/devserver20201 · sandbox=PodPlayerSandbox/10756/27234/devserver20202。启动:scripts/start-dev.bat / start-sandbox.bat。
 - 数据:用户真实数据在 dev(PodPlayerDev/20201);进度/统计/收藏曾因事故不可恢复、现有自动备份兜底。
 - 打包:**正式版(prod=PodPlayer 身份)** 与 dev-serve 零冲突;**勿打包 dev 身份**。2026-06-15 已打 0.4.10 测试包(portable 免安装 + nsis 安装版)→ `D:\MyYesPlayerMusic\打包版本`;命令 `vue-cli-service electron:build -p never -w`(Node16 路径、**不带** NODE_OPTIONS=--openssl-legacy-provider，Node16 不认会 exit 9)。
