@@ -1589,6 +1589,9 @@ export default class {
       podcastAudioUrl: episode.audioUrl,
       podcastEpisodeId: episode.id,
       podcastId: episode.podcastId || '', // [B-64] 透传 podcastId，供收藏记录关联节目(actions 优先用它)
+      // [修·软删后遗症] 透传单集发布时间戳，供 NAS 就近播放第三路兜底(rescan 重建集丢了
+      //   guid+enclosure 只剩 publishedAt，靠它匹配 ABS byPub)。queue 精简对象无此字段时为 0。
+      podcastEpisodePubTime: episode.pubTime || 0,
     };
 
     this._enabled = true;

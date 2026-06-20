@@ -153,6 +153,9 @@ export async function resolveNasUrl(track) {
       podcastId,
       guid,
       audioUrl: track.podcastAudioUrl || '',
+      // [修·软删后遗症] 第三路兜底：rescan 重建集丢了 guid+enclosure 只剩 publishedAt，
+      //   传单集发布时间戳(毫秒)给主进程按 byPub 匹配，让这几百集也能就近播。
+      pubTime: track.podcastEpisodePubTime || 0,
     });
     return (r && r.url) || null;
   } catch (e) {
@@ -182,9 +185,10 @@ export async function nasPodcastSet() {
 }
 
 // [NAS·状态点] 取某档在 NAS 上已归档的单集匹配键集合。未启用/不可用 → 空集。
-//   [修10集标识] 集合同时含 guid 与归一化 enclosure url(两类键空间不冲突)：ABS 老集无 guid,
-//   仅 guid 匹配会漏掉绝大多数已归档老集 → wifi 标识只亮一小撮。补 url 键(同 nasBridge byUrl
-//   口径)后，详情页 nasEpOn 用 guid 或 normFeedUrl(audioUrl) 任一命中即亮，与播放解析双路一致。
+//   [修10集标识] 集合含 guid + 归一化 enclosure url + publishedAt 三类键(键空间互不冲突)：
+//   ① ABS 老集无 guid(只回 byGuid 只亮一小撮) ② 软删+rescan 重建的集连 enclosure.url 也丢、
+//   只剩 publishedAt → 必须补 pub 键兜底。详情页 nasEpOn 用 guid / url / pubTime 任一命中即亮,
+//   与 resolveStream 三路解析同口径。
 export async function nasEpisodeGuidSet(podcastId) {
   if (!isNasEnabled() || !podcastId) return new Set();
   const alive = await ensureProbed();
@@ -194,6 +198,8 @@ export async function nasEpisodeGuidSet(podcastId) {
     const s = new Set((r && r.guids) || []);
     const urls = (r && r.urls) || [];
     for (let i = 0; i < urls.length; i++) s.add(urls[i]);
+    const pubs = (r && r.pubs) || [];
+    for (let i = 0; i < pubs.length; i++) s.add(pubs[i]);
     return s;
   } catch (e) {
     return new Set();

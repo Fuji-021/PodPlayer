@@ -666,6 +666,9 @@ export default {
       if (ep.guid && this.nasEpGuids.has(ep.guid)) return true;
       if (ep.audioUrl && this.nasEpGuids.has(normFeedUrl(ep.audioUrl)))
         return true;
+      // [修·软删后遗症] rescan 重建集丢了 guid+enclosure，只剩 publishedAt → 用 pubTime
+      //   时间戳兜底匹配(与 ABS byPub 同口径)，让这几百集也亮 wifi。
+      if (ep.pubTime && this.nasEpGuids.has(String(ep.pubTime))) return true;
       return false;
     },
     // [呼吸灯 v2.0] 由稳定 id 派生「周期 + 负相位」→ 同点恒定、彼此不同，萤火虫式错落呼吸(不齐步)。

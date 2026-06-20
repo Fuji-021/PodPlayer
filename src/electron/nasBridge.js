@@ -232,14 +232,19 @@ async function ensureEps(c, itemId) {
     const eps = (res.data && res.data.media && res.data.media.episodes) || [];
     const byGuid = {};
     const byUrl = {};
+    const byPub = {};
     eps.forEach(e => {
       const ino = e && e.audioFile && e.audioFile.ino;
       if (!ino) return;
       if (e.guid) byGuid[String(e.guid)] = ino;
       if (e.enclosure && e.enclosure.url)
         byUrl[normFeed(e.enclosure.url)] = ino;
+      // [修·软删后遗症] 软删删 episode 记录、rescan 从音频文件重建时会丢 guid+enclosure，
+      //   但保留 publishedAt 时间戳。它与 PodPlayer 单集的 pubTime(Date.parse(RSS pubDate))
+      //   是同一毫秒值 → 作第三路兜底键，让 rescan 重建的几百集也能匹配(亮 wifi + 就近播)。
+      if (e.publishedAt) byPub[String(e.publishedAt)] = ino;
     });
-    const entry = { ts: Date.now(), byGuid, byUrl };
+    const entry = { ts: Date.now(), byGuid, byUrl, byPub };
     epsCache[itemId] = entry;
     return entry;
   })();
@@ -262,14 +267,16 @@ function streamUrl(c, itemId, ino) {
   );
 }
 
-// podcastId(feedUrl) + guid(首选) / audioUrl(兜底) → 流 URL；任一环节查不到返回 null。
-async function resolveStream(c, podcastId, guid, audioUrl) {
+// podcastId(feedUrl) + guid(首选) / audioUrl / pubTime(兜底) → 流 URL；任一环节查不到返回 null。
+async function resolveStream(c, podcastId, guid, audioUrl, pubTime) {
   const items = await ensureItems(c);
   const itemId = items[normFeed(podcastId)];
   if (!itemId) return null;
   const eps = await ensureEps(c, itemId);
   let ino = guid ? eps.byGuid[String(guid)] : null;
   if (!ino && audioUrl) ino = eps.byUrl[normFeed(audioUrl)];
+  // [修·软删后遗症] guid/url 都查不到(rescan 重建集丢了它们)→ 用 publishedAt 时间戳兜底
+  if (!ino && pubTime && eps.byPub) ino = eps.byPub[String(pubTime)];
   if (!ino) return null;
   return streamUrl(c, itemId, ino);
 }
@@ -392,7 +399,13 @@ export function registerNasIpc() {
     if (!ready(c)) return { url: null };
     const a = args || {};
     try {
-      const url = await resolveStream(c, a.podcastId, a.guid, a.audioUrl);
+      const url = await resolveStream(
+        c,
+        a.podcastId,
+        a.guid,
+        a.audioUrl,
+        a.pubTime
+      );
       return { url: url || null };
     } catch (e) {
       return { url: null, error: String((e && e.message) || e) };
@@ -478,20 +491,24 @@ export function registerNasIpc() {
   });
 
   // [NAS·状态点] 某档在 NAS 上已归档的单集匹配键集合（供详情页标"NAS 上有此单集"）。
-  //   [修10集标识] 同时回 guids + urls 两类键：ABS 老集常无 guid 字段(实测督工 285 集仅 21 集有
-  //   guid)，只回 byGuid → 详情页只亮一小撮。byUrl(enclosure.url 归一化)对全部已下载集都有,
-  //   渲染端用 guid 或 url 双路匹配(与 resolveStream 同口径)→ 老集也能正确亮灯。
+  //   [修10集标识] 回 guids + urls + pubs 三类键：① ABS 老集常无 guid(只回 byGuid 只亮一小撮)
+  //   ② 软删+rescan 重建的集连 enclosure.url 也丢、只剩 publishedAt → 必须补 pubs(publishedAt
+  //   时间戳)兜底。渲染端用 guid / url / pubTime 任一命中即匹配(与 resolveStream 同口径)。
   ipcMain.handle('nas:episodeGuids', async (_e, podcastId) => {
     const c = getCfg();
-    if (!ready(c)) return { guids: [], urls: [] };
+    if (!ready(c)) return { guids: [], urls: [], pubs: [] };
     try {
       const items = await ensureItems(c);
       const itemId = items[normFeed(podcastId)];
-      if (!itemId) return { guids: [], urls: [] };
+      if (!itemId) return { guids: [], urls: [], pubs: [] };
       const eps = await ensureEps(c, itemId);
-      return { guids: Object.keys(eps.byGuid), urls: Object.keys(eps.byUrl) };
+      return {
+        guids: Object.keys(eps.byGuid),
+        urls: Object.keys(eps.byUrl),
+        pubs: eps.byPub ? Object.keys(eps.byPub) : [],
+      };
     } catch (e) {
-      return { guids: [], urls: [] };
+      return { guids: [], urls: [], pubs: [] };
     }
   });
 
