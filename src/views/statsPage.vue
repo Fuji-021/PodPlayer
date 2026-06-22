@@ -292,7 +292,13 @@ export default {
         .map(g => ({ ...g, _leaving: true, _target: 0, _op: 1 }));
       const merged = next.concat(ghosts);
       this.list = merged;
-      this.extractColors();
+      // [兜底] 取色同步异常不能中断后面的双 rAF 过渡调度 + 幽灵清理定时器注册
+      //   (否则当次切换进度条不伸缩/幽灵不清)；取色失败不影响动画。
+      try {
+        this.extractColors();
+      } catch (e) {
+        /* ignore */
+      }
       // 双 rAF：先让"起点宽度"真正绘制一帧，再统一过渡到目标宽 → 必触发 width 过渡
       //   (留存条变宽 / 新增条从 0 长出 / 幽灵条缩回到 0)。
       // [v1.5/B69-V1 消除] 写的是本次捕获的 merged(每次 animateTo 都新建对象)而非 this.list：
