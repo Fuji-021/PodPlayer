@@ -150,17 +150,18 @@ main::-webkit-scrollbar {
   width: 0px;
 }
 
-// [性能·路由过渡] 页面切换淡入+轻微上移，消除硬切。出场快(0.13s)入场稍长(0.18s)，
-//   mode=out-in 下总时长 ~0.3s 不拖沓；只动 opacity/transform(合成器属性)，不引发重排。
+// [性能·路由过渡] 页面切换淡入+轻微上移，消除硬切。2026-06-21 再加快(用户嫌"我的订阅↔首页来回拖沓")：
+//   leave 0.09→0.05、enter 0.13→0.08(mode=out-in 串行总 ~0.22s→~0.13s)、位移 6→4px 更轻快、跟手；
+//   仍保留过渡(不硬切)。只动 opacity/transform(合成器属性)，不引发重排。时长可继续按手感微调。
 .page-enter-active {
-  transition: opacity 0.13s ease, transform 0.13s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition: opacity 0.08s ease, transform 0.08s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 .page-leave-active {
-  transition: opacity 0.09s ease;
+  transition: opacity 0.05s ease;
 }
 .page-enter {
   opacity: 0;
-  transform: translateY(6px);
+  transform: translateY(4px);
 }
 .page-leave-to {
   opacity: 0;
