@@ -9,6 +9,16 @@ const ipcRenderer = electron?.ipcRenderer ?? null;
 //   统一常量，避免 splitSections/reshuffleSection/getSectionFull 各写魔法数导致漂移。
 const TREASURE_START = 10;
 
+// [R13] http→https 归一化：http 图在 https 文档里被浏览器当混合内容拦截 → 封面/辉光底图空白。
+//   PodImage 内部已对 <img> src 做同样归一化；这里导出给"绕过 PodImage 直接拼 backgroundImage"
+//   的场景(如 cover-shadow 辉光底图)复用。本目录(utils/podcast)禁 ?./??，用 && + ||。
+export function httpsify(url) {
+  if (url && url.indexOf('http://') === 0) {
+    return 'https://' + url.slice('http://'.length);
+  }
+  return url || '';
+}
+
 // 取热门播客榜单（250 条，主进程已缓存 6h）
 export async function fetchHotPodcasts(force = false) {
   if (!ipcRenderer) {

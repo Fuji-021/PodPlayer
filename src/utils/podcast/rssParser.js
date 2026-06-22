@@ -31,19 +31,25 @@ function capLen(s) {
 // 取带命名空间的标签，DOMParser 解析 RSS 时这些 itunes:* 标签
 // localName 直接是 'image' / 'duration'，我们手动按 localName 匹配。
 function textNS(el, localName) {
-  const all = el?.getElementsByTagName('*') || [];
+  // [perf·审P1-7] 原用 getElementsByTagName('*') 扫【全部后代】再靠 parentNode===el 筛直接子，
+  //   对含大段 content:encoded 富文本的 <item> 近 O(后代数)。语义本就只取直接子 → 改遍历 el.children
+  //   (天然只含直接子元素)，命中同一首匹配节点、结果逐字节等价，仅去掉对深层后代的无谓扫描。
+  //   本目录(utils/podcast)禁 ?./??，用 && 守卫 + || 默认。
+  const all = (el && el.children) || [];
   for (let i = 0; i < all.length; i++) {
-    if (all[i].localName === localName && all[i].parentNode === el) {
-      return all[i].textContent?.trim() || '';
+    if (all[i].localName === localName) {
+      const t = all[i].textContent;
+      return (t && t.trim()) || '';
     }
   }
   return '';
 }
 
 function attrNS(el, localName, attr) {
-  const all = el?.getElementsByTagName('*') || [];
+  // [perf·审P1-7] 同 textNS：只遍历直接子元素，避免扫全后代。
+  const all = (el && el.children) || [];
   for (let i = 0; i < all.length; i++) {
-    if (all[i].localName === localName && all[i].parentNode === el) {
+    if (all[i].localName === localName) {
       return all[i].getAttribute(attr) || '';
     }
   }

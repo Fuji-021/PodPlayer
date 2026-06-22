@@ -492,6 +492,18 @@ class Background {
           this.trayEventEmitter,
           this.store
         );
+        // [审P2-3] 系统深浅色运行时切换 → 让 trayIconTheme='auto' 的托盘图标实时重画。
+        //   原先重画只由用户手动改"托盘图标主题"下拉(ipcMain 'updateTrayIcon')触发，
+        //   故 auto 模式切系统深浅色不跟随、需重启。updateIcon 内部已判 trayIconSetting==='auto'
+        //   才读 nativeTheme，手动指定主题时重画结果不变、安全。守卫只注册一次防累积监听。禁 ?./??。
+        if (!this._nativeThemeBound) {
+          this._nativeThemeBound = true;
+          nativeTheme.on('updated', () => {
+            if (this.trayEventEmitter) {
+              this.trayEventEmitter.emit('updateIcon');
+            }
+          });
+        }
       }
 
       // [T4] Windows 任务栏缩略图三键（快退15/播放·暂停/快进30）；

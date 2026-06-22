@@ -11,7 +11,7 @@
       <!-- 借鉴原项目 Cover：封面图自身虚化倒影光晕（所有位置封面一致的"背景的那个光"） -->
       <div
         class="cover-shadow"
-        :style="{ backgroundImage: `url(${cover})` }"
+        :style="cover ? { backgroundImage: `url(${cover})` } : {}"
       ></div>
       <div class="cover-wrap">
         <PodImage class="cover" :src="cover" @error="onImgError" />
@@ -63,7 +63,11 @@
 
 <script>
 import SvgIcon from '@/components/SvgIcon.vue';
-import { subscribePodcast, hiResLogo } from '@/utils/podcast/discover';
+import {
+  subscribePodcast,
+  hiResLogo,
+  httpsify,
+} from '@/utils/podcast/discover';
 import { deletePodcast } from '@/utils/podcast/service';
 import { getPodcast } from '@/utils/podcast/db';
 
@@ -121,7 +125,9 @@ export default {
     cover() {
       // 已入库节目优先用本地(DB)封面，与详情/我的订阅一致；否则用目录 logo。
       //   目录源 logoURL 可能是旧封面（节目换封面后），会与详情页对不上（实测《思文，败类》）。
-      return this.dbCover || hiResLogo(this.podcast.logoURL);
+      //   [R13] 统一 http→https：cover 同时喂 PodImage(其内部再归一化、幂等)与 cover-shadow 辉光底图，
+      //   在此一处归一化即可补上"cover-shadow 直接拼 url 绕过归一化"的缺口(辉光底图不再被混合内容拦)。
+      return httpsify(this.dbCover || hiResLogo(this.podcast.logoURL));
     },
   },
   watch: {

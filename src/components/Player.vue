@@ -2734,7 +2734,11 @@ export default {
   position: absolute;
   inset: 0;
   background: var(--imm-frost); // 固定深色磨砂压暗(--imm-frost 唯一深色值)
-  backdrop-filter: blur(24px) saturate(1.05);
+  // [perf·审P1-8] 去掉常驻 backdrop-filter: blur(24px)——身后 .imm-bg-cover 已 blur(64px)+柔和渐变，
+  //   再叠 24px 磨砂对观感增益微乎其微，却让页内每帧动画(封面 scale/进度/nyancat/充能)触发全屏
+  //   backdrop 重采样模糊 → 低端/4K 发烫掉帧(关联 known-bugs「双击最大化疑似闪退」)。进出动画期
+  //   (imm-fade)早已置 backdrop-filter:none 兜底且实测「视觉几乎无损」，故稳态一并去除；磨砂质感
+  //   由底层 blur(64px) 底图提供。【待真机/4K 视觉确认】
   // 极轻噪点：内联 svg feTurbulence(高级磨砂感)
   &::after {
     content: '';

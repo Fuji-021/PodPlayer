@@ -500,7 +500,9 @@ nav.has-custom-titlebar {
   //   居中在「我的订阅(屏幕中)」与头像之间。搜索非主入口，做小、不喧宾夺主。
   flex: 1;
   display: flex;
-  justify-content: center;
+  // [B67-BUG-7] 搜索框右对齐贴向头像(原 center 浮在导航链接与头像之间的空白里、视觉偏左)，
+  //   右缘随头像一起锚到 navbar 内容右 padding 缘，与下方内容区右缘对齐。
+  justify-content: flex-end;
   -webkit-app-region: no-drag;
 
   .container {
@@ -510,7 +512,8 @@ nav.has-custom-titlebar {
     background: var(--color-secondary-bg-for-transparent);
     border-radius: var(--radius-button);
     // 宽度仅够「🔍 搜索播客」+ 清除×，不再占大块
-    width: 168px;
+    // [B67-BUG-7] 右对齐后再缩窄一档更精炼（px 值待真机微调）
+    width: 150px;
     // [B-52] 轻反馈 + 聚焦缩放动画
     transition: transform 0.18s ease, background 0.18s ease;
     transform-origin: right center;

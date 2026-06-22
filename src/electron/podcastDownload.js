@@ -119,6 +119,36 @@ function streamGet(url, redirects = 0) {
 }
 
 export function registerPodcastDownloadIpc(getWindow) {
+  // [orphan-download] 启动期清理上次崩溃/被杀进程残留的 *.part 半成品(正常完成已 rename 成正式名、
+  //   不会留 part)。一次性同步扫 getPodcastsDir() 下各档目录删所有 *.part，避免占空间 + 污染 relink。
+  try {
+    const sweepBase = getPodcastsDir();
+    if (fs.existsSync(sweepBase)) {
+      const subs = fs.readdirSync(sweepBase);
+      for (let i = 0; i < subs.length; i++) {
+        const subDir = path.join(sweepBase, subs[i]);
+        let files;
+        try {
+          files = fs.readdirSync(subDir);
+        } catch (e) {
+          continue;
+        }
+        for (let j = 0; j < files.length; j++) {
+          const fn = files[j];
+          if (fn.length > 5 && fn.slice(-5) === '.part') {
+            try {
+              fs.unlinkSync(path.join(subDir, fn));
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // sweep 失败不影响下载功能
+  }
+
   // 启动下载
   ipcMain.handle('podcast:download:start', async (_e, payload) => {
     const { episodeId, feedUrl, guid, audioUrl, title } = payload || {};
@@ -141,7 +171,11 @@ export function registerPodcastDownloadIpc(getWindow) {
       );
 
       const ext = guessExt(finalUrl || audioUrl, res.headers['content-type']);
-      const filePath = path.join(dir, safeFileName(guid) + ext);
+      // [orphan-download] 写 .part 临时文件，writeStream 'finish' 后原子 rename 成正式名 finalPath。
+      //   崩溃/被杀进程时 finish 不触发 → 只会残留 *.part(启动期 sweep 清掉)，绝不留下截断的正式
+      //   文件被 relink 误判为"已完成"。filePath 仍指 .part(failDownload 删的就是它，无需改动)。
+      const finalPath = path.join(dir, safeFileName(guid) + ext);
+      const filePath = finalPath + '.part';
       const total = Number(res.headers['content-length']) || 0;
       const writeStream = fs.createWriteStream(filePath);
       const task = {
@@ -221,12 +255,37 @@ export function registerPodcastDownloadIpc(getWindow) {
         if (task.settled || task.canceled) return;
         task.settled = true;
         activeTasks.delete(episodeId);
+        // [orphan-download] .part 写完 → 原子 rename 成正式名 finalPath。rename 失败则按失败收尾
+        //   (删 .part)、不留半成品冒充完成。
+        try {
+          if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
+          fs.renameSync(filePath, finalPath);
+        } catch (e) {
+          console.error(
+            '[download] rename .part failed',
+            episodeId,
+            (e && e.message) || e
+          );
+          try {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          } catch (e2) {
+            // ignore
+          }
+          const wf = getWindow && getWindow();
+          if (wf && !wf.isDestroyed()) {
+            wf.webContents.send('podcast:download:error', {
+              episodeId,
+              error: 'rename failed',
+            });
+          }
+          return;
+        }
         console.log('[download] done', episodeId, done, 'bytes');
         const w = getWindow && getWindow();
         if (w && !w.isDestroyed()) {
           w.webContents.send('podcast:download:done', {
             episodeId,
-            filePath,
+            filePath: finalPath,
             bytesTotal: done,
           });
         }
@@ -242,7 +301,9 @@ export function registerPodcastDownloadIpc(getWindow) {
         }
       });
       res.pipe(writeStream);
-      return { ok: true, filePath };
+      // [orphan-download] 返回正式名 finalPath(非在途 .part)：渲染端当前不消费此返回值，
+      //   但避免日后误用它指向已被 rename 走的临时文件。
+      return { ok: true, filePath: finalPath };
     } catch (err) {
       activeTasks.delete(episodeId);
       console.error('[download] FAILED', err && (err.stack || err.message));
@@ -321,7 +382,10 @@ export function registerPodcastDownloadIpc(getWindow) {
       } catch (e) {
         continue;
       }
-      const hit = files.find(n => n.indexOf(prefix) === 0);
+      // [orphan-download] 排除 .part 半成品(启动期 sweep 通常已删，此为双保险)，只认正式名。
+      const hit = files.find(
+        n => n.indexOf(prefix) === 0 && n.slice(-5) !== '.part'
+      );
       if (!hit) continue;
       const fp = path.join(dir, hit);
       let size = 0;
@@ -330,6 +394,8 @@ export function registerPodcastDownloadIpc(getWindow) {
       } catch (e) {
         size = 0;
       }
+      // [orphan-download] 空/不可读文件不回写"已完成"(防截断文件复活成 done)。
+      if (size <= 0) continue;
       matched.push({
         id: ep.id,
         podcastId: ep.podcastId,
