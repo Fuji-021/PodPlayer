@@ -89,13 +89,12 @@
       </div>
 
       <!-- [NAS] 就近音源配置中心：总开关 + 当前连接 + 连接历史(一键切换) + 添加(自动发现库) -->
-      <h3 v-if="isElectron">NAS 就近音源</h3>
+      <h3 v-if="isElectron">{{ $t('settings.pod.nasSource') }}</h3>
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">启用 NAS 就近音源</div>
+          <div class="title">{{ $t('settings.pod.enableNasSource') }}</div>
           <div class="description">
-            已归档的单集就近从 NAS 流式播放，更快、零流量；NAS
-            不可用时自动回落在线音源。
+            {{ $t('settings.pod.enableNasSourceDesc') }}
           </div>
         </div>
         <div class="right">
@@ -112,10 +111,9 @@
       </div>
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">订阅时自动托管到 NAS</div>
+          <div class="title">{{ $t('settings.pod.autoHostOnNas') }}</div>
           <div class="description">
-            新订阅的节目自动在 NAS 上创建并开启自动下载（留最近 100 集）；未连接
-            NAS 时此项无效，可随时关闭回退。
+            {{ $t('settings.pod.autoHostOnNasDesc') }}
           </div>
         </div>
         <div class="right">
@@ -132,10 +130,9 @@
       </div>
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">取消订阅后从 NAS 删档</div>
+          <div class="title">{{ $t('settings.pod.removeFromNasOnUnsub') }}</div>
           <div class="description">
-            取消订阅满 7 天后，自动删除该节目在 NAS
-            上的下载文件以释放空间（仅删文件，收听历史与统计保留）。
+            {{ $t('settings.pod.removeFromNasOnUnsubDesc') }}
           </div>
         </div>
         <div class="right">
@@ -157,17 +154,19 @@
               class="nas-cfg-dot"
               :class="nas.status.alive ? 'on' : 'off'"
             ></span>
-            当前连接：{{ activeProfile.name }}
+            {{ $t('settings.pod.currentConn') }}{{ activeProfile.name }}
           </div>
           <div class="description">{{ activeProfileDesc }}</div>
         </div>
         <div class="right">
-          <button @click="testCurrentNas">测试连接</button>
+          <button @click="testCurrentNas">
+            {{ $t('settings.pod.testConn') }}
+          </button>
         </div>
       </div>
       <div v-if="isElectron && nas.profiles.length" class="item nas-history">
         <div class="left nas-history-left">
-          <div class="title">连接历史</div>
+          <div class="title">{{ $t('settings.pod.connHistory') }}</div>
           <div
             v-for="p in nas.profiles"
             :key="p.id"
@@ -183,25 +182,29 @@
             <span class="np-name">{{ p.name }}</span>
             <span class="np-base">{{ shortHost(p.baseUrl) }}</span>
             <span class="np-ago">{{ fmtAgo(p.lastConnectedAt) }}</span>
-            <span v-if="p.id === nas.activeProfileId" class="np-current"
-              >当前</span
-            >
+            <span v-if="p.id === nas.activeProfileId" class="np-current">{{
+              $t('settings.pod.current')
+            }}</span>
             <button v-else class="np-btn" @click="connectProfile(p.id)">
-              连接
+              {{ $t('settings.pod.connect') }}
             </button>
-            <button class="np-btn" @click="editProfile(p)">编辑</button>
-            <button class="np-btn danger" @click="removeProfile(p)"
-              >删除</button
-            >
+            <button class="np-btn" @click="editProfile(p)">
+              {{ $t('settings.pod.edit') }}
+            </button>
+            <button class="np-btn danger" @click="removeProfile(p)">
+              {{ $t('settings.pod.delete') }}
+            </button>
           </div>
         </div>
       </div>
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">添加连接</div>
+          <div class="title">{{ $t('settings.pod.addConn') }}</div>
         </div>
         <div class="right">
-          <button @click="openNasDialog()">+ 添加 NAS 连接</button>
+          <button @click="openNasDialog()">
+            {{ $t('settings.pod.addNasConn') }}
+          </button>
         </div>
       </div>
 
@@ -248,12 +251,14 @@
            改造为播客语义的二选一；纯渲染端实现(main.js onReady 按 settings.showLibraryDefault redirect)。 -->
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">启动后显示</div>
+          <div class="title">{{ $t('settings.pod.startupShow') }}</div>
         </div>
         <div class="right">
           <select v-model="startupPageChoice">
-            <option value="home">首页</option>
-            <option value="library">我的订阅</option>
+            <option value="home">{{ $t('settings.pod.startupHome') }}</option>
+            <option value="library">{{
+              $t('settings.pod.startupLibrary')
+            }}</option>
           </select>
         </div>
       </div>
@@ -261,10 +266,10 @@
       <!-- [T5] 听完自动清理已下载单集 -->
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">听完自动清理下载</div>
-          <div class="description"
-            >单集听完后自动删除本地下载文件，释放存储空间</div
-          >
+          <div class="title">{{ $t('settings.pod.autoCleanDownloads') }}</div>
+          <div class="description">{{
+            $t('settings.pod.autoCleanDownloadsDesc')
+          }}</div>
         </div>
         <div class="right">
           <div class="toggle">
@@ -282,10 +287,10 @@
       <!-- [C1] 同时下载集数：调下载并发上限(1-10)，默认 3。仅调既有参数，不改下载引擎逻辑 -->
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">同时下载集数</div>
-          <div class="description"
-            >批量下载时最多同时进行的下载数（1=依次下载，越大越快但更占带宽）</div
-          >
+          <div class="title">{{ $t('settings.pod.downloadConcurrency') }}</div>
+          <div class="description">{{
+            $t('settings.pod.downloadConcurrencyDesc')
+          }}</div>
         </div>
         <div class="right">
           <select v-model.number="downloadConcurrency">
@@ -297,27 +302,31 @@
       <!-- [T14] 导出收听数据：把收听统计/进度/每日记录导出为 CSV(Excel 可读) 或 JSON(完整备份) -->
       <div class="item">
         <div class="left">
-          <div class="title">导出收听数据</div>
-          <div class="description"
-            >把收听进度、统计、每日记录导出为文件（可用于数据分析或迁移）</div
-          >
+          <div class="title">{{ $t('settings.pod.exportData') }}</div>
+          <div class="description">{{ $t('settings.pod.exportDataDesc') }}</div>
         </div>
         <div class="right" style="display: flex; gap: 8px">
-          <button @click="exportListenStatsCsv">导出 CSV</button>
-          <button @click="exportListenStatsJson">导出 JSON</button>
+          <button @click="exportListenStatsCsv">
+            {{ $t('settings.pod.exportCsv') }}
+          </button>
+          <button @click="exportListenStatsJson">
+            {{ $t('settings.pod.exportJson') }}
+          </button>
         </div>
       </div>
 
       <!-- [日志] 出问题时打开日志文件排查/发开发者；落 userData\logs\main.log -->
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">应用日志</div>
+          <div class="title">{{ $t('settings.pod.appLog') }}</div>
           <div class="description">
-            出问题时点开看日志文件，便于排查（也可发给开发者定位）。
+            {{ $t('settings.pod.appLogDesc') }}
           </div>
         </div>
         <div class="right">
-          <button @click="openLogFolder">打开日志文件夹</button>
+          <button @click="openLogFolder">
+            {{ $t('settings.pod.openLogFolder') }}
+          </button>
         </div>
       </div>
 
@@ -326,8 +335,14 @@
       <div class="item">
         <div class="left">
           <!-- [设置] 彩虹猫=吉祥物：进度条样式开关，标题直接用吉祥物 gif(后续会加更多样式) -->
-          <div v-tip="'进度条彩虹猫样式'" class="title nyancat-title">
-            <img src="/img/logos/nyancat.gif" alt="进度条彩虹猫样式" />
+          <div
+            v-tip="$t('settings.pod.nyancatStyle')"
+            class="title nyancat-title"
+          >
+            <img
+              src="/img/logos/nyancat.gif"
+              :alt="$t('settings.pod.nyancatStyle')"
+            />
           </div>
         </div>
         <div class="right">
@@ -347,7 +362,7 @@
            本应用播客 RSS 走主进程直连、下载走 Node 原生 https(Clash TUN 路由)，不依赖此设置。
            底层 proxy/realIP 配置逻辑保留(dormant)、仅移除 UI 配置项。 -->
       <div v-if="isElectron">
-        <h3>快捷键</h3>
+        <h3>{{ $t('settings.pod.shortcut') }}</h3>
         <div class="item">
           <div class="left">
             <div class="title"> {{ $t('settings.enableGlobalShortcut') }}</div>
@@ -371,9 +386,9 @@
           @keydown="handleShortcutKeydown"
         >
           <div class="row row-head">
-            <div class="col">功能</div>
-            <div class="col">快捷键</div>
-            <div class="col">全局快捷键</div>
+            <div class="col">{{ $t('settings.pod.shortcutFn') }}</div>
+            <div class="col">{{ $t('settings.pod.shortcutKey') }}</div>
+            <div class="col">{{ $t('settings.pod.shortcutGlobal') }}</div>
           </div>
           <div
             v-for="shortcut in settings.shortcuts"
@@ -425,8 +440,9 @@
           <button
             class="restore-default-shortcut"
             @click="restoreDefaultShortcuts"
-            >恢复默认快捷键</button
           >
+            {{ $t('settings.pod.restoreShortcuts') }}
+          </button>
         </div>
       </div>
 
@@ -453,14 +469,21 @@
     >
       <div class="nas-dialog">
         <div class="nd-title">
-          {{ nasDialog.editId ? '编辑 NAS 连接' : '添加 NAS 连接' }}
+          {{
+            nasDialog.editId
+              ? $t('settings.pod.editNasConn')
+              : $t('settings.pod.addNasConnTitle')
+          }}
         </div>
         <label class="nd-field"
-          >名称（可选）
-          <input v-model="nasDialog.name" placeholder="如：家里飞牛" />
+          >{{ $t('settings.pod.nasName') }}
+          <input
+            v-model="nasDialog.name"
+            :placeholder="$t('settings.pod.nasNamePlaceholder')"
+          />
         </label>
         <label class="nd-field"
-          >地址
+          >{{ $t('settings.pod.nasAddress') }}
           <input
             v-model="nasDialog.baseUrl"
             placeholder="http://192.168.X.XXX:13378/audiobookshelf"
@@ -472,8 +495,8 @@
             v-model="nasDialog.token"
             :placeholder="
               nasDialog.editId
-                ? '留空 = 沿用原 token'
-                : 'ABS → 设置 → 用户 → API Token'
+                ? $t('settings.pod.nasTokenKeepPlaceholder')
+                : $t('settings.pod.nasTokenPlaceholder')
             "
           />
         </label>
@@ -482,7 +505,11 @@
           :disabled="nasDialog.testing"
           @click="testAndDiscover"
         >
-          {{ nasDialog.testing ? '连接中…' : '测试并发现库' }}
+          {{
+            nasDialog.testing
+              ? $t('settings.pod.nasTesting')
+              : $t('settings.pod.nasTestDiscover')
+          }}
         </button>
         <div
           v-if="nasDialog.testMsg"
@@ -492,7 +519,7 @@
           {{ nasDialog.testMsg }}
         </div>
         <label v-if="nasDialog.libraries.length" class="nd-field"
-          >库
+          >{{ $t('settings.pod.nasLibrary') }}
           <select v-model="nasDialog.libraryId">
             <option v-for="l in nasDialog.libraries" :key="l.id" :value="l.id">
               {{ l.name }}
@@ -500,13 +527,15 @@
           </select>
         </label>
         <div class="nd-actions">
-          <button @click="closeNasDialog">取消</button>
+          <button @click="closeNasDialog">{{
+            $t('settings.pod.cancel')
+          }}</button>
           <button
             class="primary"
             :disabled="!nasDialog.libraryId"
             @click="saveNasDialog"
           >
-            保存
+            {{ $t('settings.pod.save') }}
           </button>
         </div>
       </div>
