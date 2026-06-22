@@ -17,8 +17,9 @@
       </div>
     </div>
 
-    <!-- 范围切换：最近 1 周 / 全部 -->
-    <div class="range-tabs">
+    <!-- 范围切换：最近 1 周 / 全部（高亮块滑动跟手，非直接跳变） -->
+    <div class="range-tabs" :class="{ 'is-all': range === 'all' }">
+      <div class="tab-slider"></div>
       <div
         class="tab"
         :class="{ active: range === 'week' }"
@@ -48,15 +49,22 @@
         v-for="item in visibleList"
         :key="item.podcastId"
         class="stat-row"
-        @click="goPodcast(item)"
+        :style="{ opacity: item._op == null ? 1 : item._op }"
       >
         <div
           class="bar"
           :style="{ width: item._w + '%', background: barColor(item) }"
         >
-          <PodImage class="thumb" :src="item.coverUrl" @error="onCoverError" />
+          <!-- [点击区收窄] 只封面可点跳转，进度条空白区不可点 -->
+          <PodImage
+            class="thumb"
+            :src="item.coverUrl"
+            @error="onCoverError"
+            @click.native="goPodcast(item)"
+          />
         </div>
-        <div class="label">
+        <!-- [点击区收窄] 名字/时长区可点跳转 -->
+        <div class="label" @click="goPodcast(item)">
           <div class="name">{{ item.title }}</div>
           <div class="dur">{{ fmtDur(item.wallSec) }}</div>
         </div>
@@ -224,16 +232,14 @@ export default {
     },
     // [B-39] 异步提取每个节目封面主色填充矩形条（不阻塞渲染，到了再刷新该行）
     extractColors() {
-      this.list.forEach((item, i) => {
-        if (item.colorHsl) return; // [B-61] 已沿用上次的色 → 跳过，避免重排时闪色
+      this.list.forEach(item => {
+        if (item.colorHsl) return; // [B-61] 已沿用上次的色 → 跳过，避免重排时闪色(也=只对新增行取色)
         getCoverColor(item.coverUrl).then(hsl => {
-          if (
-            hsl &&
-            this.list[i] &&
-            this.list[i].podcastId === item.podcastId
-          ) {
-            this.$set(this.list[i], 'colorHsl', hsl);
-          }
+          if (!hsl) return;
+          // [B 位移修·放大器] 按 podcastId 查当前对象再写(而非闭包索引 i)：二次 animateTo 后 list 整体
+          //   换过、索引会错位；按 id 查更稳，且只写还没色的，避免动画期多余响应式 patch 抬高撞帧概率。
+          const cur = this.list.find(x => x.podcastId === item.podcastId);
+          if (cur && !cur.colorHsl) this.$set(cur, 'colorHsl', hsl);
         });
       });
     },
@@ -245,11 +251,28 @@ export default {
     // [B-61] 把当前 list 平滑过渡到 freshList（统一动画核心）：
     //   留存条：保持当前宽 → 下一帧过渡到新宽(最长条变长→其余整体变细=俯视抬高缩小) + FLIP 移动
     //   新增条：宽度从 0 长出(从左边长出来)，不透明(v1.2 去淡入)
-    //   离开条：瞬时消失(v1.5，无 leave 动画)
+    //   [统计动画·筛出缩回 2026-06-21] 离开条(切到新范围后被筛掉、新 fresh 里没有的节目，如"全部→一周"
+    //     里一周没听过的"三个火呛手")：不再瞬时消失，而是造一个保留原 podcastId 的"幽灵行"(_leaving)
+    //     继续留在列表里，_target=0 → 下一帧 width 缩回到 0，缩回过渡(0.6s×animK)结束后定时器再真正移除。
+    //     反方向"一周→全部"ghosts 为空、merged===next，逐帧与现状一致(用户满意方向不动)。
     animateTo(freshList) {
+      // [B 位移修·根治偶发"部分行直接往下跳位"] 动画进行中又来一次重排 → 暂存，等本次过渡结束再串行补做。
+      //   根因:setRange 缓存命中 animateTo(cached) + 随后 fresh 校正 animateTo(fresh) 偶发在一帧内撞帧
+      //   (fresh 这条 promise 的微任务早于首次 this.list 赋值触发的渲染 flush)，两次 this.list 赋值合并 →
+      //   transition-group 据合并中间态算出"部分该往下滑的行 旧位≈新位"→ 丢失 FLIP 直接跳到下方。
+      //   串行化后绝不会一帧内二次重排(代价:fresh≠cached 时校正晚 ~0.72s，极罕见、可接受)。
+      if (this._animBusy) {
+        this._pendingList = freshList;
+        return;
+      }
+      this._animBusy = true;
+      // 本次切换的动画守卫：连点/快速来回切换时，旧的"清理幽灵定时器"作废、不误删新一轮列表
+      const myTurn = (this._animSeq = (this._animSeq || 0) + 1);
       const maxWall = freshList.length ? freshList[0].wallSec : 1;
+      // prevList 先剔除上一轮还没清完的幽灵，避免叠加 + 污染留存判定
+      const prevList = this.list.filter(it => !it._leaving);
       const prev = {};
-      this.list.forEach(it => {
+      prevList.forEach(it => {
         prev[it.podcastId] = it;
       });
       const next = freshList.map(it => {
@@ -261,20 +284,50 @@ export default {
           colorHsl: p ? p.colorHsl : undefined, // 留存沿用色，避免闪色
         };
       });
-      this.list = next;
-      this.extractColors();
-      // 双 rAF：先让"起点宽度"(新条 0 / 留存条旧值)真正绘制一帧，再统一过渡到目标宽 → 必触发 width 过渡。
-      // [v1.5/B69-V1 消除] 写的是本次捕获的 next(每次 animateTo 都新建对象)而非 this.list：
-      //   快速切换时旧 rAF 不会把"瞬时到位"误写进新一轮列表(否则新条会跳过从 0 长出的过程)。
+      // 差集"将被筛掉的节目"(新范围 fresh 里没有)→ 造幽灵行 _leaving、_target=0：保留原 podcastId 作 key
+      //   使其仍在列表里(transition-group 不触发瞬时 leave)，下一帧 width 从当前宽缩回到 0。
+      const freshIds = new Set(freshList.map(x => x.podcastId));
+      const ghosts = prevList
+        .filter(it => !freshIds.has(it.podcastId))
+        .map(g => ({ ...g, _leaving: true, _target: 0, _op: 1 }));
+      const merged = next.concat(ghosts);
+      this.list = merged;
+      // [死锁兜底] 取色异常绝不能卡住动画串行化(否则 _animBusy 永真 → 列表永久冻死、统计页再不更新)；
+      //   吞掉同步异常，保证下面的清理 setTimeout 一定注册、_animBusy 一定能被清。
+      try {
+        this.extractColors();
+      } catch (e) {
+        /* ignore */
+      }
+      // 双 rAF：先让"起点宽度"真正绘制一帧，再统一过渡到目标宽 → 必触发 width 过渡
+      //   (留存条变宽 / 新增条从 0 长出 / 幽灵条缩回到 0)。
+      // [v1.5/B69-V1 消除] 写的是本次捕获的 merged(每次 animateTo 都新建对象)而非 this.list：
+      //   快速切换时旧 rAF 不会把"瞬时到位"误写进新一轮列表。
       this.$nextTick(() => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            next.forEach(it => {
+            merged.forEach(it => {
               it._w = it._target;
+              // [名字渐隐] 幽灵行整行淡出(opacity 1→0)，与进度条缩回同步 → 名字不再"硬消失"
+              if (it._leaving) it._op = 0;
             });
           });
         });
       });
+      // 缩回+淡出过渡(width/opacity 0.6s×animK)跑完(D=720，含双rAF启动延迟~32ms+掉帧余量)后：
+      //   清动画忙标志、移除幽灵(_animSeq 守卫防连点误删)、补做被串行化暂存的下一次重排。
+      const D = Math.round(720 * (this.animK || 1));
+      setTimeout(() => {
+        this._animBusy = false;
+        if (myTurn === this._animSeq && ghosts.length) {
+          this.list = this.list.filter(it => !it._leaving);
+        }
+        if (this._pendingList) {
+          const l = this._pendingList;
+          this._pendingList = null;
+          this.animateTo(l);
+        }
+      }, D);
     },
     // [B-54] 上次进入时的排行快照（localStorage，按 range 分键），作为下次动画起点
     loadSnapshot(range) {
@@ -439,27 +492,47 @@ export default {
   image-rendering: pixelated;
 }
 .range-tabs {
+  position: relative;
   display: inline-flex;
-  gap: 4px;
   background: var(--color-secondary-bg);
   border-radius: 10px;
   padding: 3px;
   margin-bottom: 12px;
+  // [toggle 滑动跟手] 高亮块绝对定位，切换时 transform 平滑滑过去(替代原 active 背景直接跳变)。
+  //   两 tab 等宽(flex:1)，slider 占内容区一半，is-all 时 translateX(100%) 滑到"全部"。
+  .tab-slider {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 3px;
+    width: calc((100% - 6px) / 2);
+    background: var(--color-body-bg);
+    border-radius: 8px;
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 0;
+  }
+  &.is-all .tab-slider {
+    transform: translateX(100%);
+  }
   .tab {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    text-align: center;
+    white-space: nowrap;
     padding: 6px 16px;
     border-radius: 8px;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     opacity: 0.6;
-    transition: 0.15s;
+    transition: opacity 0.18s, color 0.18s;
     &:hover {
       opacity: 0.9;
     }
     &.active {
       opacity: 1;
-      background: var(--color-body-bg);
-      color: var(--color-primary);
+      color: var(--color-primary); // 背景由 .tab-slider 提供，不再直接切
     }
   }
 }
@@ -514,7 +587,14 @@ export default {
   //   下层行的文字/封面阴影会从 14px 窗口里漏出 1~2px 横向细线(用户截图"莫名其妙不干净的细线")。
   //   padding 属于行盒、被 v1.3 的不透明底色一并涂实 → 行与行无缝全覆盖，细线无处可漏。
   padding-bottom: 14px;
-  cursor: pointer;
+  // [点击区收窄] 整行不再可点(进度条空白处不跳转)，cursor 交给 .thumb(封面)/.label(名字)
+  // [名字渐隐] 幽灵行 opacity 1→0 淡出，与 .bar width 缩回同时长同缓动 → 名字不再"硬消失"
+  // [must-fix·FLIP 保护] 必须同时显式声明 transform 过渡：transition-group 给移动中的 .stat-row 附加
+  //   .stat-move(transition:transform)，transition 简写整体替换、同特异性下后声明的本 .stat-row 会覆盖
+  //   .stat-move → FLIP 的 transform 过渡丢失致留存/新增行瞬时跳位。这里自带等效 transform 过渡兜住。
+  transition: opacity calc(0.6s * var(--stat-k, 1))
+      cubic-bezier(0.22, 1, 0.36, 1),
+    transform calc(0.65s * var(--stat-k, 1)) cubic-bezier(0.22, 1, 0.36, 1);
   // [v1.5.2/毛刺修] 页面同色 2px 光环：FLIP 移动中每行是独立合成层、位移带亚像素小数，
   //   相邻两行层边缘会出现发丝缝，缝里漏出底下长途穿行行(如深度对话 周#5→全部#1 纵贯全表)
   //   的 1px 色丝=毛刺。给每行一圈与页面同色的不透明描边(spread)，随行移动把 ≤2px 的
@@ -524,9 +604,6 @@ export default {
   //   连同条与文字一起被上层行实实在在遮挡。这才是残影/文字叠糊的根治：
   //   时长条是 hsla(...,0.6) 半透明、z-index 压再低也会透出下层，唯有让整行不透明才能真正盖住。
   background: var(--color-body-bg);
-  &:hover .name {
-    color: var(--color-primary);
-  }
   // [B-38] bar 宽度=时长比例（不再 flex:1），封面叠在条右端
   .bar {
     height: 40px;
@@ -552,11 +629,16 @@ export default {
     object-fit: cover;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     background: var(--color-secondary-bg);
+    cursor: pointer; // [点击区收窄] 封面可点跳转
   }
   // [B-38] 名字紧跟 bar（=与各自进度条右端对齐），不再固定右列对齐
   .label {
     min-width: 0;
     flex-shrink: 1;
+    cursor: pointer; // [点击区收窄] 名字/时长可点跳转
+    &:hover .name {
+      color: var(--color-primary);
+    }
     .name {
       font-size: 14px;
       font-weight: 600;

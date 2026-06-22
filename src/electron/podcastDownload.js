@@ -295,6 +295,15 @@ export function registerPodcastDownloadIpc(getWindow) {
             title: task.title || '下载完成',
             body: '单集已保存到本地',
           });
+          // [通知点击跳转] 点击 → 激活主窗口(同 notifications.js)
+          notif.on('click', function () {
+            var nw = getWindow && getWindow();
+            if (nw && !nw.isDestroyed()) {
+              if (nw.isMinimized()) nw.restore();
+              nw.show();
+              nw.focus();
+            }
+          });
           notif.show();
         } catch (e) {
           // Notification 不可用时静默忽略

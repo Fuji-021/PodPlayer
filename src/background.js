@@ -520,7 +520,8 @@ class Background {
       // [NAS] 注册 NAS 音源桥 IPC（未配置/未启用时所有 handler 返回未就绪，零副作用）
       registerNasIpc();
       // [T3] 注册桌面通知 IPC（新单集/下载完成 → Electron Notification）
-      initNotifications();
+      // [通知点击跳转] 注入取窗口闭包，使通知点击能激活主窗口
+      initNotifications(() => this.window);
       // [B-31] 注册 podcast 下载相关 IPC（流式下载 + 进度推送 + 删除）
       registerPodcastDownloadIpc(() => this.window);
       // [B-39] 注册首页发现 IPC（热门榜单 + Apple id→feedUrl）
