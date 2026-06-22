@@ -30,6 +30,11 @@ import { decode as base642Buffer } from '@/utils/base64';
 
 const PLAY_PAUSE_FADE_DURATION = 200;
 
+// [C3 音量渐入] 久未播/隔天打开 + 音量>50% 时的较长渐入时长(ms) + 触发的"久未播"空闲阈值。
+//   1.2s = 能感知"轻轻推上来"又不拖沓的甜区(常规防啪嗒淡入 200ms 几乎无感)；阈值 45 分钟。
+const VOLUME_RAMP_DURATION = 1200;
+const VOLUME_RAMP_IDLE_MS = 45 * 60 * 1000;
+
 // [B69-F5 降频] 收听统计批量落盘窗口：每累积这么多秒 tick 落盘一次（兼顾写放大↓ 与崩溃丢失上限）。
 //   崩溃硬退最多丢 ~LISTEN_FLUSH_SEC 秒收听统计；进度(saveEpisodeProgress)仍逐秒、不受影响。
 const LISTEN_FLUSH_SEC = 5;
@@ -99,6 +104,9 @@ export default class {
     this._volume = 1; // 0 to 1
     this._volumeBeforeMuted = 1; // 用于保存静音前的音量
     this._playbackRate = 1; // [播客改造] 播放倍速，0.5–3.0
+    // [C3 音量渐入] 上次播放态切换的墙钟时刻(ms)。靠 store Proxy 自动落盘到 'player'、重启读回 →
+    //   下次 play 据此判"久未播(>45min)/关软件后隔天打开" → 音量做一段较长渐入。0=从未播放。
+    this._lastPlayAt = 0;
     this._playSourceToken = 0; // [S1 修复] 切源并发竞争令牌
     this._personalFMLoading = false; // 是否正在私人FM中加载新的track
     this._personalFMNextLoading = false; // 是否正在缓存私人FM的下一首歌曲
@@ -322,6 +330,8 @@ export default class {
     }
   }
   _setPlaying(isPlaying) {
+    // [C3 音量渐入] 记录最后一次播放态切换时刻(play/pause/切歌/停止都经此)，供下次 play 判"久未播/隔天"。
+    this._lastPlayAt = Date.now();
     // [B69-F5 降频] 暂停/停止(playing true→false) → 把未落盘的收听缓冲写出，避免丢本窗口统计。
     if (!isPlaying && this._playing) this._flushListenBuf();
     this._playing = isPlaying;
@@ -1283,6 +1293,18 @@ export default class {
   }
   play() {
     if (this._howler?.playing()) return;
+    // [C3 音量渐入] 久未播(>45min)或关软件后隔天打开 + 音量>50% → 本次出声做一段较长(1.2s)渐入(从 0 推上来)；
+    //   否则维持常规 200ms 防啪嗒淡入。_lastPlayAt 由 _setPlaying 记录、Proxy 自动落盘、重启读回(支持跨天判定)。
+    const _now = Date.now();
+    const _last = this._lastPlayAt || 0;
+    const _crossedDay =
+      _last > 0 &&
+      new Date(_last).toDateString() !== new Date(_now).toDateString();
+    const _rampIn =
+      this.volume > 0.5 &&
+      _last > 0 &&
+      (_now - _last > VOLUME_RAMP_IDLE_MS || _crossedDay);
+    const _fadeDur = _rampIn ? VOLUME_RAMP_DURATION : PLAY_PAUSE_FADE_DURATION;
     // [C-14] 用户主动点播放 → 立即显示缓冲，出声后(once 'play')清除
     store.commit('setAudioBuffering', true);
     this._howler?.play();
@@ -1305,7 +1327,7 @@ export default class {
           store.commit('setAudioBuffering', false);
         });
       }
-      this._howler?.fade(0, this.volume, PLAY_PAUSE_FADE_DURATION);
+      this._howler?.fade(0, this.volume, _fadeDur);
 
       // 播放时确保开启player.
       // 避免因"忘记设置"导致在播放时播放器不显示的Bug

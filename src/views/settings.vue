@@ -133,11 +133,9 @@
       <div v-if="isElectron" class="item">
         <div class="left">
           <div class="title">取消订阅后从 NAS 删档</div>
-          <div class="description" style="color: #e74c3c">
-            ⚠️ 危险：取消订阅满 7 天后自动删除 NAS
-            上该节目及其所有下载文件（需同时在 localStorage 设置
-            <code>nasDestructiveArmed=true</code>
-            才真正执行）。确认了解风险再开启。
+          <div class="description">
+            取消订阅满 7 天后，自动删除该节目在 NAS
+            上的下载文件以释放空间（仅删文件，收听历史与统计保留）。
           </div>
         </div>
         <div class="right">
@@ -1336,8 +1334,11 @@ h3 {
 // [设置控件统一] 选择框：固定宽度(不再随最长选项撑大成参差长度)，长名(如音频设备)单行省略号折叠、
 //   :title 悬停看全名、点开下拉看完整；去掉灰填充背景改干净细描边(用户：不要颜色背景)，聚焦/打开不再变蓝底。
 select {
-  width: 220px;
-  max-width: 220px;
+  // [统一收窄] 所有设置下拉框统一固定宽度、更紧凑(原 220px 偏宽，"3"这类短选项尤其空旷)；
+  //   长名单行省略号(音频设备 select 另挂 v-tip 悬停看全名，其余静态项点开下拉看完整)；
+  //   160px：中文项均不裁，兼顾 i18n 切英文后较长项(如 Minimize to tray)收起态尽量完整。
+  width: 160px;
+  max-width: 160px;
   font-weight: 600;
   border: 1px solid var(--color-secondary);
   padding: 7px 34px 7px 12px;
