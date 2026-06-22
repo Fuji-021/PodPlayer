@@ -75,8 +75,11 @@ import {
   loadAllDownloads,
   recoverDownloadsOnce,
   cleanupCompletedDownloads,
+  setDownloadConcurrency,
 } from '@/utils/podcast/downloads';
 registerDownloadListeners();
+// [C1] 启动时应用持久化的"同时下载集数"(否则重启回落底层默认 3)
+setDownloadConcurrency(store.state.settings.downloadConcurrency || 3);
 // [事故恢复·一次性] 实例改名后按"当前身份"修正下载绝对路径 + sha1 反查兜底（只跑一次）。
 recoverDownloadsOnce();
 loadAllDownloads()

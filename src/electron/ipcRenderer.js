@@ -126,6 +126,16 @@ export function ipcRenderer(vueInstance) {
     player.switchRepeatMode();
   });
 
+  // [操作#15/#2b] 全局快捷键注册失败(被其它应用/系统占用，或非法组合) → 弹 toast 提示，不再静默失灵。
+  ipcRenderer.on('globalShortcutRegisterFailed', (event, list) => {
+    if (list && list.length) {
+      store.dispatch(
+        'showToast',
+        `快捷键 ${list.join('、')} 注册失败（被其它应用占用或非法组合）`
+      );
+    }
+  });
+
   ipcRenderer.on('shuffle', () => {
     if (inEditable()) return;
     player.switchShuffle();

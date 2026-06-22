@@ -281,6 +281,21 @@
         </div>
       </div>
 
+      <!-- [C1] 同时下载集数：调下载并发上限(1-10)，默认 3。仅调既有参数，不改下载引擎逻辑 -->
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">同时下载集数</div>
+          <div class="description"
+            >批量下载时最多同时进行的下载数（1=依次下载，越大越快但更占带宽）</div
+          >
+        </div>
+        <div class="right">
+          <select v-model.number="downloadConcurrency">
+            <option v-for="n in 10" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </div>
+      </div>
+
       <!-- [T14] 导出收听数据：把收听统计/进度/每日记录导出为 CSV(Excel 可读) 或 JSON(完整备份) -->
       <div class="item">
         <div class="left">
@@ -508,6 +523,7 @@ import { changeAppearance } from '@/utils/common';
 import defaultShortcuts from '@/utils/shortcuts';
 import pkg from '../../package.json';
 import { db } from '@/utils/db';
+import { setDownloadConcurrency } from '@/utils/podcast/downloads';
 // [NAS] 配置中心：多档连接 + 自动发现库 + 一键切换（token 仅主进程）
 import {
   listNasProfiles,
@@ -786,6 +802,22 @@ export default {
           key: 'startupPage',
           value: value === 'library' ? 'library' : 'home',
         });
+      },
+    },
+    // [C1] 同时下载集数(1-10)：set 时即时调底层 setDownloadConcurrency + 持久化(启动由 main.js 应用一次)
+    downloadConcurrency: {
+      get() {
+        return this.settings.downloadConcurrency || 3;
+      },
+      set(value) {
+        let v = Number(value) || 3;
+        if (v < 1) v = 1;
+        if (v > 10) v = 10;
+        this.$store.commit('updateSettings', {
+          key: 'downloadConcurrency',
+          value: v,
+        });
+        setDownloadConcurrency(v);
       },
     },
     enableCustomTitlebar: {

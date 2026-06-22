@@ -33,6 +33,7 @@ let localStorage = {
     nasRemoveEnabled: false, // [T1 P1-c] 取消订阅后自动从 NAS 删档（默认关，需手动开启）
     nasDeviceScope: 'local', // [T1 P1-c] 删档设备范围（local=只本机；shared=多设备共享不删）
     autoCleanCompletedDownloads: false, // [T5] 听完后自动清理已下载单集（默认关，用户主动开启）
+    downloadConcurrency: 3, // [C1] 同时下载集数(1-10)，默认 3 = 维持现状(底层 MAX_CONCURRENT)
     linuxEnableCustomTitlebar: false,
     trayIconTheme: 'auto',
     enabledPlaylistCategories,
