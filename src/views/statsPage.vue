@@ -45,12 +45,7 @@
     <!-- [统计动画 v1.5] 时长矩形条统一动画：宽度由响应式 _w 驱动，走同一条 CSS width 过渡。
          留存条伸缩(俯视缩小)+FLIP 移动；新增条从 0 长出(从左)；离开条瞬时消失(v1.5)。全程不透明、无渐隐。 -->
     <transition-group name="stat" tag="div" class="stat-list">
-      <div
-        v-for="item in visibleList"
-        :key="item.podcastId"
-        class="stat-row"
-        :style="{ opacity: item._op == null ? 1 : item._op }"
-      >
+      <div v-for="item in visibleList" :key="item.podcastId" class="stat-row">
         <div
           class="bar"
           :style="{ width: item._w + '%', background: barColor(item) }"
@@ -64,7 +59,13 @@
           />
         </div>
         <!-- [点击区收窄] 名字/时长区可点跳转 -->
-        <div class="label" @click="goPodcast(item)">
+        <!-- [文字渐隐·与进度条分开] opacity 只挂在文字(label)上 → 幽灵行只文字淡出，
+             进度条(bar)只走自身 width 过渡自然伸缩、不淡出(符合物理) -->
+        <div
+          class="label"
+          :style="{ opacity: item._op == null ? 1 : item._op }"
+          @click="goPodcast(item)"
+        >
           <div class="name">{{ item.title }}</div>
           <div class="dur">{{ fmtDur(item.wallSec) }}</div>
         </div>
@@ -243,10 +244,17 @@ export default {
         });
       });
     },
-    // [B-61] 单条目标宽度%（相对最长条；最长占 60% 留出右侧给名字，最短保底 7% 放得下封面）
+    // [B-61/比例优化 2026-06-21] 单条目标宽度%（相对最长条；最长占 60% 留右侧给名字）。
+    //   纯线性 *60 时短条(5分钟/17分钟)都 <7% 被 max(7) 兜底成等宽=不可区分；纯线性又让 5分钟≈0 太极端。
+    //   方案:**KNEE(14%) 以上保持线性**(靠前长条满意、一字不变)；**KNEE 以下用 sqrt 把真实比例放大映射到
+    //   [FLOOR, KNEE]**——短条之间按真实大小拉开区分(5分钟<17分钟)、又都 ≥FLOOR(放得下封面)、且不极端。
     barTargetPct(item, maxWall) {
-      const pct = (item.wallSec / Math.max(1, maxWall)) * 60;
-      return Math.max(7, pct);
+      const linear = (item.wallSec / Math.max(1, maxWall)) * 60;
+      const KNEE = 14; // 拐点(%)：此值以上线性不变(靠前长条满意方向)
+      const FLOOR = 7; // 最短可见(放得下封面)
+      if (linear >= KNEE) return linear;
+      const t = linear / KNEE; // 0~1：本条在拐点内的真实占比
+      return FLOOR + (KNEE - FLOOR) * Math.sqrt(t);
     },
     // [B-61] 把当前 list 平滑过渡到 freshList（统一动画核心）：
     //   留存条：保持当前宽 → 下一帧过渡到新宽(最长条变长→其余整体变细=俯视抬高缩小) + FLIP 移动
@@ -256,17 +264,9 @@ export default {
     //     继续留在列表里，_target=0 → 下一帧 width 缩回到 0，缩回过渡(0.6s×animK)结束后定时器再真正移除。
     //     反方向"一周→全部"ghosts 为空、merged===next，逐帧与现状一致(用户满意方向不动)。
     animateTo(freshList) {
-      // [B 位移修·根治偶发"部分行直接往下跳位"] 动画进行中又来一次重排 → 暂存，等本次过渡结束再串行补做。
-      //   根因:setRange 缓存命中 animateTo(cached) + 随后 fresh 校正 animateTo(fresh) 偶发在一帧内撞帧
-      //   (fresh 这条 promise 的微任务早于首次 this.list 赋值触发的渲染 flush)，两次 this.list 赋值合并 →
-      //   transition-group 据合并中间态算出"部分该往下滑的行 旧位≈新位"→ 丢失 FLIP 直接跳到下方。
-      //   串行化后绝不会一帧内二次重排(代价:fresh≠cached 时校正晚 ~0.72s，极罕见、可接受)。
-      if (this._animBusy) {
-        this._pendingList = freshList;
-        return;
-      }
-      this._animBusy = true;
-      // 本次切换的动画守卫：连点/快速来回切换时，旧的"清理幽灵定时器"作废、不误删新一轮列表
+      // 本次切换的动画守卫：连点/快速来回切换时，旧的"清理幽灵定时器"作废、不误删新一轮列表。
+      //   [B 位移修·改用 1A] 不再用 _animBusy 串行化(那会让连点排队=不跟手)；改为在 setRange 把"缓存命中后
+      //   的 fresh 校正"推迟一帧执行，避免一帧内二次 this.list 赋值撞帧。连点每次都立即 animateTo=跟手。
       const myTurn = (this._animSeq = (this._animSeq || 0) + 1);
       const maxWall = freshList.length ? freshList[0].wallSec : 1;
       // prevList 先剔除上一轮还没清完的幽灵，避免叠加 + 污染留存判定
@@ -292,13 +292,7 @@ export default {
         .map(g => ({ ...g, _leaving: true, _target: 0, _op: 1 }));
       const merged = next.concat(ghosts);
       this.list = merged;
-      // [死锁兜底] 取色异常绝不能卡住动画串行化(否则 _animBusy 永真 → 列表永久冻死、统计页再不更新)；
-      //   吞掉同步异常，保证下面的清理 setTimeout 一定注册、_animBusy 一定能被清。
-      try {
-        this.extractColors();
-      } catch (e) {
-        /* ignore */
-      }
+      this.extractColors();
       // 双 rAF：先让"起点宽度"真正绘制一帧，再统一过渡到目标宽 → 必触发 width 过渡
       //   (留存条变宽 / 新增条从 0 长出 / 幽灵条缩回到 0)。
       // [v1.5/B69-V1 消除] 写的是本次捕获的 merged(每次 animateTo 都新建对象)而非 this.list：
@@ -314,20 +308,15 @@ export default {
           });
         });
       });
-      // 缩回+淡出过渡(width/opacity 0.6s×animK)跑完(D=720，含双rAF启动延迟~32ms+掉帧余量)后：
-      //   清动画忙标志、移除幽灵(_animSeq 守卫防连点误删)、补做被串行化暂存的下一次重排。
-      const D = Math.round(720 * (this.animK || 1));
-      setTimeout(() => {
-        this._animBusy = false;
-        if (myTurn === this._animSeq && ghosts.length) {
+      // 缩回(width)+文字淡出(label opacity)过渡跑完(D=720，含双rAF启动延迟~32ms+掉帧余量)后真正移除幽灵；
+      //   _animSeq 守卫:连点时旧定时器作废、不误删新一轮列表(连点每次 animateTo 都 _animSeq++)。
+      if (ghosts.length) {
+        const D = Math.round(720 * (this.animK || 1));
+        setTimeout(() => {
+          if (myTurn !== this._animSeq) return;
           this.list = this.list.filter(it => !it._leaving);
-        }
-        if (this._pendingList) {
-          const l = this._pendingList;
-          this._pendingList = null;
-          this.animateTo(l);
-        }
-      }, D);
+        }, D);
+      }
     },
     // [B-54] 上次进入时的排行快照（localStorage，按 range 分键），作为下次动画起点
     loadSnapshot(range) {
@@ -381,7 +370,18 @@ export default {
       if (seq !== this._loadSeq) return; // 已被更晚的切换接替 → 不提交本次（防串台）
       if (!cached || this.rangeListChanged(fresh.list, cached.list)) {
         this.rangeTotal = fresh.totalWall;
-        this.animateTo(fresh.list);
+        if (cached) {
+          // [B 位移修 1A] 缓存命中已同步 animateTo 过一次；fresh 校正**推迟到下一帧**再做，避免与首次
+          //   在同一帧内二次 this.list 赋值 → transition-group 据合并中间态算"旧位≈新位"丢 FLIP 直接跳。
+          //   不串行化连点(连点每次走第一次的同步 animateTo)→ 快速连点仍立即跟手。
+          await this.$nextTick();
+          requestAnimationFrame(() => {
+            if (seq !== this._loadSeq) return; // rAF 内再守卫，防被更晚切换接替
+            this.animateTo(fresh.list);
+          });
+        } else {
+          this.animateTo(fresh.list); // 无缓存 → 本就只此一次
+        }
       }
       this.saveSnapshot(r, fresh.list);
     },
@@ -588,13 +588,12 @@ export default {
   //   padding 属于行盒、被 v1.3 的不透明底色一并涂实 → 行与行无缝全覆盖，细线无处可漏。
   padding-bottom: 14px;
   // [点击区收窄] 整行不再可点(进度条空白处不跳转)，cursor 交给 .thumb(封面)/.label(名字)
-  // [名字渐隐] 幽灵行 opacity 1→0 淡出，与 .bar width 缩回同时长同缓动 → 名字不再"硬消失"
-  // [must-fix·FLIP 保护] 必须同时显式声明 transform 过渡：transition-group 给移动中的 .stat-row 附加
-  //   .stat-move(transition:transform)，transition 简写整体替换、同特异性下后声明的本 .stat-row 会覆盖
-  //   .stat-move → FLIP 的 transform 过渡丢失致留存/新增行瞬时跳位。这里自带等效 transform 过渡兜住。
-  transition: opacity calc(0.6s * var(--stat-k, 1))
-      cubic-bezier(0.22, 1, 0.36, 1),
-    transform calc(0.65s * var(--stat-k, 1)) cubic-bezier(0.22, 1, 0.36, 1);
+  // [FLIP 保护] .stat-row 自带 transform 过渡：transition-group 给移动中的行附加 .stat-move
+  //   (transition:transform)，transition 简写整体替换、同特异性下后声明的本 .stat-row 会覆盖它，
+  //   故必须自带等效 transform 过渡兜住，否则 FLIP 丢失致留存/新增行瞬时跳位。
+  //   [进度条不渐隐] opacity 过渡已移到 .label(只文字淡出)，进度条 .bar 只走自身 width 过渡自然伸缩。
+  transition: transform calc(0.65s * var(--stat-k, 1))
+    cubic-bezier(0.22, 1, 0.36, 1);
   // [v1.5.2/毛刺修] 页面同色 2px 光环：FLIP 移动中每行是独立合成层、位移带亚像素小数，
   //   相邻两行层边缘会出现发丝缝，缝里漏出底下长途穿行行(如深度对话 周#5→全部#1 纵贯全表)
   //   的 1px 色丝=毛刺。给每行一圈与页面同色的不透明描边(spread)，随行移动把 ≤2px 的
@@ -636,6 +635,9 @@ export default {
     min-width: 0;
     flex-shrink: 1;
     cursor: pointer; // [点击区收窄] 名字/时长可点跳转
+    // [文字渐隐] 幽灵行文字 opacity 1→0 淡出，与 .bar width 缩回同时长同缓动(进度条本身不淡出)
+    transition: opacity calc(0.6s * var(--stat-k, 1))
+      cubic-bezier(0.22, 1, 0.36, 1);
     &:hover .name {
       color: var(--color-primary);
     }
