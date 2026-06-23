@@ -305,6 +305,14 @@ export default {
       agoDays: '{n} 天前',
       connLib: '库：',
       selectedLibrary: '(已选库)',
+      // [资源池] PodcastIndex 配置
+      podcastIndex: '订阅源拓展 · PodcastIndex',
+      podcastIndexKey: 'PodcastIndex API Key',
+      podcastIndexSecret: 'PodcastIndex API Secret',
+      podcastIndexDesc:
+        '开放播客索引(400 万+ feed)，作为 Apple/iTunes 都搜不到的节目(如《耳听为真》《红衣大叔周鸿祎的播客》)的解析与搜索兜底源。到 api.podcastindex.org 免费注册(邮箱即可)取得 key/secret，仅存本地、不上传。',
+      podcastIndexKeyPlaceholder: '留空则不启用',
+      podcastIndexSecretPlaceholder: '留空则不启用',
     },
   },
   contextMenu: {

@@ -211,6 +211,38 @@
         </div>
       </div>
 
+      <!-- [资源池] PodcastIndex：开放播客索引(免费 key)，作为 Apple/iTunes 都搜不到的节目(如耳听为真/
+           红衣大叔)的解析与搜索兜底源。key/secret 仅存本地 localStorage、随请求传主进程做 sha1 鉴权，绝不进 git。 -->
+      <h3 v-if="isElectron">{{ $t('settings.pod.podcastIndex') }}</h3>
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">{{ $t('settings.pod.podcastIndexKey') }}</div>
+          <div class="description">{{
+            $t('settings.pod.podcastIndexDesc')
+          }}</div>
+        </div>
+        <div class="right">
+          <input
+            v-model="podcastIndexKey"
+            class="text-input margin-right-0"
+            :placeholder="$t('settings.pod.podcastIndexKeyPlaceholder')"
+          />
+        </div>
+      </div>
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">{{ $t('settings.pod.podcastIndexSecret') }}</div>
+        </div>
+        <div class="right">
+          <input
+            v-model="podcastIndexSecret"
+            type="password"
+            class="text-input margin-right-0"
+            :placeholder="$t('settings.pod.podcastIndexSecretPlaceholder')"
+          />
+        </div>
+      </div>
+
       <!-- [§12] 「自定义」段(连接 Last.fm 听歌 scrobble + Discord Rich Presence「正在听」)=
            网易云音乐专属、与播客无关，已删；NAS 入口为独立的「NAS 就近音源」段。 -->
       <h3>{{ $t('settings.others') }}</h3>
@@ -860,6 +892,30 @@ export default {
         this.$store.commit('updateSettings', {
           key: 'linuxEnableCustomTitlebar',
           value,
+        });
+      },
+    },
+    // [资源池] PodcastIndex key/secret：仅本地持久化(localStorage settings)；resolveFeedByIndex 读取，
+    //   作为 Apple/iTunes 搜不到节目的解析兜底。trim 防误带空格；留空即不启用(解析链跳过该级)。
+    podcastIndexKey: {
+      get() {
+        return this.settings.podcastIndexKey || '';
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'podcastIndexKey',
+          value: (value || '').trim(),
+        });
+      },
+    },
+    podcastIndexSecret: {
+      get() {
+        return this.settings.podcastIndexSecret || '';
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'podcastIndexSecret',
+          value: (value || '').trim(),
         });
       },
     },

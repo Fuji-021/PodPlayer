@@ -294,6 +294,14 @@ export default {
       agoDays: '{n} d ago',
       connLib: 'Library: ',
       selectedLibrary: '(Selected library)',
+      // [resource pool] PodcastIndex config
+      podcastIndex: 'Extra source · PodcastIndex',
+      podcastIndexKey: 'PodcastIndex API Key',
+      podcastIndexSecret: 'PodcastIndex API Secret',
+      podcastIndexDesc:
+        'Open podcast index (4M+ feeds) — a resolution & search fallback for shows Apple/iTunes cannot find. Register a free key/secret at api.podcastindex.org (email only); stored locally only, never uploaded.',
+      podcastIndexKeyPlaceholder: 'Leave empty to disable',
+      podcastIndexSecretPlaceholder: 'Leave empty to disable',
     },
   },
   contextMenu: {
