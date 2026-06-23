@@ -10,7 +10,7 @@
       <!-- [性能·路由过渡] 给页面切换加淡入+轻微上移过渡，消除"硬切"主观卡顿。
            :key=$route.name 让同为 keepAlive 的菜单互切(home↔library↔explore)也能触发过渡。
            keepAlive 仍按 name 缓存各页 DOM，过渡只补视觉、不重渲。 -->
-      <transition name="page" mode="out-in">
+      <transition name="page" mode="out-in" @before-enter="resetMainScroll">
         <keep-alive>
           <router-view
             v-if="$route.meta.keepAlive"
@@ -18,7 +18,7 @@
           ></router-view>
         </keep-alive>
       </transition>
-      <transition name="page" mode="out-in">
+      <transition name="page" mode="out-in" @before-enter="resetMainScroll">
         <router-view
           v-if="!$route.meta.keepAlive"
           :key="$route.name"
@@ -117,6 +117,16 @@ export default {
     },
     handleScroll() {
       this.$refs.scrollbar.handleScroll();
+    },
+    // [滚动复位·查漏补缺] 路由切换、新页进场时把全站唯一的滚动容器 <main> 归零(回顶部)。
+    //   根因：全站共用本组件的 <main> 作滚动容器，跨页不会自动归零 → 从已滚动的页面前进到
+    //   discover/单集详情/收藏/历史/统计等"不保存位置"的页，会停在上一页的滚动位(中间)。统一在此兜底，
+    //   与既有 per-page 复位(podcastDetail._presentEpisodes / dailyTracks)同时机、同效果，只是收口到一处。
+    //   savePosition 页(home/explore/artist/next/library)跳过：由各自 activated() 的 restorePosition()
+    //   恢复滚动位；跳过 → 与本钩子触发顺序无关、绝不打架。
+    resetMainScroll() {
+      if (this.$route.meta && this.$route.meta.savePosition) return;
+      if (this.$refs.main) this.$refs.main.scrollTop = 0;
     },
   },
 };
