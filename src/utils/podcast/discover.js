@@ -49,10 +49,35 @@ export function appleIdOf(podcast) {
   return m ? m[1] : '';
 }
 
-// [资源池·解析链第二级] iTunes Search 按名精确匹配兜底(无需 API key)：xyzrank 等榜单条目
-//   无 Apple id / Apple lookup 失败时(如《她山石》《旺仔信箱》)，按节目名搜 iTunes，命中**同名**
-//   节目即拿其 feedUrl。必须**精确名匹配**——否则"耳听为真"会误中近名"耳听她方"等别的节目。
-//   规整化(去空白/小写)后全等才采用；不命中返回空、由上层抛"未找到可用源"(绝不乱订到错节目)。
+// [资源池·名字匹配] 解析兜底(iTunes/PodcastIndex 按名)防"误订到别的节目"的判定：
+//   ① 规整化(去空白+小写)后全等；或 ② "中文主名 + 纯拉丁/数字副标题"差异(长名 = 短名 + 纯拉丁数字后缀)
+//      —— 兼容《不开玩笑 Jokes Aside》这类双语名(搜"不开玩笑"应命中，实测 PodcastIndex 即如此存)，
+//      又**不会**把"她山石"误配成"她山之石shepower"(后者第 3 字即不同、非前缀)、也不把"耳听为真"配到"耳听她方"。
+//   只放宽到拉丁/数字后缀(副标题几乎都是英文/年份)，**中文差异一律不放宽** → 误配风险极低；
+//   且此判定只在解析链末级(本档其余源都失败时)生效，命中后上层还会真抓验证可达。禁可选链、用 && + ||。
+function podNameMatch(a, b) {
+  const norm = s =>
+    String(s || '')
+      .trim()
+      .replace(/\s+/g, '')
+      .toLowerCase();
+  const na = norm(a);
+  const nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const short = na.length <= nb.length ? na : nb;
+  const long = na.length <= nb.length ? nb : na;
+  // 长名 = 短名 + 纯拉丁/数字后缀(副标题) → 视为同一节目；中文后缀(如"她山[之]石…")不放宽
+  if (long.indexOf(short) === 0) {
+    const suffix = long.slice(short.length);
+    if (/^[a-z0-9]+$/.test(suffix)) return true;
+  }
+  return false;
+}
+
+// [资源池·解析链第二级] iTunes Search 按名兜底(无需 API key)：xyzrank 等榜单条目无 Apple id /
+//   Apple lookup 失败时(如《她山石》《旺仔信箱》)，按节目名搜 iTunes，命中**同名(或中文主名+拉丁副标题)**
+//   节目即拿其 feedUrl(见 podNameMatch)；不命中返回空、由上层抛"未找到可用源"(绝不乱订到错节目)。
 //   本目录(utils/podcast)沿用 && + || 守卫，不引入额外可选链。
 async function resolveFeedByName(name) {
   const n = String(name || '').trim();
@@ -60,22 +85,17 @@ async function resolveFeedByName(name) {
   try {
     const res = await ipcRenderer.invoke('podcast:search', n);
     const items = (res && res.ok && res.items) || [];
-    const norm = s =>
-      String(s || '')
-        .trim()
-        .replace(/\s+/g, '')
-        .toLowerCase();
-    const target = norm(n);
-    const hit = items.find(it => it && it.feedUrl && norm(it.name) === target);
+    const hit = items.find(it => it && it.feedUrl && podNameMatch(it.name, n));
     return (hit && hit.feedUrl) || '';
   } catch (e) {
     return '';
   }
 }
 
-// [资源池·解析链第三级] PodcastIndex 按名精确匹配兜底(需用户在设置里配置免费 key/secret)。
-//   覆盖 Apple/iTunes 都搜不到、但有公开 RSS 的节目；未配置 key 直接跳过(返回空、不报错)。
-//   key/secret 从 localStorage 设置读、传给主进程做 sha1 鉴权请求。同样精确名匹配防误订。
+// [资源池·解析链第四级] PodcastIndex 按名兜底(需用户在设置里配置免费 key/secret)。
+//   覆盖 Apple/iTunes 都搜不到、但有公开 RSS 的节目；**软耦合**：未配 key / 服务不可用 / 无命中
+//   一律返回空、绝不抛错(由上层走既有"连接失效"框架，不打扰用户)。同 podNameMatch 防误订。
+//   key/secret 从 localStorage 设置读、传给主进程做 sha1 鉴权请求(绝不入 git)。
 async function resolveFeedByIndex(name) {
   const n = String(name || '').trim();
   if (!n || !ipcRenderer) return '';
@@ -96,13 +116,7 @@ async function resolveFeedByIndex(name) {
       secret: secret,
     });
     const items = (res && res.ok && res.items) || [];
-    const norm = s =>
-      String(s || '')
-        .trim()
-        .replace(/\s+/g, '')
-        .toLowerCase();
-    const target = norm(n);
-    const hit = items.find(it => it && it.feedUrl && norm(it.name) === target);
+    const hit = items.find(it => it && it.feedUrl && podNameMatch(it.name, n));
     return (hit && hit.feedUrl) || '';
   } catch (e) {
     return '';

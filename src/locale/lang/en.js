@@ -313,7 +313,7 @@ export default {
       podcastIndexKey: 'PodcastIndex API Key',
       podcastIndexSecret: 'PodcastIndex API Secret',
       podcastIndexDesc:
-        'Open podcast index (4M+ feeds) — a resolution & search fallback for shows Apple/iTunes cannot find. Register a free key/secret at api.podcastindex.org (email only); stored locally only, never uploaded.',
+        'A free open podcast index — an extra way to find feeds by name when Apple/iTunes cannot (mostly English podcasts; limited Chinese niche coverage). Register free with just an email at api.podcastindex.org to get a key/secret, paste here to enable. Empty = disabled; stored locally only, never uploaded.',
       podcastIndexKeyPlaceholder: 'Leave empty to disable',
       podcastIndexSecretPlaceholder: 'Leave empty to disable',
     },

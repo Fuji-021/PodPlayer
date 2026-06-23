@@ -307,7 +307,7 @@ export default {
       podcastIndexKey: 'PodcastIndex API Key',
       podcastIndexSecret: 'PodcastIndex API Secret',
       podcastIndexDesc:
-        '開放播客索引(400 萬+ feed)，作為 Apple/iTunes 都搜不到的節目(如《耳聽為真》《紅衣大叔周鴻禕的播客》)的解析與搜尋兜底源。到 api.podcastindex.org 免費註冊(信箱即可)取得 key/secret，僅存本機、不上傳。',
+        '免費的開放播客索引，給 Apple/iTunes 搜不到的節目多一條按名找源的路（以英文播客為主，中文小眾節目收錄有限）。到 api.podcastindex.org 用信箱免費註冊即可拿到 key/secret，填入這裡啟用；留空不啟用，密鑰只存本機、不上傳。',
       podcastIndexKeyPlaceholder: '留空則不啟用',
       podcastIndexSecretPlaceholder: '留空則不啟用',
     },
