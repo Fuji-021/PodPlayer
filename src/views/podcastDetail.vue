@@ -68,9 +68,10 @@
           返回上一级
         </button>
       </div>
-      <!-- [B67-BUG-2] 缓存优先骨架态：后台预览抓取中，单集区给个轻提示，不留空白 -->
-      <div v-else-if="podcast && podcast._loading" class="ep-loading">
-        正在载入单集…
+      <!-- [B67-BUG-2 / 加载动效] 缓存优先骨架态：后台预览抓取中(新资源池逐候选解析可能更久)，
+           用跳动的点动效取代静态"正在载入单集…"文案，给等待以反馈；点用封面主色(未就绪回落主题色)。 -->
+      <div v-else-if="podcast && podcast._loading" class="ep-loading-dots">
+        <BouncingDots :color="subBtnColor || ''" />
       </div>
       <!-- [F1·方案C] 固定行高窗口虚拟化：top/bottom spacer 撑出 n×rowH 的恒定真实总高，
            中间 v-for 只渲染可视窗口 [winStart,winEnd) ~30~50 行。ref="epList" 给方法读 rect/测行高用。 -->
@@ -319,6 +320,7 @@ import {
   normFeedUrl,
 } from '@/utils/podcast/nasSource';
 import SvgIcon from '@/components/SvgIcon.vue';
+import BouncingDots from '@/components/BouncingDots.vue';
 
 // [F1·方案C] 单集行固定高度兜底(px)。真实值 mounted 后测量并写 localStorage，此处仅供首帧 spacer 估算。
 const ROW_H_FALLBACK = 69;
@@ -335,7 +337,7 @@ function readCachedRowH() {
 
 export default {
   name: 'PodcastDetail',
-  components: { SvgIcon },
+  components: { SvgIcon, BouncingDots },
   data() {
     return {
       podcast: null,
@@ -1333,6 +1335,12 @@ export default {
   text-align: center;
   font-size: 14px;
   opacity: 0.45;
+}
+// [加载动效] 跳动点容器：居中、不加 opacity 暗淡(明暗由点自身关键帧驱动)
+.ep-loading-dots {
+  padding: 36px 4px;
+  display: flex;
+  justify-content: center;
 }
 // [B-73.2/F1] 还有未渲染单集时的底部提示（滚动接近会自动加载下一批）
 .ep-more-hint {
