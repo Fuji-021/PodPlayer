@@ -2,9 +2,6 @@
   <div class="discover-list">
     <div class="head">
       <h1>{{ title }}</h1>
-      <button v-tip="'换一批'" class="refresh-btn" @click="reload(true)">
-        <svg-icon icon-class="refresh" />
-      </button>
     </div>
 
     <div v-if="loading" class="state">正在加载…</div>
@@ -13,14 +10,52 @@
       <button class="retry" @click="reload(true)">重试</button>
     </div>
 
-    <!-- [B-44] 全量 grid，封面大小/缩放与「我的订阅」一致；卡片复用 DiscoverCard（与首页同一交互） -->
-    <div v-else class="grid">
-      <DiscoverCard
-        v-for="p in visibleItems"
-        :key="p.id || p.feedUrl || p.name"
-        :podcast="p"
-      />
-    </div>
+    <template v-else>
+      <!-- [分页改造] 热门/新上线=固定排行：本地切片分页展示全部，节目不随返回变动
+           (确定序 + 路由 keepAlive)；卡片复用 DiscoverCard（与首页同一交互） -->
+      <div class="grid">
+        <DiscoverCard
+          v-for="p in pagedItems"
+          :key="p.id || p.feedUrl || p.name"
+          :podcast="p"
+        />
+      </div>
+
+      <!-- [分页] 控件：‹ 1 2 3 … › -->
+      <div v-if="totalPages > 1" class="pager">
+        <button
+          class="pg-btn nav"
+          :disabled="currentPage === 1"
+          @click="goPage(currentPage - 1)"
+        >
+          ‹
+        </button>
+        <template v-for="(p, i) in pageWindow">
+          <span v-if="p === '...'" :key="'e' + i" class="pg-ellipsis">…</span>
+          <button
+            v-else
+            :key="'p' + p"
+            class="pg-btn"
+            :class="{ active: p === currentPage }"
+            @click="goPage(p)"
+          >
+            {{ p }}
+          </button>
+        </template>
+        <button
+          class="pg-btn nav"
+          :disabled="currentPage === totalPages"
+          @click="goPage(currentPage + 1)"
+        >
+          ›
+        </button>
+      </div>
+
+      <!-- [分页] 末页软提醒：到底 + 总数；排行刷新后(下次取数)才变 -->
+      <div v-if="isLastPage" class="page-end-tip">
+        — 到底啦，共 {{ visibleItems.length }} 档节目 —
+      </div>
+    </template>
   </div>
 </template>
 
@@ -31,17 +66,21 @@ import {
   getSectionFull,
 } from '@/utils/podcast/discover';
 import { getSubscribedPodcasts } from '@/utils/podcast/db';
-import SvgIcon from '@/components/SvgIcon.vue';
 import DiscoverCard from '@/components/DiscoverCard.vue';
 
 export default {
   name: 'DiscoverList',
-  components: { SvgIcon, DiscoverCard },
+  components: { DiscoverCard },
   data() {
     return {
       items: [],
       loading: false,
       error: '',
+      // [分页] 加载哨兵：仅"成功加载过"才置位 → keepAlive 返回时不再重取；失败/空结果不置位、返回会重试
+      loaded: false,
+      // [分页] 当前页(1-based) + 每页数量；排行类固定，分页纯本地切片、不重新取数
+      currentPage: 1,
+      pageSize: 24,
     };
   },
   computed: {
@@ -62,17 +101,61 @@ export default {
       );
       return this.items.filter(p => !blocked.has((p.name || '').trim()));
     },
+    totalPages() {
+      return Math.max(1, Math.ceil(this.visibleItems.length / this.pageSize));
+    },
+    pagedItems() {
+      const start = (this.currentPage - 1) * this.pageSize;
+      return this.visibleItems.slice(start, start + this.pageSize);
+    },
+    isLastPage() {
+      return this.currentPage >= this.totalPages;
+    },
+    // [分页] 页码窗口：≤7 页全列；否则 首尾固定 + 当前页±1 + 省略号(…)
+    pageWindow() {
+      const total = this.totalPages;
+      const cur = this.currentPage;
+      if (total <= 7) {
+        return Array.from({ length: total }, (_, i) => i + 1);
+      }
+      const pages = [1];
+      let start = Math.max(2, cur - 1);
+      let end = Math.min(total - 1, cur + 1);
+      if (cur <= 3) {
+        start = 2;
+        end = 4;
+      }
+      if (cur >= total - 2) {
+        start = total - 3;
+        end = total - 1;
+      }
+      if (start > 2) pages.push('...');
+      for (let p = start; p <= end; p++) pages.push(p);
+      if (end < total - 1) pages.push('...');
+      pages.push(total);
+      return pages;
+    },
   },
   watch: {
     type() {
+      // 切换 热门↔新上线：回到第 1 页并重载（两者共用同一 keepAlive 实例，靠 type 变化驱动）
+      this.currentPage = 1;
       this.reload();
     },
+    // [分页] 屏蔽节目致总页数缩水时，夹紧当前页防越界（停在空白页）
+    totalPages(n) {
+      if (this.currentPage > n) this.currentPage = n;
+    },
   },
-  async created() {
-    await this.reload();
-  },
-  async activated() {
-    if (!this.items.length) await this.reload();
+  activated() {
+    // [返回不变] 路由 keepAlive：从节目详情/订阅返回后**不重载、不重排、保留页码**。
+    //   仅首次(items 空)才加载；滚动位由 savePosition + restorePosition 恢复
+    //   (App.vue 进场钩子对 savePosition 路由跳过、不打架)。
+    this.$parent &&
+      this.$parent.$refs &&
+      this.$parent.$refs.scrollbar &&
+      this.$parent.$refs.scrollbar.restorePosition();
+    if (!this.loaded) this.reload();
   },
   methods: {
     async reload(force = false) {
@@ -88,10 +171,21 @@ export default {
         this.$store.commit('setSubscribedPodcastMap', subMap);
         const excludeNames = new Set(Object.keys(subMap));
         this.items = getSectionFull(all, this.type, excludeNames);
+        this.currentPage = 1; // 新数据从第 1 页看起
+        this.loaded = true; // 成功加载 → 返回不再重取(失败则保持 false、返回重试)
       } catch (e) {
         this.error = String((e && e.message) || e) || '加载失败';
       } finally {
         this.loading = false;
+      }
+    },
+    goPage(p) {
+      const target = Math.min(Math.max(1, p), this.totalPages);
+      if (target === this.currentPage) return;
+      this.currentPage = target;
+      // 翻页回到顶部（新一页从头看起）
+      if (this.$parent && this.$parent.$refs && this.$parent.$refs.main) {
+        this.$parent.$refs.main.scrollTo({ top: 0 });
       }
     },
     // 从 Dexie 读已订阅 → {节目名: feedUrl}
@@ -140,25 +234,6 @@ export default {
     margin: 0;
   }
 }
-.refresh-btn {
-  background: transparent;
-  color: var(--color-text);
-  opacity: 0.5;
-  border-radius: 8px;
-  padding: 6px;
-  cursor: pointer;
-  display: inline-flex;
-  transition: 0.15s;
-  .svg-icon {
-    width: 18px;
-    height: 18px;
-  }
-  &:hover {
-    opacity: 1;
-    color: var(--color-primary);
-    background: var(--color-secondary-bg-for-transparent);
-  }
-}
 .state {
   opacity: 0.5;
   padding: 60px 0;
@@ -176,5 +251,55 @@ export default {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 24px;
+}
+
+// [分页] 控件：圆角按钮，当前页用主题色填充（与全站按钮风格一致）
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 40px 0 8px;
+  flex-wrap: wrap;
+  .pg-btn {
+    min-width: 36px;
+    height: 36px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 10px;
+    background: var(--color-secondary-bg);
+    color: var(--color-text);
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 0.15s, background 0.15s, color 0.15s;
+    &.nav {
+      font-size: 18px;
+    }
+    &:hover:not(:disabled):not(.active) {
+      transform: translateY(-1px);
+      color: var(--color-primary);
+    }
+    &.active {
+      background: var(--color-primary);
+      color: #fff;
+      cursor: default;
+    }
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+  }
+  .pg-ellipsis {
+    opacity: 0.5;
+    padding: 0 2px;
+    user-select: none;
+  }
+}
+.page-end-tip {
+  text-align: center;
+  opacity: 0.42;
+  font-size: 13px;
+  margin: 18px 0 8px;
 }
 </style>

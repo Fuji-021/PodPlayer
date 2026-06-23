@@ -332,6 +332,9 @@ export function getSectionFull(items, type, excludeNames) {
   if (!items || !items.length) return [];
   if (type === 'treasure')
     return shuffle(excludeSubbed(items.slice(TREASURE_START), excludeNames));
-  if (type === 'new') return shuffle(excludeSubbed(items, excludeNames)); // [修] 新上线全部(排除已订阅) + 每次重洗
-  return items.slice(); // hot=热门排行：确定性榜单序，不 shuffle
+  // [分页改造 2026-06-24] 新上线改**确定序**(API 时序，去已订阅)、不再 shuffle：
+  //   热门/新上线是"排行"(时段内固定)，二级页用分页展示而非"换一批"——确定序才能跨导航稳定、
+  //   返回不变(配 discoverList keepAlive)。treasure(随机探索)仍 shuffle。
+  if (type === 'new') return excludeSubbed(items, excludeNames);
+  return items.slice(); // hot=热门排行：确定性榜单序，不 shuffle(含已订阅，"热门就是热门")
 }

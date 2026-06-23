@@ -13,12 +13,14 @@ const routes = [
       savePosition: true,
     },
   },
-  // [B-42] 发现页二级页（热门排行 / 播客寻宝）
+  // [B-42] 发现页二级页（热门排行 / 新上线）
+  // [分页改造 2026-06-24] keepAlive+savePosition：分页浏览排行时点进节目再返回，
+  //   保留页码/滚动位、不重载不重排(配 discoverList activated 只在 items 空时加载 + 确定序)。
   {
     path: '/discover/:type',
     name: 'discover',
     component: () => import('@/views/discoverList.vue'),
-    meta: { requireLogin: false },
+    meta: { requireLogin: false, keepAlive: true, savePosition: true },
   },
   // [B-52] 播客搜索结果页（本地 + 在线 iTunes）
   {
