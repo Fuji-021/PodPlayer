@@ -73,21 +73,91 @@ async function resolveFeedByName(name) {
   }
 }
 
-// 一键订阅取 feedUrl：① 自带 feedUrl(搜索结果)直接用 → ② Apple id → lookup → ③ iTunes 按名兜底。
-// [B-52] 搜索结果自带 feedUrl；榜单项用 Apple id；[资源池] 二者皆无/失败再按名精确搜，最大化"真正找到源"。
-async function resolveFeedUrl(podcast) {
-  if (podcast && podcast.feedUrl) return podcast.feedUrl;
+// [资源池·解析链第三级] PodcastIndex 按名精确匹配兜底(需用户在设置里配置免费 key/secret)。
+//   覆盖 Apple/iTunes 都搜不到、但有公开 RSS 的节目；未配置 key 直接跳过(返回空、不报错)。
+//   key/secret 从 localStorage 设置读、传给主进程做 sha1 鉴权请求。同样精确名匹配防误订。
+async function resolveFeedByIndex(name) {
+  const n = String(name || '').trim();
+  if (!n || !ipcRenderer) return '';
+  let key = '';
+  let secret = '';
+  try {
+    const st = JSON.parse(localStorage.getItem('settings') || '{}') || {};
+    key = st.podcastIndexKey || '';
+    secret = st.podcastIndexSecret || '';
+  } catch (e) {
+    /* ignore */
+  }
+  if (!key || !secret) return '';
+  try {
+    const res = await ipcRenderer.invoke('podcast:searchIndex', {
+      term: n,
+      key: key,
+      secret: secret,
+    });
+    const items = (res && res.ok && res.items) || [];
+    const norm = s =>
+      String(s || '')
+        .trim()
+        .replace(/\s+/g, '')
+        .toLowerCase();
+    const target = norm(n);
+    const hit = items.find(it => it && it.feedUrl && norm(it.name) === target);
+    return (hit && hit.feedUrl) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// [资源池·真正找到可用源] 逐源懒解析 + **用实际抓取验证、返回第一个能抓通的源**。
+//   候选优先级：① 自带 feedUrl → ② Apple id lookup → ③ iTunes 按名精确 → ④ PodcastIndex 按名精确。
+//   根因(2026-06-23 实测)：xyzrank 发现项**无 feedUrl**、仅靠 Apple lookup；旧逻辑"拿到第一个候选就返回"，
+//   若 Apple 给了**死源**就直接报"连接失效"，永不 fallthrough 到能用的 iTunes 按名——而《她山石》《旺仔信箱》
+//   恰恰在 iTunes 有可用 feed.xyzfm.space 源(实测 RSS 200)。改为逐个真抓：前一个抓不通就解析并试下一源，
+//   用第一个成功的。doFetch=subscribeByRssUrl/previewByRssUrl，二者在抓取(ipcFetch)失败时于**写库前**抛错、
+//   无副作用 → 逐候选重试安全。懒解析：自带/Apple 源能通就不再多打 iTunes/PodcastIndex(常见路径零额外网络)。
+//   本目录(utils/podcast)禁可选链，用 && + ||。
+async function resolveAndFetch(podcast, doFetch) {
   if (!ipcRenderer) throw new Error('仅在桌面版可用');
-  // ② 有 Apple id → lookup
+  const tried = {};
+  let lastErr = null;
+  const attempt = async url => {
+    const v = String(url || '').trim();
+    if (!v || tried[v]) return null;
+    tried[v] = true;
+    try {
+      const result = await doFetch(v);
+      return { feedUrl: v, result };
+    } catch (e) {
+      lastErr = e;
+      return null;
+    }
+  };
+  // ① 自带 feedUrl(搜索结果/已知源)
+  let hit = podcast && podcast.feedUrl ? await attempt(podcast.feedUrl) : null;
+  if (hit) return hit;
+  // ② Apple id → lookup
   const appleId = appleIdOf(podcast);
   if (appleId) {
     const res = await ipcRenderer.invoke('podcast:resolveFeed', appleId);
-    if (res && res.ok && res.feedUrl) return res.feedUrl;
+    if (res && res.ok && res.feedUrl) {
+      hit = await attempt(res.feedUrl);
+      if (hit) return hit;
+    }
   }
-  // ③ 无 Apple id / lookup 没拿到 → iTunes Search 按名精确匹配兜底(无 key)
+  // ③ iTunes Search 按名精确匹配(无 key)
   const name = (podcast && (podcast.name || podcast.title)) || '';
-  const byName = await resolveFeedByName(name);
-  if (byName) return byName;
+  hit = await attempt(await resolveFeedByName(name));
+  if (hit) return hit;
+  // ④ PodcastIndex 按名精确匹配(需用户在设置里配置免费 key；未配则跳过)
+  hit = await attempt(await resolveFeedByIndex(name));
+  if (hit) return hit;
+  // 全军覆没：有候选但都抓不通 → 报"均无法连接"；连候选都没有 → 报"未找到源"
+  if (lastErr) {
+    throw new Error(
+      '无法连接到该节目的订阅源：' + ((lastErr && lastErr.message) || lastErr)
+    );
+  }
   throw new Error('未能找到该节目的可用订阅源');
 }
 
@@ -99,17 +169,19 @@ export async function searchPodcasts(term) {
   return res.items || [];
 }
 
-// 一键订阅：feedUrl(搜索) 或 Apple id→feedUrl(榜单) → subscribeByRssUrl（来源 discover）
+// 一键订阅：逐候选源真抓，第一个能通的入库订阅（来源 discover）
 export async function subscribePodcast(podcast) {
-  const feedUrl = await resolveFeedUrl(podcast);
-  const result = await subscribeByRssUrl(feedUrl, 'discover');
+  const { feedUrl, result } = await resolveAndFetch(podcast, u =>
+    subscribeByRssUrl(u, 'discover')
+  );
   return { ...result, feedUrl };
 }
 
-// [B-50] 预览：feedUrl(搜索) 或 Apple id→feedUrl(榜单) → previewByRssUrl（入库供试听，不订阅）
+// [B-50] 预览：逐候选源真抓，第一个能通的入库供试听（不订阅）
 export async function previewPodcast(podcast) {
-  const feedUrl = await resolveFeedUrl(podcast);
-  const result = await previewByRssUrl(feedUrl);
+  const { feedUrl, result } = await resolveAndFetch(podcast, u =>
+    previewByRssUrl(u)
+  );
   return { ...result, feedUrl };
 }
 

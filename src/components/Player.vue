@@ -19,6 +19,7 @@
         <!-- [播客改造] 关掉 vue-slider 自带的 tooltip（与下方 .progress-hover-tip 重叠）；
            dot 默认放大效果在 CSS 里抑制（见下方 .progress-bar .vue-slider-dot） -->
         <vue-slider
+          :key="'pb-' + progressBarKey"
           ref="progressSlider"
           v-model="player.progress"
           :min="0"
@@ -503,6 +504,7 @@
               @mouseleave="hoverTime = null"
             >
               <vue-slider
+                :key="'imm-' + immProgressBarKey"
                 ref="immProgressSlider"
                 v-model="player.progress"
                 :min="0"
@@ -848,6 +850,10 @@ export default {
       // [播客改造 A-7.8] 进度条 hover 预览
       hoverTime: null,
       hoverX: 0,
+      // [进度条·重开修复] 给两条 vue-slider 当 :key；布局稳定后自增一次 → 强制以"已恢复的进度/时长"
+      //   重挂、重新测量轨道宽 → 重开软件未播放时填充也能立刻显示(vue-slider 3.2.24 无 refresh/不监听 resize)。
+      progressBarKey: 0,
+      immProgressBarKey: 0,
       // [B-75] 标记位置：封面主色(标记按钮 >5 变色彩蛋用)、长按充能态、短按 pulse 反馈。
       //   _markColorSrc/_markTimer/_markPulseTimer/_markPressed 用裸实例属性(不入 data，免响应式+避开保留键)
       markColor: '#e67e22',
@@ -1085,27 +1091,25 @@ export default {
     if (this.player && typeof this.player.playbackRate === 'number') {
       this.playbackRate = this.player.playbackRate;
     }
-    // [进度条·重开修复] vue-slider 暂停态挂载时，process(已播填充)按"未布局/值此后不再变化"算成 0 宽，
-    //   要等播放后 progress 连续变化才重算 → 重开软件(已恢复上次单集+进度但未自动播放)进度条看不见、
-    //   点播放才"重现"。挂载后下一帧对底栏进度条主动 refresh()，按已恢复的 progress/duration 重算尺寸、
-    //   无需先播放。refresh 不存在时静默跳过(防 vue-slider 版本差异)。
-    const refreshProgressBar = () => {
-      const sl = this.$refs.progressSlider;
-      if (sl && typeof sl.refresh === 'function') sl.refresh();
+    // [进度条·重开修复] vue-slider 暂停态挂载时，process(已播填充)按当时轨道宽算；重开软件时底栏在
+    //   slide-up 入场、轨道宽尚未量好 → 填充算成 0 宽，要等播放后 progress 连续变化才重算 → 进度条"看不见"、
+    //   点播放才"重现"。**vue-slider 3.2.24 既无 refresh() 也不监听 resize**(实测确认，旧的 refresh() 调用
+    //   恒被 typeof 守卫跳过=空转)，故改用「自增 :key 强制重挂」：布局稳定后让 slider 以已恢复的 progress/
+    //   duration 重新实例化、重测轨道宽 → 填充立刻正确，无需先播放。:duration=0 无动画、重挂瞬时。
+    const bumpBar = () => {
+      this.progressBarKey++;
     };
-    this.$nextTick(refreshProgressBar);
-    // 二次兜底：底栏 slide-up 入场过渡(~0.4s)结束、布局彻底稳定后再 refresh 一次(refresh 幂等、
-    //   不改 value、无副作用)，覆盖"nextTick 时 rail 宽度尚未量好"的边角。组件是单例、不会被销毁，
-    //   且 refresh 内已对 $refs 缺失静默兜底，无需额外清理计时器。
-    setTimeout(refreshProgressBar, 500);
-    // [两端一致] 沉浸页进度条随面板 v-if 挂载，开启瞬间同样可能是暂停态 → 开启时也 refresh 一次。
+    this.$nextTick(bumpBar);
+    // 二次兜底：底栏 slide-up 入场过渡(~0.4s)结束、布局彻底稳定后再重挂一次，覆盖 nextTick 时轨道宽未量好的边角。
+    //   组件实为单例不销毁；仍存 id 并在 beforeDestroy 清理(防未来若被 v-if 条件渲染时的迟发)。
+    this._barBumpTimer = setTimeout(bumpBar, 500);
+    // [两端一致] 沉浸页进度条随面板 v-if 挂载，开启瞬间同样可能是暂停态 → 开启时也重挂一次。
     this.$watch(
       () => this.immersiveOpen,
       open => {
         if (!open) return;
         this.$nextTick(() => {
-          const s = this.$refs.immProgressSlider;
-          if (s && typeof s.refresh === 'function') s.refresh();
+          this.immProgressBarKey++;
         });
       }
     );
@@ -1122,6 +1126,8 @@ export default {
     clearTimeout(this._markTimer);
     clearTimeout(this._markPulseTimer);
     clearTimeout(this._markClearTimer);
+    // [进度条·重开修复] 清理进度条重挂的二次兜底计时器
+    clearTimeout(this._barBumpTimer);
     // [沉浸式播放页 P0] 卸载时若沉浸页还开着，恢复全局滚动 + 关队列/音量面板监听(防泄漏) + 清 body 标记
     this.closeQueuePanel();
     this.closeVolMenu();

@@ -134,4 +134,58 @@ export function registerPodcastDiscoverIpc() {
       return { ok: false, error: String((err && err.message) || err) };
     }
   });
+
+  // [资源池·解析链第三级] PodcastIndex 按词搜索（开放播客索引，400 万+ feed）。
+  //   覆盖 Apple/iTunes 都搜不到、但有公开 RSS 的节目——解析链最后一条公开通道。
+  //   鉴权(文档一致)：X-Auth-Key=key，X-Auth-Date=unix 秒，Authorization=sha1(key+secret+秒)。
+  //   key/secret 由渲染端从用户设置(localStorage)传入、仅用于本次请求，绝不落 git/不打印明文。
+  //   Node 内置 crypto，零新依赖；electron 主进程(Node14)禁可选链，用 && + ||。
+  ipcMain.handle('podcast:searchIndex', async (_e, payload) => {
+    const term = payload && payload.term ? String(payload.term).trim() : '';
+    const key = (payload && payload.key) || '';
+    const secret = (payload && payload.secret) || '';
+    if (!term) return { ok: true, items: [] };
+    if (!key || !secret) {
+      return { ok: false, error: '未配置 PodcastIndex Key/Secret' };
+    }
+    try {
+      const crypto = require('crypto');
+      const apiTime = Math.floor(Date.now() / 1000); // 运行时 Date.now() 可用
+      const authHash = crypto
+        .createHash('sha1')
+        .update(key + secret + apiTime)
+        .digest('hex');
+      const res = await axios.get(
+        'https://api.podcastindex.org/api/1.0/search/byterm',
+        {
+          params: { q: term, max: 10 },
+          headers: {
+            'User-Agent': UA,
+            'X-Auth-Key': key,
+            'X-Auth-Date': String(apiTime),
+            Authorization: authHash,
+          },
+          timeout: 15000,
+          proxy: false,
+          validateStatus: s => s >= 200 && s < 300,
+        }
+      );
+      const feeds = (res.data && res.data.feeds) || [];
+      const items = feeds
+        .filter(f => f && f.url)
+        .map(f => ({
+          id: f.url,
+          name: f.title || '',
+          author: f.author || '',
+          logoURL: f.image || f.artwork || '',
+          primaryGenreName: '',
+          avgPlayCount: 0,
+          feedUrl: f.url,
+          trackCount: f.episodeCount || 0,
+        }));
+      return { ok: true, items };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
 }
