@@ -64,8 +64,8 @@
       <!-- [B-70] 预览失败原地错误态：不跳走，给原因 + 返回，不甩用户到我的订阅 -->
       <div v-if="podcast && podcast._loadError" class="ep-loading ep-error">
         <div>该节目暂时无法打开，链接可能已失效。</div>
-        <button class="ep-error-back" @click="$router.replace('/')">
-          返回首页
+        <button class="ep-error-back" @click="goBackOrHome">
+          返回上一级
         </button>
       </div>
       <!-- [B67-BUG-2] 缓存优先骨架态：后台预览抓取中，单集区给个轻提示，不留空白 -->
@@ -756,6 +756,13 @@ export default {
     playEpisode(ep) {
       const title = this.podcast ? this.podcast.title : '';
       this.$store.state.player.playPodcastEpisode(ep, title);
+    },
+    // [B-70 改] 链接失效错误态的返回：回"上一级"(来源页，如首页/我的订阅/发现页)而非硬回首页；
+    //   回到 savePosition 来源页时其 activated() 的 restorePosition() 会恢复原滚动位(不跳顶)。
+    //   无历史可退(直接访问/刷新落到本页)才回首页兜底。
+    goBackOrHome() {
+      if (window.history.length > 1) this.$router.back();
+      else this.$router.replace('/');
     },
     // [S-3] 单集菜单
     openEpisodeMenu(e, ep) {

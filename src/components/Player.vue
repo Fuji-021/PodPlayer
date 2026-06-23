@@ -19,6 +19,7 @@
         <!-- [播客改造] 关掉 vue-slider 自带的 tooltip（与下方 .progress-hover-tip 重叠）；
            dot 默认放大效果在 CSS 里抑制（见下方 .progress-bar .vue-slider-dot） -->
         <vue-slider
+          ref="progressSlider"
           v-model="player.progress"
           :min="0"
           :max="player.currentTrackDuration"
@@ -502,6 +503,7 @@
               @mouseleave="hoverTime = null"
             >
               <vue-slider
+                ref="immProgressSlider"
                 v-model="player.progress"
                 :min="0"
                 :max="player.currentTrackDuration"
@@ -1083,6 +1085,30 @@ export default {
     if (this.player && typeof this.player.playbackRate === 'number') {
       this.playbackRate = this.player.playbackRate;
     }
+    // [进度条·重开修复] vue-slider 暂停态挂载时，process(已播填充)按"未布局/值此后不再变化"算成 0 宽，
+    //   要等播放后 progress 连续变化才重算 → 重开软件(已恢复上次单集+进度但未自动播放)进度条看不见、
+    //   点播放才"重现"。挂载后下一帧对底栏进度条主动 refresh()，按已恢复的 progress/duration 重算尺寸、
+    //   无需先播放。refresh 不存在时静默跳过(防 vue-slider 版本差异)。
+    const refreshProgressBar = () => {
+      const sl = this.$refs.progressSlider;
+      if (sl && typeof sl.refresh === 'function') sl.refresh();
+    };
+    this.$nextTick(refreshProgressBar);
+    // 二次兜底：底栏 slide-up 入场过渡(~0.4s)结束、布局彻底稳定后再 refresh 一次(refresh 幂等、
+    //   不改 value、无副作用)，覆盖"nextTick 时 rail 宽度尚未量好"的边角。组件是单例、不会被销毁，
+    //   且 refresh 内已对 $refs 缺失静默兜底，无需额外清理计时器。
+    setTimeout(refreshProgressBar, 500);
+    // [两端一致] 沉浸页进度条随面板 v-if 挂载，开启瞬间同样可能是暂停态 → 开启时也 refresh 一次。
+    this.$watch(
+      () => this.immersiveOpen,
+      open => {
+        if (!open) return;
+        this.$nextTick(() => {
+          const s = this.$refs.immProgressSlider;
+          if (s && typeof s.refresh === 'function') s.refresh();
+        });
+      }
+    );
   },
   beforeDestroy() {
     window.removeEventListener('keydown', this.handleKeydown);

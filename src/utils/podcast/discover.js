@@ -49,18 +49,46 @@ export function appleIdOf(podcast) {
   return m ? m[1] : '';
 }
 
-// 一键订阅：Apple id → feedUrl → subscribeByRssUrl（复用现有订阅入库逻辑）
-// [B-52] 取 feedUrl：搜索结果自带 feedUrl 直接用；榜单项用 Apple id → resolveFeed
+// [资源池·解析链第二级] iTunes Search 按名精确匹配兜底(无需 API key)：xyzrank 等榜单条目
+//   无 Apple id / Apple lookup 失败时(如《她山石》《旺仔信箱》)，按节目名搜 iTunes，命中**同名**
+//   节目即拿其 feedUrl。必须**精确名匹配**——否则"耳听为真"会误中近名"耳听她方"等别的节目。
+//   规整化(去空白/小写)后全等才采用；不命中返回空、由上层抛"未找到可用源"(绝不乱订到错节目)。
+//   本目录(utils/podcast)沿用 && + || 守卫，不引入额外可选链。
+async function resolveFeedByName(name) {
+  const n = String(name || '').trim();
+  if (!n || !ipcRenderer) return '';
+  try {
+    const res = await ipcRenderer.invoke('podcast:search', n);
+    const items = (res && res.ok && res.items) || [];
+    const norm = s =>
+      String(s || '')
+        .trim()
+        .replace(/\s+/g, '')
+        .toLowerCase();
+    const target = norm(n);
+    const hit = items.find(it => it && it.feedUrl && norm(it.name) === target);
+    return (hit && hit.feedUrl) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// 一键订阅取 feedUrl：① 自带 feedUrl(搜索结果)直接用 → ② Apple id → lookup → ③ iTunes 按名兜底。
+// [B-52] 搜索结果自带 feedUrl；榜单项用 Apple id；[资源池] 二者皆无/失败再按名精确搜，最大化"真正找到源"。
 async function resolveFeedUrl(podcast) {
   if (podcast && podcast.feedUrl) return podcast.feedUrl;
-  const appleId = appleIdOf(podcast);
-  if (!appleId) throw new Error('该节目暂无 Apple 源');
   if (!ipcRenderer) throw new Error('仅在桌面版可用');
-  const res = await ipcRenderer.invoke('podcast:resolveFeed', appleId);
-  if (!res || !res.ok || !res.feedUrl) {
-    throw new Error((res && res.error) || '未能解析出 RSS 订阅源');
+  // ② 有 Apple id → lookup
+  const appleId = appleIdOf(podcast);
+  if (appleId) {
+    const res = await ipcRenderer.invoke('podcast:resolveFeed', appleId);
+    if (res && res.ok && res.feedUrl) return res.feedUrl;
   }
-  return res.feedUrl;
+  // ③ 无 Apple id / lookup 没拿到 → iTunes Search 按名精确匹配兜底(无 key)
+  const name = (podcast && (podcast.name || podcast.title)) || '';
+  const byName = await resolveFeedByName(name);
+  if (byName) return byName;
+  throw new Error('未能找到该节目的可用订阅源');
 }
 
 // [B-52] 在线搜索播客（iTunes Search，主进程；结果含 feedUrl，可直接订阅/预览）
