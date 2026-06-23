@@ -21,39 +21,43 @@
         />
       </div>
 
-      <!-- [分页] 控件：‹ 1 2 3 … › -->
-      <div v-if="totalPages > 1" class="pager">
-        <button
-          class="pg-btn nav"
-          :disabled="currentPage === 1"
-          @click="goPage(currentPage - 1)"
-        >
-          ‹
-        </button>
-        <template v-for="(p, i) in pageWindow">
-          <span v-if="p === '...'" :key="'e' + i" class="pg-ellipsis">…</span>
+      <!-- [分页] 页脚(分页条 + 末页软提醒)：margin-top:auto 顶到内容底部 → 节目少的末页分页条
+           也恒定停在页面底部、不上浮变位(配 .discover-list min-height 撑满视口) -->
+      <div class="disc-footer">
+        <!-- [分页] 控件：‹ 1 2 3 … › -->
+        <div v-if="totalPages > 1" class="pager">
           <button
-            v-else
-            :key="'p' + p"
-            class="pg-btn"
-            :class="{ active: p === currentPage }"
-            @click="goPage(p)"
+            class="pg-btn nav"
+            :disabled="currentPage === 1"
+            @click="goPage(currentPage - 1)"
           >
-            {{ p }}
+            ‹
           </button>
-        </template>
-        <button
-          class="pg-btn nav"
-          :disabled="currentPage === totalPages"
-          @click="goPage(currentPage + 1)"
-        >
-          ›
-        </button>
-      </div>
+          <template v-for="(p, i) in pageWindow">
+            <span v-if="p === '...'" :key="'e' + i" class="pg-ellipsis">…</span>
+            <button
+              v-else
+              :key="'p' + p"
+              class="pg-btn"
+              :class="{ active: p === currentPage }"
+              @click="goPage(p)"
+            >
+              {{ p }}
+            </button>
+          </template>
+          <button
+            class="pg-btn nav"
+            :disabled="currentPage === totalPages"
+            @click="goPage(currentPage + 1)"
+          >
+            ›
+          </button>
+        </div>
 
-      <!-- [分页] 末页软提醒：到底 + 总数；排行刷新后(下次取数)才变 -->
-      <div v-if="isLastPage" class="page-end-tip">
-        — 到底啦，共 {{ visibleItems.length }} 档节目 —
+        <!-- [分页] 末页软提醒：到底 + 总数；排行刷新后(下次取数)才变 -->
+        <div v-if="isLastPage" class="page-end-tip">
+          — 到底啦，共 {{ visibleItems.length }} 档节目 —
+        </div>
       </div>
     </template>
   </div>
@@ -148,13 +152,9 @@ export default {
     },
   },
   activated() {
-    // [返回不变] 路由 keepAlive：从节目详情/订阅返回后**不重载、不重排、保留页码**。
-    //   仅首次(items 空)才加载；滚动位由 savePosition + restorePosition 恢复
-    //   (App.vue 进场钩子对 savePosition 路由跳过、不打架)。
-    this.$parent &&
-      this.$parent.$refs &&
-      this.$parent.$refs.scrollbar &&
-      this.$parent.$refs.scrollbar.restorePosition();
+    // [返回不变] 路由 keepAlive：从节目详情/订阅返回后**不重载、不重排、保留页码**(仅首次未加载才取数)。
+    //   滚动位不走 savePosition：discover 改回非 savePosition，进入(首访/返回)统一由 App.vue 进场钩子
+    //   归顶 → 避免首访从已下滚的首页进来时停在中间(savePosition 会让其跳过归顶钩子又无历史可恢复)。
     if (!this.loaded) this.reload();
   },
   methods: {
@@ -183,10 +183,9 @@ export default {
       const target = Math.min(Math.max(1, p), this.totalPages);
       if (target === this.currentPage) return;
       this.currentPage = target;
-      // 翻页回到顶部（新一页从头看起）
-      if (this.$parent && this.$parent.$refs && this.$parent.$refs.main) {
-        this.$parent.$refs.main.scrollTo({ top: 0 });
-      }
+      // [不回顶] 翻页**不滚动**(用户反馈：翻页被拉回顶部很烦)。分页条因 .disc-footer margin-top:auto +
+      //   .discover-list min-height 恒在页面底部，原地停留即可继续点；短的末页内容塌缩时浏览器自然
+      //   夹紧滚动位、分页条仍由 min-height 撑在底部。
     },
     // 从 Dexie 读已订阅 → {节目名: feedUrl}
     async loadSubscribedMap() {
@@ -210,8 +209,18 @@ export default {
 .discover-list {
   color: var(--color-text);
   padding-top: 28px;
+  // [分页] 撑满视口高度 + 纵向 flex：让 .disc-footer(分页条) 用 margin-top:auto 顶到底部，
+  //   节目少的末页也把分页条稳定停在页面底部、不上浮变位。100vh 减去 navbar(64)+player 区(96)+本页
+  //   padding-top(28)≈188px；这里留多 ~12px 余量(200)确保分页条在播放条之上、不被遮、无多余滚动。
+  min-height: calc(100vh - 200px);
+  display: flex;
+  flex-direction: column;
   // [B-47] 进二级页过渡：上滑淡入，避免硬切
   animation: discPageEnter 0.34s ease;
+}
+// [分页] 页脚：撑开后顶到内容底部(短末页也在底)；内容长时自然跟在 grid 下方
+.disc-footer {
+  margin-top: auto;
 }
 @keyframes discPageEnter {
   from {

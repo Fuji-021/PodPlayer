@@ -14,13 +14,14 @@ const routes = [
     },
   },
   // [B-42] 发现页二级页（热门排行 / 新上线）
-  // [分页改造 2026-06-24] keepAlive+savePosition：分页浏览排行时点进节目再返回，
-  //   保留页码/滚动位、不重载不重排(配 discoverList activated 只在 items 空时加载 + 确定序)。
+  // [分页改造 2026-06-24] 仅 keepAlive(不 savePosition)：keepAlive 缓存实例 → 点进节目返回保留页码、
+  //   不重载不重排(配 discoverList loaded 哨兵 + getSectionFull 确定序)；进入(首访/返回)统一由 App.vue
+  //   进场钩子归顶——若加 savePosition 反而被归顶钩子跳过、首访从已下滚首页进来会停在中间。
   {
     path: '/discover/:type',
     name: 'discover',
     component: () => import('@/views/discoverList.vue'),
-    meta: { requireLogin: false, keepAlive: true, savePosition: true },
+    meta: { requireLogin: false, keepAlive: true },
   },
   // [B-52] 播客搜索结果页（本地 + 在线 iTunes）
   {
