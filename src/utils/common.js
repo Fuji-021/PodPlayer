@@ -214,7 +214,16 @@ export function bytesToSize(bytes) {
 
 export function formatTrackTime(value) {
   if (!value) return '';
-  let min = ~~(value / 60);
-  let sec = (~~(value % 60)).toString().padStart(2, '0');
-  return `${min}:${sec}`;
+  // [进度条进位到小时] 满 60 分钟进位成「时:分:秒」(分、秒补零)，长播客易读(如 79:18 → 1:19:18)；
+  //   不足 1 小时仍是「分:秒」(如 5:09)，短内容不变。格式与单集时长 formatDuration 保持一致。
+  //   播放 bar 与沉浸/歌词页共用此函数 → 两端同步进位。
+  const total = ~~value;
+  const sec = (total % 60).toString().padStart(2, '0');
+  const totalMin = ~~(total / 60);
+  if (totalMin >= 60) {
+    const h = ~~(totalMin / 60);
+    const min = (totalMin % 60).toString().padStart(2, '0');
+    return `${h}:${min}:${sec}`;
+  }
+  return `${totalMin}:${sec}`;
 }
