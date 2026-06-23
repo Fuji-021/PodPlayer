@@ -103,7 +103,7 @@
                而非瞬移。:key 不变(resize)→走 *-move 位移;:key 变(reroll)→整组重建、重播
                discGridFade 淡入(原机制保留)。move 走 transform 不触发重排，60fps。 -->
           <transition-group
-            :key="sec.key === 'forYou' ? 'forYou' + forYouSeq : sec.key"
+            :key="sec.key + '-' + (rerollSeq[sec.key] || 0)"
             name="disc-flip"
             tag="div"
             class="disc-grid"
@@ -171,8 +171,8 @@ export default {
       newItems: [], // [B-53] 新上线节目（xyzrank /api/new-podcasts）
       // [B-44] 每行列数（随窗口自适应），每板块固定显示 2*cols 项
       cols: 2,
-      // [B-47] "再推荐一次"自增序号：变化触发 forYou 网格淡入过渡
-      forYouSeq: 0,
+      // [B-47] reroll 自增序号(按板块)：变化触发该板块网格重挂淡入过渡(forYou/treasure 共用此机制)
+      rerollSeq: { forYou: 0, treasure: 0 },
       // [B-43] 订阅偏好分类（用于"为你推荐" + reroll；不进模板，无需响应式）
       preferredGenres: new Set(),
     };
@@ -218,7 +218,8 @@ export default {
           items: this.noBlocked(this.sections.treasure),
           actionText: '再找一找',
           actionIcon: 'compass-alt',
-          actionType: 'page',
+          // [改] 'page'→'reroll'：用户要"再找一找"原地重洗、不跳全屏二级页(对齐"为你推荐")
+          actionType: 'reroll',
         },
         {
           key: 'forYou',
@@ -366,30 +367,27 @@ export default {
       if (sec.actionType === 'page') {
         this.$router.push({ name: 'discover', params: { type: sec.key } });
       } else if (sec.actionType === 'reroll') {
-        // [P2 修] 硬排除已订阅(绝不显示)；软排除 当前热门/寻宝/新上线 + **上一批 forYou**。
-        //   排上一批 forYou = 真"换一批"；软排除后池不足时 buildForYou 从非订阅全池回填，不再只剩两三个。
+        // [再找一找/再来一瓶] 原地重洗"被点的那栏"(sec.key)，不跳二级页。
+        //   硬排除已订阅(绝不显示)；软排除 其它各栏当前批 + 本栏上一批：
+        //   forYou 走 buildForYou 读 softExclude → 真"换一批"(池不足时从非订阅全池回填，不只剩两三个)；
+        //   treasure 走 shuffle 自然换序、不读 softExclude(其分支只硬排已订阅)。
+        const key = sec.key;
         const hardExclude = new Set(Object.keys(this.subscribedMap));
         const softExclude = new Set();
-        (this.sections.hot || []).forEach(p =>
-          softExclude.add((p.name || '').trim())
+        ['hot', 'treasure', 'forYou'].forEach(k =>
+          (this.sections[k] || []).forEach(p =>
+            softExclude.add((p.name || '').trim())
+          )
         );
-        (this.sections.treasure || []).forEach(p =>
-          softExclude.add((p.name || '').trim())
-        );
-        // [审操作#5] 排除「新上线」(this.newItems)，避免 forYou 与新上线撞车(各栏不重复)。
         (this.newItems || []).forEach(p =>
           softExclude.add((p.name || '').trim())
         );
-        // [P2 修「reroll 不换」] 排除上一批 forYou，强制换新。
-        (this.sections.forYou || []).forEach(p =>
-          softExclude.add((p.name || '').trim())
-        );
-        this.forYouSeq++; // [B-47] 变 key 触发卡片淡入过渡（不硬切）
+        this.rerollSeq[key] = (this.rerollSeq[key] || 0) + 1; // [B-47] 变 key 触发卡片淡入过渡
         this.sections = {
           ...this.sections,
-          forYou: reshuffleSection(
+          [key]: reshuffleSection(
             this.allItems,
-            'forYou',
+            key,
             hardExclude,
             softExclude,
             this.preferredGenres

@@ -437,6 +437,11 @@ export default {
     clearTimeout(this._nasHoverTimer); // [NAS] hover 预取防抖定时器
   },
   activated() {
+    // [滚动位修复] 返回订阅页时恢复离开时的滚动位置(Scrollbar 按路由名 'library' 已存)。
+    //   原先缺此调用 → 详情页未命中缓存时 _presentEpisodes 把共享 <main>.scrollTop 归 0，返回就停在
+    //   顶部(命中缓存不归 0 时恰好原地，故"有概率")。此刻 keep-alive 缓存的旧 DOM 高度完整、
+    //   loadPodcasts 末尾才整体赋值不清空列表 → 同步 restore 不会因高度塌缩被夹到顶部。
+    this.$parent?.$refs?.scrollbar?.restorePosition();
     this.loadPodcasts();
     this.autoRefresh(); // [B-80] 进页后台静默刷新订阅(10 分钟节流，无打扰)
     this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合(未连上则空、无标识)
