@@ -284,6 +284,24 @@ export default {
       nasLibrary: '庫',
       cancel: '取消',
       save: '儲存',
+      // [i18n] 快捷鍵「功能」欄顯示名(按 id；僅顯示、不參與比對)
+      sc: {
+        play: '播放/暫停',
+        next: '快進 30 秒',
+        previous: '快退 15 秒',
+        increaseVolume: '增加音量',
+        decreaseVolume: '減少音量',
+        like: '收藏單集',
+        minimize: '隱藏/顯示播放器',
+      },
+      // [i18n] 連線歷史"多久前" + 目前連線"庫："前綴
+      agoNever: '從未連線',
+      agoJustNow: '剛剛',
+      agoMinutes: '{n} 分鐘前',
+      agoHours: '{n} 小時前',
+      agoDays: '{n} 天前',
+      connLib: '庫：',
+      selectedLibrary: '(已選庫)',
     },
   },
   contextMenu: {

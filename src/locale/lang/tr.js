@@ -276,6 +276,24 @@ export default {
       nasLibrary: 'Library',
       cancel: 'Cancel',
       save: 'Save',
+      // [i18n] Shortcut "Function" column display names (by id; display-only, not used for matching)
+      sc: {
+        play: 'Play / Pause',
+        next: 'Forward 30s',
+        previous: 'Back 15s',
+        increaseVolume: 'Volume up',
+        decreaseVolume: 'Volume down',
+        like: 'Like episode',
+        minimize: 'Hide / show player',
+      },
+      // [i18n] Connection-history "time ago" + current-connection "Library:" prefix
+      agoNever: 'Never connected',
+      agoJustNow: 'Just now',
+      agoMinutes: '{n} min ago',
+      agoHours: '{n} h ago',
+      agoDays: '{n} d ago',
+      connLib: 'Library: ',
+      selectedLibrary: '(Selected library)',
     },
   },
   contextMenu: {

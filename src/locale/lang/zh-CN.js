@@ -287,6 +287,24 @@ export default {
       nasLibrary: '库',
       cancel: '取消',
       save: '保存',
+      // [i18n] 快捷键「功能」列显示名(按 id；仅展示、不参与匹配)
+      sc: {
+        play: '播放/暂停',
+        next: '快进 30 秒',
+        previous: '快退 15 秒',
+        increaseVolume: '增加音量',
+        decreaseVolume: '减少音量',
+        like: '收藏单集',
+        minimize: '隐藏/显示播放器',
+      },
+      // [i18n] 连接历史"多久前" + 当前连接"库："前缀
+      agoNever: '从未连接',
+      agoJustNow: '刚刚',
+      agoMinutes: '{n} 分钟前',
+      agoHours: '{n} 小时前',
+      agoDays: '{n} 天前',
+      connLib: '库：',
+      selectedLibrary: '(已选库)',
     },
   },
   contextMenu: {

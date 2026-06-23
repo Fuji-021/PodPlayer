@@ -61,10 +61,13 @@
           <div class="title"> {{ $t('settings.trayIcon.text') }} </div>
         </div>
         <div class="right">
+          <!-- [统一] 与「外观」选择框一致：浅色🌞 / 深色🌚 同款图标，auto 保持无图标(对齐外观) -->
           <select v-model="trayIconTheme">
             <option value="auto">{{ $t('settings.trayIcon.auto') }}</option>
-            <option value="light">{{ $t('settings.trayIcon.light') }}</option>
-            <option value="dark">{{ $t('settings.trayIcon.dark') }}</option>
+            <option value="light"
+              >🌞 {{ $t('settings.trayIcon.light') }}</option
+            >
+            <option value="dark">🌚 {{ $t('settings.trayIcon.dark') }}</option>
           </select>
         </div>
       </div>
@@ -633,7 +636,9 @@ export default {
       if (!p) return '';
       return (
         this.shortHost(p.baseUrl) +
-        (p.libraryName ? ' · 库：' + p.libraryName : '')
+        (p.libraryName
+          ? ' · ' + this.$t('settings.pod.connLib') + p.libraryName
+          : '')
       );
     },
     showUserInfo() {
@@ -1021,12 +1026,17 @@ export default {
       return m ? m[1] : String(url || '');
     },
     fmtAgo(ts) {
-      if (!ts) return '从未连接';
+      // [i18n] 连接历史"多久前"随语言切换(原硬编码中文)。纯展示文案，无功能影响。
+      if (!ts) return this.$t('settings.pod.agoNever');
       const d = Date.now() - ts;
-      if (d < 60000) return '刚刚';
-      if (d < 3600000) return Math.floor(d / 60000) + ' 分钟前';
-      if (d < 86400000) return Math.floor(d / 3600000) + ' 小时前';
-      return Math.floor(d / 86400000) + ' 天前';
+      if (d < 60000) return this.$t('settings.pod.agoJustNow');
+      if (d < 3600000)
+        return this.$t('settings.pod.agoMinutes', { n: Math.floor(d / 60000) });
+      if (d < 86400000)
+        return this.$t('settings.pod.agoHours', {
+          n: Math.floor(d / 3600000),
+        });
+      return this.$t('settings.pod.agoDays', { n: Math.floor(d / 86400000) });
     },
     openNasDialog(profile) {
       const p = profile || null;
@@ -1038,7 +1048,13 @@ export default {
         token: '',
         libraries:
           p && p.libraryId
-            ? [{ id: p.libraryId, name: p.libraryName || '(已选库)' }]
+            ? [
+                {
+                  id: p.libraryId,
+                  name:
+                    p.libraryName || this.$t('settings.pod.selectedLibrary'),
+                },
+              ]
             : [],
         libraryId: p ? p.libraryId : '',
         testing: false,
@@ -1147,8 +1163,12 @@ export default {
       doLogout();
       this.$router.push({ name: 'home' });
     },
-    // [快捷键] 显示名按 id 取自 shortcuts.js 默认(改默认即生效)，避开已持久化的旧名(settings.shortcuts)。
+    // [快捷键] 显示名按 id 取多语言(切语言后「功能」整列同步，不再恒中文)；缺失键回退 shortcuts.js 默认名。
+    //   名仅用于展示(此处 + 冲突提示 + 主进程失败 toast)，不参与任何匹配(匹配只认 id + 键组合)，翻译零功能风险。
     shortcutName(id) {
+      const key = 'settings.pod.sc.' + id;
+      const t = this.$t(key);
+      if (t && t !== key) return t;
       const d = defaultShortcuts.find(s => s.id === id);
       return (d && d.name) || id;
     },
@@ -1347,26 +1367,31 @@ h3 {
   justify-content: space-between;
   color: var(--color-text);
 
+  // [主次分明] 标题=主(略提 opacity 强化存在感)，提示=次(更小字号 + 更低 opacity，存在感再降一档)；
+  //   原 16/0.78 vs 14/0.7 两者太接近、分不出主次(用户二轮反馈)。现拉开字号(16/13)与透明度(0.85/0.5)双重差。
   .title {
     font-size: 16px;
     font-weight: 500;
-    opacity: 0.78;
+    opacity: 0.85;
   }
 
   .description {
-    font-size: 14px;
-    margin-top: 0.5em;
-    opacity: 0.7;
+    font-size: 13px;
+    margin-top: 0.45em;
+    opacity: 0.5;
+    line-height: 1.55;
   }
 }
 
-// [设置控件统一] 选择框：固定宽度(不再随最长选项撑大成参差长度)，长名(如音频设备)单行省略号折叠、
+// [设置控件统一] 选择框：宽度随最宽选项自适应(短项收成小框)、长名(如音频设备)封顶 max-width 后单行省略号折叠、
 //   :title 悬停看全名、点开下拉看完整；去掉灰填充背景改干净细描边(用户：不要颜色背景)，聚焦/打开不再变蓝底。
 select {
-  // [统一收窄] 所有设置下拉框统一固定宽度、更紧凑(原 220px 偏宽，"3"这类短选项尤其空旷)；
-  //   长名单行省略号(音频设备 select 另挂 v-tip 悬停看全名，其余静态项点开下拉看完整)；
-  //   160px：中文项均不裁，兼顾 i18n 切英文后较长项(如 Minimize to tray)收起态尽量完整。
-  width: 160px;
+  // [随字收窄] 宽度跟随最宽选项自适应(width:auto)、不再统一撑成 160px——"3""10"这类短选项收成小框、
+  //   不空旷(用户二轮反馈：1-10 还这么宽)；框本身处于行右端(.item space-between)，故天然右对齐。
+  //   不设 min-width：padding(左 12 + 右 34=46px)已保证箭头不挤、可点区域足够，留白靠它而非硬撑宽度。
+  //   max-width 160px(content-box，+padding≈206px 总宽=改前"正合适"那档)给音频设备这类长名兜底：
+  //   超出即单行省略号折叠、挂 v-tip 悬停看全名；其余项内容均 <160 不受影响。
+  width: auto;
   max-width: 160px;
   font-weight: 600;
   border: 1px solid var(--color-secondary);
