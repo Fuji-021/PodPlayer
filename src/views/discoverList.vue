@@ -11,19 +11,26 @@
     </div>
 
     <template v-else>
-      <!-- [分页改造] 热门/新上线=固定排行：本地切片分页展示全部，节目不随返回变动
-           (确定序 + 路由 keepAlive)；卡片复用 DiscoverCard（与首页同一交互） -->
-      <div class="grid">
-        <DiscoverCard
-          v-for="p in pagedItems"
-          :key="p.id || p.feedUrl || p.name"
-          :podcast="p"
-        />
+      <!-- [分页改造] 热门/新上线=固定排行：grid 在内层独立滚动(grid-wrap)，分页条钉死在页脚 →
+           不管从哪页跳到哪页，分页条**全程不移动**、main 不滚动。卡片复用 DiscoverCard。 -->
+      <div ref="gridWrap" class="grid-wrap">
+        <div class="grid">
+          <DiscoverCard
+            v-for="p in pagedItems"
+            :key="p.id || p.feedUrl || p.name"
+            :podcast="p"
+          />
+        </div>
       </div>
 
-      <!-- [分页] 页脚(分页条 + 末页软提醒)：margin-top:auto 顶到内容底部 → 节目少的末页分页条
-           也恒定停在页面底部、不上浮变位(配 .discover-list min-height 撑满视口) -->
+      <!-- [分页] 页脚(固定在底部、不随页码增减或内容多少移动)：末页软提醒放在**分页条上方**，
+           这样它出现时不会把分页条往上拱(分页条作为页脚最后一个元素、底边恒定)。 -->
       <div class="disc-footer">
+        <!-- [分页] 末页软提醒：到底 + 总数；排行刷新后(下次取数)才变 -->
+        <div v-if="isLastPage" class="page-end-tip">
+          — 到底啦，共 {{ visibleItems.length }} 档节目 —
+        </div>
+
         <!-- [分页] 控件：‹ 1 2 3 … › -->
         <div v-if="totalPages > 1" class="pager">
           <button
@@ -52,11 +59,6 @@
           >
             ›
           </button>
-        </div>
-
-        <!-- [分页] 末页软提醒：到底 + 总数；排行刷新后(下次取数)才变 -->
-        <div v-if="isLastPage" class="page-end-tip">
-          — 到底啦，共 {{ visibleItems.length }} 档节目 —
         </div>
       </div>
     </template>
@@ -183,9 +185,13 @@ export default {
       const target = Math.min(Math.max(1, p), this.totalPages);
       if (target === this.currentPage) return;
       this.currentPage = target;
-      // [不回顶] 翻页**不滚动**(用户反馈：翻页被拉回顶部很烦)。分页条因 .disc-footer margin-top:auto +
-      //   .discover-list min-height 恒在页面底部，原地停留即可继续点；短的末页内容塌缩时浏览器自然
-      //   夹紧滚动位、分页条仍由 min-height 撑在底部。
+      // [全程不动] 分页条钉死在页脚、main 不滚动 → 翻页时它绝不移动(无论满页↔末页)。
+      //   只把**内层 grid** 滚回顶部让新一页从头看(nextTick 等新页渲染后再复位，确保落在新内容顶)；
+      //   页面整体不滚、分页条原地不动，可连续点。
+      this.$nextTick(() => {
+        const w = this.$refs.gridWrap;
+        if (w) w.scrollTop = 0;
+      });
     },
     // 从 Dexie 读已订阅 → {节目名: feedUrl}
     async loadSubscribedMap() {
@@ -209,18 +215,30 @@ export default {
 .discover-list {
   color: var(--color-text);
   padding-top: 28px;
-  // [分页] 撑满视口高度 + 纵向 flex：让 .disc-footer(分页条) 用 margin-top:auto 顶到底部，
-  //   节目少的末页也把分页条稳定停在页面底部、不上浮变位。100vh 减去 navbar(64)+player 区(96)+本页
-  //   padding-top(28)≈188px；这里留多 ~12px 余量(200)确保分页条在播放条之上、不被遮、无多余滚动。
-  min-height: calc(100vh - 200px);
+  box-sizing: border-box;
+  // [分页·全程不动] 固定为视口可用高度 + 纵向 flex：grid 在中间(grid-wrap)独立滚动、分页条(disc-footer)
+  //   钉死在底部 → 翻页 / 满页↔末页切换时分页条**绝不移动**、整页(main)不滚动。
+  //   100vh 减 navbar(64)+player 区(96)≈160，再留 ~12px 余量(172) 使分页条恰在播放条之上、不被遮。
+  height: calc(100vh - 172px);
   display: flex;
   flex-direction: column;
   // [B-47] 进二级页过渡：上滑淡入，避免硬切
   animation: discPageEnter 0.34s ease;
 }
-// [分页] 页脚：撑开后顶到内容底部(短末页也在底)；内容长时自然跟在 grid 下方
+// [分页] grid 容器：占中间剩余高度、内部独立纵向滚动(隐藏滚动条与全站一致)；min-height:0 让其可收缩滚动
+.grid-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    width: 0;
+  }
+}
+// [分页] 页脚：固定在底部(flex:none)，分页条/提示均不随内容多少或页码增减移动
 .disc-footer {
-  margin-top: auto;
+  flex: none;
+  padding-top: 14px;
 }
 @keyframes discPageEnter {
   from {
@@ -268,7 +286,7 @@ export default {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  margin: 40px 0 8px;
+  margin: 0;
   flex-wrap: wrap;
   .pg-btn {
     min-width: 36px;
@@ -309,6 +327,6 @@ export default {
   text-align: center;
   opacity: 0.42;
   font-size: 13px;
-  margin: 18px 0 8px;
+  margin: 0 0 10px; // 位于分页条上方，下边距与分页条分隔
 }
 </style>
