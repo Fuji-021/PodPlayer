@@ -76,7 +76,9 @@
     <!-- 在线发现 -->
     <section class="sp-section">
       <div class="sp-head">在线发现</div>
-      <div v-if="loadingOnline" class="sp-state">正在搜索在线播客…</div>
+      <div v-if="loadingOnline" class="sp-state is-loading">
+        <BouncingDots />
+      </div>
       <div v-else-if="errorOnline" class="sp-state">{{ errorOnline }}</div>
       <div v-else-if="!onlineItems.length" class="sp-state">
         没有找到相关播客
@@ -121,10 +123,11 @@ import { searchLocalPodcasts, searchLocalEpisodes } from '@/utils/podcast/db';
 import { getListenStatsBulk } from '@/utils/podcast/listening';
 import DiscoverCard from '@/components/DiscoverCard.vue';
 import SvgIcon from '@/components/SvgIcon.vue';
+import BouncingDots from '@/components/BouncingDots.vue';
 
 export default {
   name: 'SearchPodcast',
-  components: { DiscoverCard, SvgIcon },
+  components: { DiscoverCard, SvgIcon, BouncingDots },
   data() {
     return {
       localPods: [],
@@ -366,6 +369,12 @@ export default {
   opacity: 0.5;
   font-size: 14px;
   padding: 24px 0;
+}
+// [加载动效] 搜索中用跳动点：不沿用 0.5 暗淡(明暗由点自身关键帧管)，居中
+.sp-state.is-loading {
+  opacity: 1;
+  display: flex;
+  justify-content: center;
 }
 .sp-grid {
   display: grid;

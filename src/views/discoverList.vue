@@ -4,7 +4,7 @@
       <h1>{{ title }}</h1>
     </div>
 
-    <div v-if="loading" class="state">正在加载…</div>
+    <div v-if="loading" class="state is-loading"><BouncingDots /></div>
     <div v-else-if="error" class="state">
       {{ error }}
       <button class="retry" @click="reload(true)">重试</button>
@@ -73,10 +73,11 @@ import {
 } from '@/utils/podcast/discover';
 import { getSubscribedPodcasts } from '@/utils/podcast/db';
 import DiscoverCard from '@/components/DiscoverCard.vue';
+import BouncingDots from '@/components/BouncingDots.vue';
 
 export default {
   name: 'DiscoverList',
-  components: { DiscoverCard },
+  components: { DiscoverCard, BouncingDots },
   data() {
     return {
       items: [],
@@ -272,6 +273,12 @@ export default {
     cursor: pointer;
     background: transparent;
   }
+}
+// [加载动效] 加载中用跳动点：不沿用 0.5 暗淡(明暗由点关键帧管)，居中
+.state.is-loading {
+  opacity: 1;
+  display: flex;
+  justify-content: center;
 }
 // 与「我的订阅」一致：auto-fill minmax(180px) 网格，缩放逻辑相同
 .grid {

@@ -70,7 +70,9 @@
 
     <!-- [B-39/B-44] 播客发现页：热门排行 / 播客寻宝 / 为你推荐 -->
     <div v-if="!showLegacyHome" ref="discRoot" class="podcast-discover">
-      <div v-if="discoverLoading" class="disc-state">正在加载热门播客…</div>
+      <div v-if="discoverLoading" class="disc-state is-loading">
+        <BouncingDots />
+      </div>
       <div v-else-if="discoverError" class="disc-state">
         {{ discoverError }}
         <button class="retry" @click="loadDiscover(true)">重试</button>
@@ -135,6 +137,7 @@ import FMCard from '@/components/FMCard.vue';
 import DailyTracksCard from '@/components/DailyTracksCard.vue';
 import SvgIcon from '@/components/SvgIcon.vue';
 import DiscoverCard from '@/components/DiscoverCard.vue';
+import BouncingDots from '@/components/BouncingDots.vue';
 import {
   fetchHotPodcasts,
   fetchNewPodcasts,
@@ -147,7 +150,14 @@ import { getRecentListenedPodcastIds } from '@/utils/podcast/listening';
 
 export default {
   name: 'Home',
-  components: { CoverRow, FMCard, DailyTracksCard, SvgIcon, DiscoverCard },
+  components: {
+    CoverRow,
+    FMCard,
+    DailyTracksCard,
+    SvgIcon,
+    DiscoverCard,
+    BouncingDots,
+  },
   data() {
     return {
       show: false,
@@ -533,6 +543,12 @@ footer {
     padding: 80px 0;
     opacity: 0.55;
     font-size: 14px;
+    // [加载动效] 加载中用跳动点：不沿用 0.55 暗淡(明暗由点关键帧管)，居中
+    &.is-loading {
+      opacity: 1;
+      display: flex;
+      justify-content: center;
+    }
     .retry {
       margin-left: 10px;
       color: var(--color-primary);
