@@ -14,6 +14,16 @@
 ---
 
 ## ✅ 近期已完成（留痕一轮后删）
+**2026-06-23~24 本会话（设置/播放/导航/资源池/发现页 一连串打磨 + 0.4.11 发布）**
+- ✅ 设置页：下拉框随字收窄(width:auto+max160)、播客改造项 i18n(48+key×4 包 en/zh-CN/zh-TW/tr)、托盘图标对齐外观(🌞🌚)、NAS 文案弱化、提示/标题主次分明、快捷键名/连接历史等补 i18n。
+- ✅ 进度条：时间满 1 小时进位「时:分:秒」(formatTrackTime)；**重开软件进度条直接显示上次进度**(vue-slider 3.2.24 无 refresh()=空转 → 改 `:key` 重挂，底栏+沉浸页)。
+- ✅ 导航滚动：跨页统一复位滚动到顶部(App.vue 进场钩子)；我的订阅返回保留滚动位(keepAlive+restore)；**点首页节目进详情"旧页一闪"根治**——两个并存 router-view 合并为单 RV + keep-alive:include(唯一 transition、out-in 真正生效，缓存集合等价、零回归)。
+- ✅ 资源池"连接失效"根治：`resolveAndFetch` **逐候选真抓、返回第一个能抓通的源**(自带→Apple→iTunes 按名→PodcastIndex)，自愈《她山石》《旺仔信箱》；接入 **PodcastIndex**(主进程 searchIndex sha1 鉴权 + resolveFeedByIndex + `podNameMatch` 兼容"不开玩笑 Jokes Aside"双语名 + 软耦合 + 设置页 key/secret 输入 UI)。失效页返回改"返回上一级"。
+- ✅ 发现页：热门/新上线 **去「换一批」改分页**(确定序 + keepAlive，分页条钉死页脚、任意页互跳全程不动、末页提醒在分页条上方、返回不重排)。
+- ✅ 加载动效：新增可复用 `BouncingDots`(三点波浪跳动)→ 详情单集载入 + 搜索 + 发现页二级页 + 首页榜单 全部替换静态"加载中"文案。
+- ✅ **打包发布 0.4.11**：版本 0.4.10→0.4.11，`electron:build-win` 出 portable+nsis → 复制到 `D:\打包版本`；创建 GitHub Release **v0.4.11**(资产连字符命名匹配 latest.yml=自更新链路可用)。
+- 〔清单核对发现以下旧条目实已完成：**#2b** globalShortcut 失败回馈(渲染端已接 toast)、**B67-BUG-7** 搜索框右对齐(Navbar 已做、剩 px 待真机)、**操作#4** 二级页换一批(已被分页取代)、**C3 播放音量渐入**(早前会话已做)、**单集列表虚拟化**(F1 方案C 已落地待真机)、**下载孤儿**(.part+sweep 已治)。〕
+
 **2026-06-15 本会话（沉浸式播放页 + 打包测试版）**
 - ✅ **沉浸式播放页 P0 + 6 轮批注打磨**：背景 C 混合(coverPalette 三色)/大封面 scale/胶囊进度/三组控制(倍速·列表·睡眠 ｜ 三大金刚 ｜ 标记·收藏·音量)/音量点击弹窗/点击进退冲突修复/进度标记刻度·缓冲·长按充能反馈·彩虹猫**两端一致**。分支 `feature/immersive-player` 已 push，**待用户验收 → 进 P1**。细节见主文档「沉浸式播放页」段。
 - ✅ 打包**正式版(prod=PodPlayer 身份)** 测试包 → `D:\MyYesPlayerMusic\打包版本`(portable 免安装 + nsis 安装包)，供他人测试；与开发版(PodPlayerDev)零冲突。
@@ -32,7 +42,7 @@
 - ✅ **统计「最近一周」>「全部」(如岩中花述)**（2026-06-15 修·分支 `feature/perf` round2）— 根因坐实:`resetEpisodeListening`(重播已听完单集)清 `episodeListenStats.bits/listenedSec` 却不动 `listenDaily` → 听完重听后「全部」(读 listenedSec)被清零重数、「周」(读 listenDaily.listenedSec)仍含旧值 → 周>全部。**修**(终极):「全部」= `max(Σ episodeListenStats.totalPlayContentSec, Σ listenDaily.contentSec 全天)`,「周」= listenDaily 7 天。因周⊆全天⊆全部 → **数学保证 全部≥周**(与两表是否一致无关),取 max 还兜住两表漂移。**已用用户真实备份模拟验证:旧口径 2 档违例→纯 contentSec 1 档→本方案 0 档**;另确认 totalPlayContentSec 历史一直在填、数据未丢。**待真机最终确认**。[listening.js getListenStatsByPodcast]
 - 🔴 **[R13] 首页节目封面错/空白(d6325f8=假修复·方向错·已重开)** — 思文败类首页≠详情**仍没好**(d6325f8 只给单个节目加 coverFeedUrl、commit 自标边界未覆盖=没修；换 Nice Try 复现)+ Nice Try 首页空白。两点结构缺陷:①封面错误回落「目录旧 logoURL」(已订阅本应优先 DB coverUrl，但靠 subscribedMap[name] 反查、name≠RSS title 即失效，同 B56-5)；②PodImage 加载失败只 opacity 隐藏、无占位=整块空白。**根治(治本·一处统一·别每组件各写)**:①统一取值链 DB coverUrl→目录 logoURL→内置占位；②name 归一化再查/补 feedUrl/Apple id 关联本地库；③PodImage 内置默认占位+onImgError 显占位不隐藏(下载/历史/收藏/搜索/详情/订阅/播放条全局生效)；④封面 URL 统一 http→https。**本轮不修(用户 2026-06-15 驳回先消化)**·详见 `docs/BUG审查.md` R13 + [[known-bugs]]/[[debugging-methodology]]「PASS≠fixed」。真机验收:思文败类==详情、Nice Try 有封面、带标点名节目都对、故意断一个 URL 看是否出占位。
 - ✅ 头像二级菜单弹出锁全局滚动（2026-06-15 修·`fix/buglist`）— `ContextMenu.openMenu` 加 `lockScrolling=true` 默认开关、头像菜单传 false 不锁；其余右键菜单默认锁、行为不变。**待真机**。
-- 🔴 单集列表全量渲染无虚拟化(与机核同源,大档建数百行 DOM)。
+- ✅ 单集列表虚拟化(F1·方案C 固定行高窗口虚拟化已落地·待真机)。
 - ✅ 「为你推荐」reroll 不换/池只剩 3（2026-06-15 修·`fix/buglist`）— 排除拆 hardExclude(已订阅)/softExclude(其它栏+**上一批 forYou**)，池不足从非订阅全池回填。reroll 真换一批 + 不再只剩三个。与操作#5 不同问题。**待真机**。
 - ✅ 单集详情「加入播放列表」按钮加入后图标过大 + 不能再点移出 [B67-BUG-5]（2026-06-15 修·`fix/buglist`）— 改 `isQueued`(真实队列成员)驱动的持久 toggle + `check-circle` 图标(有边界);点击可移出。**待真机**。
 - ✅ last.fm 子窗 nodeIntegration+webSecurity:false 历史高危（2026-06-15 修·`fix/buglist`）— `background.js` new-window 删整段 last.fm 高危内嵌子窗死分支，统一 `shell.openExternal` 走系统浏览器。behaviorChange=false。**待真机**(scrobble 仍正常)。
@@ -40,7 +50,7 @@
 ### P3（低/边缘/记录）
 - ✅ **[启动竞态·2026-06-16 修]** ① `setTitle`(`Player.js`)启动期 `store`(@/store 默认导出·循环依赖)仍 undefined → `store.commit` 报 `commit of undefined`:改 **`store?.commit`**(顺带让 `_loadCurrentPodcastEpisode` 不再中断在 setTitle)。② Dexie `not a valid key`:临时给原生 `IDBObjectStore.get` 包 DIAG 实测定位=**`store=lyric key=NaN`**——`getLyricFromCache(id)` 对播客(当前曲)非数字 id 做 `db.lyric.get(Number(id))`=NaN;`getTrackSource`/`getAlbumFromCache` 同 `db.x.get(Number(id))` 模式同病 → 三处加 `Number.isFinite` 守卫(非数字 id 返 null/undefined=未命中)。**Dev `Ctrl+R` 重载实测控制台干净**(两条红 unhandledRejection 全消、eslint 0;DIAG 已删、误加的 podcast/db.js 守卫已回退)。PRE-EXISTING(上游 fork)。详见主文档同名 round。
 - ✅ **[启动·噪声 2026-06-16 修]** discord-rpc 连不上(Discord 没开)的启动 unhandledRejection:`ipcMain.js:112` 模块级 `require('discord-rich-presence')(id)` import 时即连,内部 EventEmitter `emit('error')` 无监听→抛。**修**:创建包 try/catch + 挂静默 `client.on('error',()=>{})` + 两个 `*DiscordPresence` 处理器加 `if(!client)return` 守卫。**全量重启 dev 实测启动日志已无 `Could not connect`、0 报错**。eslint 0。
-- 🔴 搜索栏再右移 + 宽度再缩对齐 navbar。[B67-BUG-7]
+- 🟡 搜索栏右对齐已做(`Navbar .search-box` flex-end 贴头像 + container 150px)；剩"宽度再缩"纯 px 待真机微调。[B67-BUG-7]
 - 🔴 subscribedMap 以节目名为键→同名节目互相覆盖(评估暂不修)。[B56-5]
 - 🔴 searchLocalEpisodes 全表 JS filter 无索引。[B69-F4]
 - 🔴 本地搜单集混入未订阅预览(语义待定)。[B69-L1]
@@ -105,13 +115,13 @@
 - ✅ **#17** 沉浸页弹窗(倍速/队列/睡眠/音量)就地重定义主题变量为深色 → 主题隔离，不再随浅色模式漂白。`Player.vue`。
 
 ### 🔧 待办（8，本轮未做）
-- 🟠 **#4** 二级页 `discoverList`「换一批」无 shuffle(hot/new/treasure 确定性返回)→ treasure 点了完全不变；hot/new 叫"换一批"语义不当(应"刷新")。`discover.js getSectionFull`。
+- ✅ **#4** 二级页 `discoverList`「换一批」——2026-06-24 **改造取代**：去掉"换一批"改**分页**(hot/new 确定序+keepAlive、分页条钉底返回不变)；treasure 已改首页 reroll-in-place、不走二级页。`discover.js getSectionFull`/`discoverList.vue`。
 - ✅ **#7** 本地"隐藏/显示播放器"快捷键不生效（2026-06-15 修·`fix/buglist`）— `menu.js` Controls 子菜单补 minimize 菜单项(accelerator 取本地键、click 做窗口 hide/show)，改键后重建菜单即时生效。**待真机**。
 - ✅ **#6** treasure 切片口径不一致（2026-06-15 修·`fix/buglist`）— `reshuffleSection` treasure 分支改先 `slice(TREASURE_START)` 再排已订阅,与 getSectionFull/splitSections 同序(该分支当前不可达,预防性对齐)。
 - ✅ **#8** repeat 改 **off↔one 两档**（2026-06-15 修·`fix/buglist`）— `switchRepeatMode` 改 off↔one、启动归一化遗留 `'on'→'off'`;图标模板天然正确无需改;核验确认无音乐回归('on' 分支退化为无害死代码)。**待真机**。
 - ✅ **#9** 未加载 howler 时 后退15/前进30 静默无反应（2026-06-15 修·`fix/buglist`）— `Player.js seek` 加 playOrPause 同款兜底(load+autoplay)，**不带 startAt → 保留续播位**。**待真机**。
 - ✅ **#12** 导入订阅后发现页绿勾不即时（2026-06-15 修·`fix/buglist`）— 粘贴RSS/OPML/单档三处订阅成功补 `commit('addSubscribedPodcast')`(键=title、值=feedUrl);`importOpmlText` 多返回 `subscribed[]` 供逐条 commit。**待真机**。
-- 🟡 **#15** 快捷键冲突检测/保存反馈 — **#2a 已修**(2026-06-15·`fix/buglist`：saveShortcut 同列撞键检测+修饰键归一化,撞则拒存提示)；**#2b 待办**:globalShortcut.register 占用/非法键静默 false 无回馈(需 on→handle 通信契约改,med)。
+- 🟡 **#15** 快捷键冲突检测/保存反馈 — **#2a 已修**(2026-06-15·`fix/buglist`：saveShortcut 同列撞键检测+修饰键归一化,撞则拒存提示)；**#2b ✅已修**:globalShortcut.js 收集 failedKeys → `send('globalShortcutRegisterFailed')` → `ipcRenderer.js:130` 接住 dispatch toast。占用/非法键现有回馈。
 - ✅ **#16** NAS「测试连接」总开关关闭时恒报失败（2026-06-15 修·`fix/buglist`）— 新增 `nas:probeActive` IPC(不看 enabled 只测可达) + `testNasReachable()`，settings 改用之;`testNasConnection`(Navbar 手动重连，更新 nasAlive)保留不动。**待真机**。
 
 ### ⚪ 已闭（非 bug）
@@ -153,7 +163,7 @@
 - 🔴 从 NAS 下载(#6,局域网更快,增强)。
 - 🟣 首页 NAS 来源板块(#3,留接口,paused)。
 - 🔵 清理 NAS 临时调试物(window.podNas 已删,剩余随设置页/图标落地清)。
-- 🔴 播放音量渐入(久未播+音量>50% 时 3s 渐大)。
+- ✅ 播放音量渐入(久未播 >45min/隔天打开 + 音量>50% → ~1.2s 渐入；`Player.js` C3，早前会话已做·待真机)。
 - 🔴 发现页缓存大方向评估(封面/信息/单集/音频)。
 - 🟣 多源发现资源池整方案(paused,**唯一阻塞=注册 PodcastIndex 免费 key**)→ ②命中率spike / ③adapter+解析链 / ④搜索双源 / ⑤推荐池扩容 / ⑥RSSHub兜底。
 - ✅ 音质(musicQuality) dormant mutation 删除（2026-06-15·`fix/buglist`）— 删 `mutations.js changeMusicQuality`(无调用方);保留 state key + initLocalStorage 种子 + track.js 读路径(网易云 legacy 不回归)。
@@ -162,7 +172,7 @@
 ---
 
 ## 关键状态锚点（接手先看）
-- **分支/进度(2026-06-20 大更新)**：**全部已在 `master`**——沉浸页 P0/P1 + NAS 托管 P0/P1 + 全部审查修复 + 性能/动画优化(路由过渡/机核止血/沉浸动画/取色降解码/resize FLIP) + 沉浸交互修复 + **品牌化(自托管更新源 Fuji-021/PodPlayer)** + **新 logo(cyan ON AIR)**。仓库 `Fuji-021/PodPlayer`。**勿再用 off-master 分支 / `c2cd29d` 旧锚点**(已严重过时)。
+- **分支/进度(2026-06-24 更新)**：**全部已在 `master`**(最新 `d419dcd` 附近)——含 2026-06-20 之前全部 + 本会话(2026-06-23~24)：设置页打磨/i18n、进度条进位+重开显示、跨页滚动复位、资源池逐候选回退+PodcastIndex、热门/新上线分页、加载动效 BouncingDots、**路由单 RV 根治闪页**。**已发布 0.4.11**(GitHub Release v0.4.11 + 打包版本目录)。仓库 `Fuji-021/PodPlayer`。**勿再用 off-master 分支 / `c2cd29d`、`ee9d29d` 等旧锚点**。
 - **NAS：用户 2026-06-20 搁置**(觉得不完善)，不再主动推进；已落地修复保留。真源 `docs/NAS总文档.md`(原 5 文档已合并)。
 - **本轮(2026-06-20)修复留痕**：✅ 取色按钮取色失败永久隐形(审查#4，episodeDetail/podcastDetail) · ✅ PodImage 加载失败占位防空白+http→https(R13 安全子项) · ✅ discoverList new/treasure「换一批」shuffle(操作#4 部分，hot 保持排行)。
 - 实例隔离:prod=PodPlayer/10754/27232 · dev=PodPlayerDev/10755/27233/devserver20201 · sandbox=PodPlayerSandbox/10756/27234/devserver20202。启动:scripts/start-dev.bat / start-sandbox.bat。
