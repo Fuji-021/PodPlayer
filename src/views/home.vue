@@ -141,6 +141,8 @@ import BouncingDots from '@/components/BouncingDots.vue';
 import {
   fetchHotPodcasts,
   fetchNewPodcasts,
+  fetchAppleCharts,
+  mergeDiscoverByName,
   splitSections,
   reshuffleSection,
   preferredGenresFrom,
@@ -291,10 +293,14 @@ export default {
       this.discoverLoading = true;
       try {
         // [B-53] 并行抓热门 + 新上线（new 失败不影响热门）
-        const [items, newItems] = await Promise.all([
+        // [资源池] 同时抓 Apple 中国区官方榜(软耦合·失败返 [])，去重后并入发现池 →
+        //   热门 top 仍 xyzrank 榜单序，寻宝/为你推荐池扩大、更多中文头部内容(治"池枯竭")。
+        const [hotItems, newItems, appleItems] = await Promise.all([
           fetchHotPodcasts(force),
           fetchNewPodcasts(force).catch(() => []),
+          fetchAppleCharts(force),
         ]);
+        const items = mergeDiscoverByName(hotItems, appleItems);
         this.allItems = items;
         // [B-43] 从 Dexie 灌入已订阅映射（卡片绿勾回显 + 寻宝/推荐去重）
         const subMap = await this.loadSubscribedMap();

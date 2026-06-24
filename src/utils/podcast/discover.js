@@ -41,6 +41,42 @@ export async function fetchNewPodcasts(force = false) {
   return res.items || [];
 }
 
+// [资源池] 取 Apple 中国区官方热门榜(归一化项)。**全软耦合**：非桌面/失败/异常一律返回 []，绝不抛、
+//   不影响 xyzrank 主源(调用方直接用结果合并即可)。
+export async function fetchAppleCharts(force = false) {
+  if (!ipcRenderer) return [];
+  try {
+    const res = await ipcRenderer.invoke('podcast:fetchAppleCharts', force);
+    return (res && res.ok && res.items) || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// [资源池] 按归一化名去重合并：base(优先，如 xyzrank 榜单序)在前，extra(如 Apple 榜)中名字未出现过的
+//   追加在后 → 热门 top 仍取 base 序、寻宝/为你推荐池扩大变丰富。
+export function mergeDiscoverByName(base, extra) {
+  const norm = s =>
+    String(s || '')
+      .trim()
+      .replace(/\s+/g, '')
+      .toLowerCase();
+  const seen = new Set();
+  (base || []).forEach(p => {
+    const n = norm(p && p.name);
+    if (n) seen.add(n);
+  });
+  const merged = (base || []).slice();
+  (extra || []).forEach(p => {
+    const n = norm(p && p.name);
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      merged.push(p);
+    }
+  });
+  return merged;
+}
+
 // 从 podcast.links 里找 Apple 链接并提取 id（形如 .../id1582119137）
 export function appleIdOf(podcast) {
   const apple = (podcast.links || []).find(l => l && l.name === 'apple');

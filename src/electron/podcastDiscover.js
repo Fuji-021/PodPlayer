@@ -12,6 +12,7 @@ const UA =
 // 简单内存缓存：榜单每天才更新，缓存 6h 减少请求 + 离线兜底
 let hotCache = { ts: 0, items: null };
 let newCache = { ts: 0, items: null }; // [B-53] 新上线节目
+let appleCache = { ts: 0, items: null }; // [资源池] Apple 中国区官方热门榜
 const HOT_TTL = 6 * 3600 * 1000;
 // Apple id → feedUrl 缓存（基本不变，长期缓存）
 const feedCache = new Map();
@@ -72,6 +73,63 @@ export function registerPodcastDiscoverIpc() {
     } catch (err) {
       if (newCache.items) {
         return { ok: true, items: newCache.items, stale: true };
+      }
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  // [资源池] 抓 Apple 中国区官方「热门节目」榜(零鉴权官方端点，每条带 Apple id/中文类目/封面)。
+  //   归一化成与 xyzrank 同款字段(name/author/logoURL/primaryGenreName/links)，供发现池合并。
+  //   软耦合：失败有旧缓存降级、否则返回 {ok:false}(渲染端 .catch([])→不影响 xyzrank)。
+  //   feedUrl 不直接给(榜单无)，靠 links 里的 apple url(含 idNNN)经 resolveFeed lookup 解析。
+  ipcMain.handle('podcast:fetchAppleCharts', async (_e, force) => {
+    if (!force && appleCache.items && Date.now() - appleCache.ts < HOT_TTL) {
+      return { ok: true, items: appleCache.items, cached: true };
+    }
+    try {
+      const res = await axios.get(
+        'https://rss.marketingtools.apple.com/api/v2/cn/podcasts/top/100/podcasts.json',
+        {
+          headers: { 'User-Agent': UA, Accept: 'application/json' },
+          timeout: 8000, // 可选源：短超时快速失败，不拖累发现页整体加载(Promise.all 等最慢者)
+          proxy: false,
+          validateStatus: s => s >= 200 && s < 300,
+        }
+      );
+      const results =
+        (res.data && res.data.feed && res.data.feed.results) || [];
+      const items = results
+        .filter(r => r && r.id && r.name)
+        .map(r => {
+          const id = String(r.id);
+          const art = String(r.artworkUrl100 || '');
+          // 100x100 → 400x400 更清晰(发现卡 ~180px、retina)；无匹配则原样
+          const cover = art.replace(
+            /\/\d+x\d+bb\.(png|jpg|jpeg|webp)/i,
+            '/400x400bb.$1'
+          );
+          const genre = (r.genres && r.genres[0] && r.genres[0].name) || '';
+          // 始终用合成净 URL(只含 idNNN) → appleIdOf 正则 `id(\d+)` 必中正确 id，
+          //   避免 r.url 的名字 slug 里恰含 "id 数字"(如 covid19)被误匹配。
+          const url = 'https://podcasts.apple.com/cn/podcast/id' + id;
+          return {
+            id: 'apple-' + id, // 唯一 key(不与 xyzrank id 撞)
+            name: r.name,
+            author: r.artistName || '',
+            authorsText: r.artistName || '',
+            logoURL: cover,
+            primaryGenreName: genre || '播客', // 无类目兜底，避免卡片 meta 行空白
+            avgPlayCount: 0, // Apple 无播放量(卡片端 0 则不显计数)
+            source: 'apple',
+            // appleIdOf 从 links 的 apple url 提取 idNNN → resolveFeed lookup 得 feedUrl
+            links: [{ name: 'apple', url: url }],
+          };
+        });
+      if (items.length) appleCache = { ts: Date.now(), items };
+      return { ok: true, items };
+    } catch (err) {
+      if (appleCache.items) {
+        return { ok: true, items: appleCache.items, stale: true };
       }
       return { ok: false, error: String((err && err.message) || err) };
     }

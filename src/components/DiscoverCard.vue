@@ -55,8 +55,12 @@
         class="src-dot broken-dot"
       ></span>
     </div>
+    <!-- [资源池] 无播放量(如 Apple 榜项 avgPlayCount=0)时只显类目，不显"· 0" -->
     <div class="card-meta">
-      {{ podcast.primaryGenreName }} · {{ fmtCount(podcast.avgPlayCount) }}
+      {{ podcast.primaryGenreName
+      }}<template v-if="podcast.avgPlayCount">
+        · {{ fmtCount(podcast.avgPlayCount) }}</template
+      >
     </div>
   </div>
 </template>
