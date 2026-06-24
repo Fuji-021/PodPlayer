@@ -7,22 +7,15 @@
       :style="{ overflow: enableScrolling ? 'auto' : 'hidden' }"
       @scroll="handleScroll"
     >
-      <!-- [性能·路由过渡] 给页面切换加淡入+轻微上移过渡，消除"硬切"主观卡顿。
-           :key=$route.name 让同为 keepAlive 的菜单互切(home↔library↔explore)也能触发过渡。
-           keepAlive 仍按 name 缓存各页 DOM，过渡只补视觉、不重渲。 -->
+      <!-- [路由过渡·单 RV 根治闪页] 单个 router-view + keep-alive:include → 全局只有一个 <transition>，
+           mode=out-in 才真正生效(旧页 leave 完成后才进新页)，根治原"两个 RV 各自 transition 并发交叠"
+           导致的「切 keepAlive↔非keepAlive 时旧页(如首页)一闪」(点首页节目进详情 100% 复现)。
+           keep-alive 仅缓存 include 列出的页(=原 meta.keepAlive 那批，按组件 name)，其余正常创建/销毁；
+           :key=$route.name 让同为 keepAlive 的菜单互切(首页↔我的订阅↔探索)也触发过渡。 -->
       <transition name="page" mode="out-in" @before-enter="resetMainScroll">
-        <keep-alive>
-          <router-view
-            v-if="$route.meta.keepAlive"
-            :key="$route.name"
-          ></router-view>
+        <keep-alive :include="keepAliveComponents">
+          <router-view :key="$route.name"></router-view>
         </keep-alive>
-      </transition>
-      <transition name="page" mode="out-in" @before-enter="resetMainScroll">
-        <router-view
-          v-if="!$route.meta.keepAlive"
-          :key="$route.name"
-        ></router-view>
       </transition>
     </main>
     <transition name="slide-up">
@@ -64,6 +57,18 @@ export default {
     return {
       isElectron: process.env.IS_ELECTRON, // true || undefined
       userSelectNone: false,
+      // [路由过渡·单 RV] keep-alive 缓存的页面(组件 name)= 原 router meta.keepAlive 的 8 个路由。
+      //   ⚠️ 增删 keepAlive 页时这里必须同步(否则该页不被缓存 → 丢 activated/滚动恢复/分页返回不变等)。
+      keepAliveComponents: [
+        'Home',
+        'Explore',
+        'Artist',
+        'ArtistMV',
+        'Next',
+        'Search',
+        'PodcastLibrary',
+        'DiscoverList',
+      ],
     };
   },
   computed: {
