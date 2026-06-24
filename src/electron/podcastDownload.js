@@ -8,8 +8,13 @@
 //   交给 Clash TUN 网卡层（国内 DIRECT、国外走代理）；不开代理时直连国内 CDN 也 OK。
 //   Node 原生 https.get 默认就不读代理环境变量，正好满足「开/不开代理都能下」。
 //
+// [国际下载回退] 但直连对国际 CDN(如 Acast/CloudFront)在「无 TUN」环境会因 DNS 污染(域名被投毒成
+//   Facebook IP)→ connect ETIMEDOUT。故策略改为：直连优先(国内 CDN 快、不绕代理)，直连失败时问
+//   Chromium 该 URL 该用什么代理(session.resolveProxy，跟随系统代理/PAC、不硬编码端口)，有代理就挂
+//   HttpsProxyAgent 经代理回退重试一次 → 国际播客一律能下，且不依赖用户记得开 TUN。
+//
 // 进度 / 完成 / 失败通过 webContents.send 推回 renderer。
-import { app, ipcMain, Notification } from 'electron';
+import { app, ipcMain, Notification, session } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -20,6 +25,17 @@ import { URL } from 'url';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 YesPlayMusicPodcast/0.1';
+
+// [国际下载回退] https-proxy-agent 仅用于「直连失败后的代理回退」。兼容 v5(默认导出是工厂、且带
+//   .HttpsProxyAgent 类)与 v7(具名导出类)：统一取类、用 new 实例化。取不到则置 null → 回退不启用、
+//   维持纯直连(绝不崩)。webpack 会把它打进主进程包(externals 仅排除 rust-napi)，prod 也在。
+let HttpsProxyAgent = null;
+try {
+  const mod = require('https-proxy-agent');
+  HttpsProxyAgent = (mod && mod.HttpsProxyAgent) || mod || null;
+} catch (e) {
+  HttpsProxyAgent = null;
+}
 
 // epId → { res (当前响应流), writeStream, filePath, canceled }
 const activeTasks = new Map();
@@ -67,7 +83,7 @@ function safeFileName(guid) {
 
 // 发起 GET 并手动跟随重定向，resolve 成最终 200 响应流。
 // 完全不使用代理环境变量（直连，交给 TUN 网卡层处理）。
-function streamGet(url, redirects = 0) {
+function streamGet(url, redirects = 0, proxyUrl = '') {
   return new Promise((resolve, reject) => {
     if (redirects > 6) {
       reject(new Error('重定向次数过多'));
@@ -81,11 +97,21 @@ function streamGet(url, redirects = 0) {
       return;
     }
     const lib = u.protocol === 'http:' ? http : https;
+    // [国际下载回退] 有代理 + https 目标 → 挂 HttpsProxyAgent(经代理 CONNECT 隧道直达 CDN)；
+    //   无代理(默认/直连优先) 或 http 目标 → agent 留空，Node 默认直连，与原行为完全一致。
+    let agent;
+    if (proxyUrl && HttpsProxyAgent && u.protocol === 'https:') {
+      try {
+        agent = new HttpsProxyAgent(proxyUrl);
+      } catch (e) {
+        agent = undefined;
+      }
+    }
     const req = lib.get(
       url,
       {
+        agent,
         headers: { 'User-Agent': UA, Accept: '*/*' },
-        // 显式不走代理：proxy/agent 留空，Node 默认直连
       },
       res => {
         const code = res.statusCode || 0;
@@ -99,7 +125,7 @@ function streamGet(url, redirects = 0) {
             reject(new Error('重定向地址非法'));
             return;
           }
-          streamGet(next, redirects + 1).then(resolve, reject);
+          streamGet(next, redirects + 1, proxyUrl).then(resolve, reject);
           return;
         }
         if (code !== 200) {
@@ -116,6 +142,42 @@ function streamGet(url, redirects = 0) {
       req.destroy(new Error('连接超时'));
     });
   });
+}
+
+// [国际下载回退] 问 Chromium：该 URL 该走什么代理(跟随系统代理 / PAC，不硬编码端口)。
+//   resolveProxy 返回 PAC 串如 'PROXY 127.0.0.1:7897; DIRECT' / 'HTTPS host:port' / 'DIRECT'。
+//   取第一个 PROXY/HTTPS 条目 → 'http(s)://host:port'；DIRECT 或失败 → '' (= 不回退)。
+async function resolveProxyForUrl(url) {
+  try {
+    const ses = session && session.defaultSession;
+    if (!ses || !ses.resolveProxy) return '';
+    const pac = await ses.resolveProxy(url);
+    const m = String(pac || '').match(/(PROXY|HTTPS)\s+([^;\s]+)/i);
+    if (!m) return '';
+    const scheme = m[1].toUpperCase() === 'HTTPS' ? 'https://' : 'http://';
+    return scheme + m[2];
+  } catch (e) {
+    return '';
+  }
+}
+
+// [国际下载回退] 直连优先(国内 CDN 快、不绕代理)；直连失败(国际 CDN 域名常被 DNS 污染 →
+//   ETIMEDOUT/ENOTFOUND/ECONNRESET/连接超时)时，问 Chromium 拿代理回退重试一次。
+//   代理不可用(DIRECT / 无 https-proxy-agent) → 抛回原始直连错误(报错信息保持原样)。
+async function streamGetWithFallback(url) {
+  try {
+    return await streamGet(url);
+  } catch (directErr) {
+    const proxyUrl = await resolveProxyForUrl(url);
+    if (!proxyUrl || !HttpsProxyAgent) throw directErr;
+    console.log(
+      '[download] 直连失败，回退代理重试:',
+      proxyUrl,
+      '|',
+      (directErr && directErr.message) || directErr
+    );
+    return await streamGet(url, 0, proxyUrl);
+  }
 }
 
 export function registerPodcastDownloadIpc(getWindow) {
@@ -163,7 +225,7 @@ export function registerPodcastDownloadIpc(getWindow) {
       const dir = path.join(getPodcastsDir(), podcastHashOf(feedUrl));
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-      const { res, finalUrl } = await streamGet(audioUrl);
+      const { res, finalUrl } = await streamGetWithFallback(audioUrl);
       console.log(
         '[download] response 200',
         res.headers['content-type'],
