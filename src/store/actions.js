@@ -213,8 +213,15 @@ export default {
     });
   },
   // [播客改造 A-24] 加入播放列表（默认加在头部，下一首播这个）
-  enqueueEpisode({ commit, dispatch }, ep) {
+  enqueueEpisode({ commit, dispatch, state }, ep) {
     if (!ep || !ep.id) return;
+    // [审P2] 正在播放的这一集不入队：它已作为"正在播放"置顶显示在播放列表里，
+    //   再入队会同一集显示两遍。起播时本就会把该集移出队列(Player.js)，故唯一重复源就是此处。
+    const cur = state.player && state.player.currentTrack;
+    if (cur && cur.podcastEpisodeId === ep.id) {
+      dispatch('showToast', '这一集正在播放');
+      return;
+    }
     commit('enqueueEpisodeAtFront', {
       id: ep.id,
       guid: ep.guid || (ep.id || '').split('::').pop() || '',

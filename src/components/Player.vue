@@ -255,7 +255,28 @@
                       清空
                     </button>
                   </div>
-                  <div v-if="!podcastQueue.length" class="qp-empty">
+                  <!-- [播放列表] 正在播放：置顶信息行，复用 qp-item 样式 + 标签（不可拖/删/点） -->
+                  <div v-if="nowPlayingItem" class="qp-item qp-now">
+                    <div class="qp-now-ico">
+                      <svg-icon icon-class="waveform" />
+                    </div>
+                    <PodImage
+                      v-if="nowPlayingItem.coverUrl"
+                      class="qp-cover"
+                      :src="nowPlayingItem.coverUrl"
+                    />
+                    <div class="qp-meta">
+                      <div class="qp-title">{{ nowPlayingItem.title }}</div>
+                      <div class="qp-sub">{{
+                        nowPlayingItem.podcastTitle
+                      }}</div>
+                    </div>
+                    <span class="qp-now-tag">正在播放</span>
+                  </div>
+                  <div
+                    v-if="!podcastQueue.length && !nowPlayingItem"
+                    class="qp-empty"
+                  >
                     队列空空。在节目里加入单集后会出现在这里。
                   </div>
                   <div v-else class="qp-list">
@@ -612,7 +633,28 @@
                           清空
                         </button>
                       </div>
-                      <div v-if="!podcastQueue.length" class="qp-empty">
+                      <!-- [播放列表] 正在播放：置顶信息行(沉浸页，与播放 bar 一致) -->
+                      <div v-if="nowPlayingItem" class="qp-item qp-now">
+                        <div class="qp-now-ico">
+                          <svg-icon icon-class="waveform" />
+                        </div>
+                        <PodImage
+                          v-if="nowPlayingItem.coverUrl"
+                          class="qp-cover"
+                          :src="nowPlayingItem.coverUrl"
+                        />
+                        <div class="qp-meta">
+                          <div class="qp-title">{{ nowPlayingItem.title }}</div>
+                          <div class="qp-sub">
+                            {{ nowPlayingItem.podcastTitle }}
+                          </div>
+                        </div>
+                        <span class="qp-now-tag">正在播放</span>
+                      </div>
+                      <div
+                        v-if="!podcastQueue.length && !nowPlayingItem"
+                        class="qp-empty"
+                      >
                         队列空空。在节目里加入单集后会出现在这里。
                       </div>
                       <div v-else class="qp-list">
@@ -914,6 +956,18 @@ export default {
     ]),
     currentTrack() {
       return this.player.currentTrack;
+    },
+    // [播放列表] 当前播放项 → 映射成队列行同款字段，置顶显示(带"正在播放"标签)。
+    //   仅播客单集显示；播放器队列(podcastQueue)本就不含当前项，纯新增、无重复。
+    nowPlayingItem() {
+      const t = this.player && this.player.currentTrack;
+      if (!t || !t.podcastEpisodeId) return null;
+      return {
+        id: t.podcastEpisodeId,
+        title: t.name || '未命名单集',
+        podcastTitle: (t.al && t.al.name) || '',
+        coverUrl: (t.al && t.al.picUrl) || '',
+      };
     },
     volume: {
       get() {
@@ -2463,6 +2517,35 @@ export default {
         opacity: 1;
         color: #e74c3c;
       }
+    }
+  }
+  // [播放列表] 正在播放置顶行：复用 .qp-item，但非交互(不可点/拖/删)
+  .qp-now {
+    cursor: default;
+    &:hover {
+      background: transparent;
+    }
+    .qp-now-ico {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px 4px;
+      color: var(--color-primary);
+      .svg-icon {
+        width: 14px;
+        height: 14px;
+      }
+    }
+    .qp-now-tag {
+      flex-shrink: 0;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--color-primary);
+      background: var(--color-primary-bg-for-transparent);
+      padding: 2px 7px;
+      border-radius: 10px;
+      white-space: nowrap;
     }
   }
   .qp-more {
