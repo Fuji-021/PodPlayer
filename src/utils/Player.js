@@ -9,9 +9,9 @@ import { isAccountLoggedIn } from '@/utils/auth';
 import { cacheTrackSource, getTrackSource } from '@/utils/db';
 // [播客改造 S-1] 单集进度按集保存：用 Dexie 的 episodeProgress 表
 import { saveEpisodeProgress, getEpisodeProgress } from '@/utils/podcast/db';
-// [缓存·C3] 自动音频缓存：听满阈值触发缓存 + 播放命中本地触碰 lastAccess
+// [缓存·B] 流播缓存代理 URL 构造 + 播放命中本地触碰 lastAccess(LRU)
 import {
-  maybeAutoCacheEpisode,
+  buildAudioProxyUrl,
   touchDownloadAccess,
 } from '@/utils/podcast/downloads';
 // [NAS] 音源②级：本地未命中→NAS 在线则解析流URL，失败/不可用返回 null 直落 CDN
@@ -455,10 +455,8 @@ export default class {
           Math.floor(this._progress)
         ).catch(() => {});
 
-        // [缓存·C3] 听满 60s 且在播 → 自动缓存本集音频(内部判设置开关/未听完/未缓存/每集每会话一次)
-        if (this._playing && this._progress > 60) {
-          maybeAutoCacheEpisode(t);
-        }
+        // [缓存·B] 边播边缓存已改为"流播缓存代理"(播放经 /pa 时主进程边喂边写缓存)，
+        //   不再于此处后台另起下载(那会与流播抢带宽致卡顿)。见 _getAudioSource ③ + podcastAudioProxy.js。
 
         // [播客改造] 真实收听统计：每秒 tick
         if (this._playing) {
@@ -639,6 +637,10 @@ export default class {
       //   补兜底：NAS 源 → 切 CDN 续播；否则提示并跳下一集(与 loaderror 非可恢复分支同口径)。
       onplayerror: (_, err) => {
         console.error('[player] playerror', err);
+        if (this._proxyDirectFallback) {
+          this._fallbackProxyToDirect(); // [缓存·B] 流播代理出错 → 回退直连续播(绝不让缓存代理害到播放)
+          return;
+        }
         if (this._nasSourceActive) {
           this._failoverNasToCdn();
           return;
@@ -669,6 +671,11 @@ export default class {
       }
     }
     this._howler.on('loaderror', (_, errCode) => {
+      // [缓存·B] 当前是流播缓存代理且加载失败 → 回退直连续播(绝不让缓存代理害到播放)。
+      if (this._proxyDirectFallback) {
+        this._fallbackProxyToDirect();
+        return;
+      }
       // [P3] 当前是 NAS 源且加载失败(任意 code) → 切 CDN 续播，绝不因 NAS 跳过用户想听的集。
       if (this._nasSourceActive) {
         this._failoverNasToCdn();
@@ -731,6 +738,23 @@ export default class {
     }
     // 直接用 ③CDN 直链重建（绕过 _getAudioSource 的②NAS）+ seek 回掉线位置续播。
     this._playAudioSource(track.podcastAudioUrl, true, pos);
+  }
+  // [缓存·B] 流播缓存代理(/pa)加载/播放失败 → 用原始 CDN 直链重建续播(绕过 _getAudioSource 不再走代理)。
+  //   绝不让缓存代理影响"能听"这件事;清掉 _proxyDirectFallback 防回退循环。
+  _fallbackProxyToDirect() {
+    const track = this._currentTrack;
+    const direct = this._proxyDirectFallback;
+    this._proxyDirectFallback = '';
+    if (!track || !direct) return;
+    let pos = 0;
+    try {
+      const s = this._howler && this._howler.seek();
+      pos = Math.floor((typeof s === 'number' ? s : this._progress) || 0);
+    } catch (e) {
+      pos = Math.floor(this._progress || 0);
+    }
+    console.warn('[player] 流播缓存代理失败，回退直连续播');
+    this._playAudioSource(direct, true, pos);
   }
   _getAudioSourceBlobURL(data) {
     // Create a new object URL.
@@ -844,6 +868,9 @@ export default class {
   async _getAudioSource(track) {
     // [P3] 默认标记"当前源非 NAS"；仅②NAS 命中时翻 true，供中途掉线看门狗判定是否介入。
     this._nasSourceActive = false;
+    // [缓存·B] 默认清空"代理直连回退"标记；仅③走流播缓存代理时再 set。
+    //   否则 file://(本地命中)/NAS 分支会残留上一集的直链 → 它们 loaderror 时误回退到上一集 URL(放错集)。
+    this._proxyDirectFallback = '';
     // [播客改造] 播客单集自带音频直链，跳过网易云查询链。
     // [B-35] 已下载 → 同步从 store.podcastDownloads.pathMap 取本地路径返 file://。
     //   原来用动态 import('@/utils/db') 异步查，不可靠（顶部 Dexie get 报错时回退在线，
@@ -884,7 +911,18 @@ export default class {
           /* 任何异常都落 CDN，保证 NAS 永不影响既有播放 */
         }
       }
-      return Promise.resolve(track.podcastAudioUrl); // ③ 原始 CDN，兜底
+      // ③ [缓存·B] 启用缓存 + 代理就绪 → 经本地流播缓存代理(/pa)播放：一条上游连接边喂播放器边写缓存，
+      //   播放器读本地增长文件、永不被下载抢带宽。代理 URL 失败 → onloaderror/onplayerror 回退直连。
+      const proxyUrl = buildAudioProxyUrl(
+        track.podcastEpisodeId,
+        track.podcastAudioUrl
+      );
+      if (proxyUrl) {
+        this._proxyDirectFallback = track.podcastAudioUrl; // 记直链供失败回退
+        return Promise.resolve(proxyUrl);
+      }
+      this._proxyDirectFallback = '';
+      return Promise.resolve(track.podcastAudioUrl); // ③ 原始 CDN(未启用缓存/代理未就绪)
     }
     return this._getAudioSourceFromCache(String(track.id))
       .then(source => {

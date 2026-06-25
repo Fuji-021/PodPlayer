@@ -203,15 +203,21 @@ export default {
     state.podcastDownloads.progressMap = map;
   },
   // [B-35] payload 改为 { id, filePath }（兼容旧的传 string）
+  // [C3] payload.auto===true=自动缓存：只进 pathMap(供播放)、**不进 doneIds**(不显"已下载"标记);
+  //   手动下载(auto 缺省)两者都进。doneIds 驱动 UI 标记、pathMap 驱动播放,二者就此解耦。
   addDownloadedEpisode(state, payload) {
     const episodeId =
       typeof payload === 'string' ? payload : payload && payload.id;
     const filePath =
       typeof payload === 'string' ? '' : payload && payload.filePath;
+    const isAuto =
+      typeof payload === 'object' && payload && payload.auto === true;
     if (!episodeId) return;
-    const ids = state.podcastDownloads.doneIds || [];
-    if (!ids.includes(episodeId)) {
-      state.podcastDownloads.doneIds = [...ids, episodeId];
+    if (!isAuto) {
+      const ids = state.podcastDownloads.doneIds || [];
+      if (!ids.includes(episodeId)) {
+        state.podcastDownloads.doneIds = [...ids, episodeId];
+      }
     }
     if (filePath) {
       state.podcastDownloads.pathMap = {
@@ -229,10 +235,13 @@ export default {
     delete pm[episodeId];
     state.podcastDownloads.pathMap = pm;
   },
-  // [B-35] rows: [{ id, filePath }]
+  // [B-35] rows: [{ id, filePath, auto? }]
+  // [C3] doneIds 只含手动下载(auto!==true，驱动"已下载"标记)；pathMap 含全部(手动+自动缓存，供播放)。
   setDownloadedEpisodes(state, rows) {
     const list = Array.isArray(rows) ? rows : [];
-    state.podcastDownloads.doneIds = list.map(r => r.id);
+    state.podcastDownloads.doneIds = list
+      .filter(r => r && r.auto !== true)
+      .map(r => r.id);
     const pm = {};
     list.forEach(r => {
       if (r.id && r.filePath) pm[r.id] = r.filePath;

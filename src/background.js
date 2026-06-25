@@ -19,6 +19,7 @@ import {
 } from '@/utils/platform';
 import { createProtocol } from 'vue-cli-plugin-electron-builder/lib';
 import { startNeteaseMusicApi } from './electron/services';
+import { registerPodcastAudioProxy } from './electron/podcastAudioProxy';
 import { initIpcMain } from './electron/ipcMain.js';
 // [播客改造] 主进程 RSS/OPML 抓取，绕开渲染进程 CORS 限制。
 import { registerPodcastIpc } from './electron/podcastFetch';
@@ -235,6 +236,9 @@ class Background {
     log('creating express app');
 
     const expressApp = express();
+    // [缓存·B 流播缓存代理] /pa：播放器经此播放，一条上游连接边喂播放器边写本地缓存(根治边播边缓存抢带宽)。
+    //   注册在 static 之前，避免将来 build 产物出现同名 `pa` 文件被静态中间件拦截。
+    registerPodcastAudioProxy(expressApp, () => this.window, PROFILE.express);
     expressApp.use('/', express.static(__dirname + '/'));
     expressApp.use('/api', expressProxy('http://127.0.0.1:' + PROFILE.neapi));
     expressApp.use('/player', (req, res) => {

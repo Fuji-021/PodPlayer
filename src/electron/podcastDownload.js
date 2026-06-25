@@ -83,7 +83,8 @@ function safeFileName(guid) {
 
 // 发起 GET 并手动跟随重定向，resolve 成最终 200 响应流。
 // 完全不使用代理环境变量（直连，交给 TUN 网卡层处理）。
-function streamGet(url, redirects = 0, proxyUrl = '') {
+// [缓存·代理] rangeStart!=null 时带 Range 头从该字节起取(供流播缓存代理断点续传/seek)，接受 206。
+function streamGet(url, redirects = 0, proxyUrl = '', rangeStart = null) {
   return new Promise((resolve, reject) => {
     if (redirects > 6) {
       reject(new Error('重定向次数过多'));
@@ -107,35 +108,35 @@ function streamGet(url, redirects = 0, proxyUrl = '') {
         agent = undefined;
       }
     }
-    const req = lib.get(
-      url,
-      {
-        agent,
-        headers: { 'User-Agent': UA, Accept: '*/*' },
-      },
-      res => {
-        const code = res.statusCode || 0;
-        // 3xx 重定向：丢弃 body，跟随 location
-        if (code >= 300 && code < 400 && res.headers.location) {
-          res.resume();
-          let next;
-          try {
-            next = new URL(res.headers.location, url).href;
-          } catch (e) {
-            reject(new Error('重定向地址非法'));
-            return;
-          }
-          streamGet(next, redirects + 1, proxyUrl).then(resolve, reject);
+    const headers = { 'User-Agent': UA, Accept: '*/*' };
+    if (rangeStart !== null && rangeStart >= 0) {
+      headers.Range = 'bytes=' + rangeStart + '-';
+    }
+    const req = lib.get(url, { agent, headers }, res => {
+      const code = res.statusCode || 0;
+      // 3xx 重定向：丢弃 body，跟随 location
+      if (code >= 300 && code < 400 && res.headers.location) {
+        res.resume();
+        let next;
+        try {
+          next = new URL(res.headers.location, url).href;
+        } catch (e) {
+          reject(new Error('重定向地址非法'));
           return;
         }
-        if (code !== 200) {
-          res.resume();
-          reject(new Error('HTTP ' + code));
-          return;
-        }
-        resolve({ res, finalUrl: url });
+        streamGet(next, redirects + 1, proxyUrl, rangeStart).then(
+          resolve,
+          reject
+        );
+        return;
       }
-    );
+      if (code !== 200 && code !== 206) {
+        res.resume();
+        reject(new Error('HTTP ' + code));
+        return;
+      }
+      resolve({ res, finalUrl: url, status: code });
+    });
     req.on('error', reject);
     // 连接级超时：30s 内没有任何响应头则放弃
     req.setTimeout(30000, () => {
@@ -164,9 +165,9 @@ async function resolveProxyForUrl(url) {
 // [国际下载回退] 直连优先(国内 CDN 快、不绕代理)；直连失败(国际 CDN 域名常被 DNS 污染 →
 //   ETIMEDOUT/ENOTFOUND/ECONNRESET/连接超时)时，问 Chromium 拿代理回退重试一次。
 //   代理不可用(DIRECT / 无 https-proxy-agent) → 抛回原始直连错误(报错信息保持原样)。
-async function streamGetWithFallback(url) {
+async function streamGetWithFallback(url, rangeStart = null) {
   try {
-    return await streamGet(url);
+    return await streamGet(url, 0, '', rangeStart);
   } catch (directErr) {
     const proxyUrl = await resolveProxyForUrl(url);
     if (!proxyUrl || !HttpsProxyAgent) throw directErr;
@@ -176,9 +177,18 @@ async function streamGetWithFallback(url) {
       '|',
       (directErr && directErr.message) || directErr
     );
-    return await streamGet(url, 0, proxyUrl);
+    return await streamGet(url, 0, proxyUrl, rangeStart);
   }
 }
+
+// [缓存·代理] 供 podcastAudioProxy 复用：路径助手 + 带 Range 的上游抓取(含重定向/代理回退)。
+export {
+  getPodcastsDir,
+  podcastHashOf,
+  safeFileName,
+  guessExt,
+  streamGetWithFallback,
+};
 
 export function registerPodcastDownloadIpc(getWindow) {
   // [orphan-download] 启动期清理上次崩溃/被杀进程残留的 *.part 半成品(正常完成已 rename 成正式名、
@@ -213,8 +223,16 @@ export function registerPodcastDownloadIpc(getWindow) {
 
   // 启动下载
   ipcMain.handle('podcast:download:start', async (_e, payload) => {
-    const { episodeId, feedUrl, guid, audioUrl, title } = payload || {};
-    console.log('[download] start request', { episodeId, audioUrl });
+    const { episodeId, feedUrl, guid, audioUrl, title, auto, sourceUrl } =
+      payload || {};
+    // [C3] sourceUrl = 就近源(如 NAS)，有则优先、回退原 audioUrl(软耦合)；
+    //   auto = 自动缓存(静默：完成不发系统通知)。
+    const downloadUrl = sourceUrl || audioUrl;
+    console.log('[download] start request', {
+      episodeId,
+      audioUrl,
+      via: sourceUrl ? 'nas' : 'origin',
+    });
     if (!episodeId || !audioUrl) {
       return { ok: false, error: '缺少 episodeId / audioUrl' };
     }
@@ -225,7 +243,19 @@ export function registerPodcastDownloadIpc(getWindow) {
       const dir = path.join(getPodcastsDir(), podcastHashOf(feedUrl));
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-      const { res, finalUrl } = await streamGetWithFallback(audioUrl);
+      // [C3·软耦合] 先试就近源(downloadUrl，可能是 NAS)；若失败且用的是 NAS 源 → 回退原 CDN(audioUrl)。
+      //   保证 NAS 下载中途出问题绝不阻断"拿到文件"这件事(NAS 永不让下载变差)。
+      let res, finalUrl;
+      try {
+        ({ res, finalUrl } = await streamGetWithFallback(downloadUrl));
+      } catch (e0) {
+        if (downloadUrl !== audioUrl) {
+          console.log('[download] NAS 源失败，回退原 CDN:', episodeId);
+          ({ res, finalUrl } = await streamGetWithFallback(audioUrl));
+        } else {
+          throw e0;
+        }
+      }
       console.log(
         '[download] response 200',
         res.headers['content-type'],
@@ -247,6 +277,7 @@ export function registerPodcastDownloadIpc(getWindow) {
         canceled: false,
         settled: false,
         title: String(title || ''),
+        auto: auto === true, // [C3] 自动缓存：完成时静默(不发系统通知)
       };
       activeTasks.set(episodeId, task);
 
@@ -351,25 +382,26 @@ export function registerPodcastDownloadIpc(getWindow) {
             bytesTotal: done,
           });
         }
-        // [T3] 下载完成桌面通知
-        try {
-          var notif = new Notification({
-            title: task.title || '下载完成',
-            body: '单集已保存到本地',
-          });
-          // [通知点击跳转] 点击 → 激活主窗口(同 notifications.js)
-          notif.on('click', function () {
-            var nw = getWindow && getWindow();
-            if (nw && !nw.isDestroyed()) {
-              if (nw.isMinimized()) nw.restore();
-              nw.show();
-              nw.focus();
-            }
-          });
-          notif.show();
-        } catch (e) {
-          // Notification 不可用时静默忽略
-        }
+        // [T3] 下载完成桌面通知（[C3] 自动缓存静默：不发系统通知、不打扰）
+        if (!task.auto)
+          try {
+            var notif = new Notification({
+              title: task.title || '下载完成',
+              body: '单集已保存到本地',
+            });
+            // [通知点击跳转] 点击 → 激活主窗口(同 notifications.js)
+            notif.on('click', function () {
+              var nw = getWindow && getWindow();
+              if (nw && !nw.isDestroyed()) {
+                if (nw.isMinimized()) nw.restore();
+                nw.show();
+                nw.focus();
+              }
+            });
+            notif.show();
+          } catch (e) {
+            // Notification 不可用时静默忽略
+          }
       });
       res.pipe(writeStream);
       // [orphan-download] 返回正式名 finalPath(非在途 .part)：渲染端当前不消费此返回值，

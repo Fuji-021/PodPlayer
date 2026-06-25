@@ -85,11 +85,12 @@ recoverDownloadsOnce();
 loadAllDownloads()
   .then(rows => {
     // [B-35] 灌入 { id, filePath }，让 pathMap 就绪 → Player 能同步取 file:// 离线播放
+    // [C3] 带上 auto 标记：自动缓存行只进 pathMap(供播放)、不进 doneIds(不显"已下载"标记)
     store.commit(
       'setDownloadedEpisodes',
       rows
         .filter(r => r && r.status === 'done')
-        .map(r => ({ id: r.id, filePath: r.filePath }))
+        .map(r => ({ id: r.id, filePath: r.filePath, auto: r.auto === true }))
     );
   })
   .catch(() => {});

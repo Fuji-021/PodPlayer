@@ -4,6 +4,8 @@
 // - 完成后写 Dexie episodeDownloads，并清掉 progress
 import { db } from '@/utils/db';
 import store from '@/store';
+// [C3·NAS 就近源] 下载前软解析 NAS URL(在 NAS 上的单集从 NAS 取更快;未启用/不可达返回 null)
+import { resolveNasUrl } from '@/utils/podcast/nasSource';
 
 const ipcRenderer = window.require
   ? window.require('electron').ipcRenderer
@@ -19,11 +21,12 @@ const _waitQueue = []; // 排队等待的 episode 对象
 // 让"我的下载"能 join 到（done 的 IPC 回包只带 episodeId/filePath/bytesTotal）
 const _metaCache = new Map(); // episodeId → episode 元数据
 
-// [缓存·C3] 自动音频缓存："听满阈值"的在听单集后台缓存到本地、按预算/TTL 淘汰。
-//   复用整条下载管线,仅在 episodeDownloads 行加 auto:true 标记区分"自动缓存"vs"手动下载";
+// [缓存·C3/B] 音频缓存：episodeDownloads 行 auto:true=自动缓存(可淘汰)、否则=手动下载(永不淘汰)。
 //   淘汰只动 auto 行、绝不碰手动下载;删除复用 removeDownload(主进程删文件,删失败不删 DB)。
-const _autoSet = new Set(); // 本次发起时标为"自动缓存"的 episodeId(done 时据此写 auto:true)
-const _autoTriggered = new Set(); // 本会话已触发过自动缓存的 episodeId(避免每秒重复判定)
+//   [B] 边播边缓存已改为"流播缓存代理"(播放经 /pa,主进程边喂播放器边写缓存)——见 podcastAudioProxy.js,
+//   完成后经 'podcast:audioCached' IPC 在此登记 auto 行。手动下载仍走 startDownload(可标 auto，现仅手动=false)。
+const _autoSet = new Set(); // startDownload({auto:true}) 时标记(done 据此写 auto)；现仅保留接口
+let _proxyBase = ''; // [B] 本地流播缓存代理基址(http://127.0.0.1:<express>)，启动时经 IPC 取一次
 
 // [B-52] 接口预留：设置层调用以覆盖并发上限（1=队列依次下载，>1=并发）。范围 1~10。
 export function setDownloadConcurrency(n) {
@@ -36,12 +39,16 @@ export function getDownloadConcurrency() {
 
 // 实际向主进程发起下载（不含并发判断）
 async function _doStart(episode) {
-  store.commit('setDownloadProgress', {
-    episodeId: episode.id,
-    bytesDone: 0,
-    bytesTotal: 0,
-    status: 'downloading',
-  });
+  const isAuto = _autoSet.has(episode.id); // [C3] 自动缓存：全程不进下载 UI(进度条/已下载标记/系统通知)
+  // [C3] 自动缓存不写 progressMap → 单集行不显进度条/"下载中"态(缓存应静默,与下载彻底解耦)
+  if (!isAuto) {
+    store.commit('setDownloadProgress', {
+      episodeId: episode.id,
+      bytesDone: 0,
+      bytesTotal: 0,
+      status: 'downloading',
+    });
+  }
   // [bugfix B] 记录元数据，完成后回写 db.episodes
   _metaCache.set(episode.id, {
     id: episode.id,
@@ -54,6 +61,20 @@ async function _doStart(episode) {
   const idx = (episode.id || '').indexOf('::');
   const feedUrl = idx > 0 ? episode.id.slice(0, idx) : '';
   const guid = idx > 0 ? episode.id.slice(idx + 2) : episode.guid || episode.id;
+  // [C3·NAS 就近源] 下载前软解析 NAS URL：在 NAS 上的单集直接从 NAS 取(LAN 更快)，
+  //   否则回退原 audioUrl；NAS 未启用/不可达/查不到 resolveNasUrl 同步返回 null(软耦合、零阻断)。
+  let sourceUrl = '';
+  try {
+    const u = await resolveNasUrl({
+      podcastEpisodeId: episode.id,
+      podcastId: episode.podcastId || feedUrl,
+      podcastAudioUrl: episode.audioUrl,
+      podcastEpisodePubTime: episode.pubTime || 0,
+    });
+    if (u) sourceUrl = u;
+  } catch (e) {
+    // NAS 解析失败 → 用原 audioUrl(软耦合，绝不阻断下载)
+  }
   let res;
   try {
     res = await ipcRenderer.invoke('podcast:download:start', {
@@ -61,6 +82,8 @@ async function _doStart(episode) {
       feedUrl,
       guid,
       audioUrl: episode.audioUrl,
+      sourceUrl, // [C3] 就近源(NAS)；主进程优先用、为空则回退 audioUrl
+      auto: isAuto, // [C3] 自动缓存 → 主进程完成时静默(不发系统通知)
     });
   } catch (e) {
     // [bugfix A] invoke 异常未捕获会导致 _activeSet 槽位永久泄漏、队列死锁
@@ -99,6 +122,7 @@ export function registerDownloadListeners() {
   _registered = true;
   ipcRenderer.on('podcast:download:progress', (_e, p) => {
     if (!p || !p.episodeId) return;
+    if (_autoSet.has(p.episodeId)) return; // [C3] 自动缓存不写 progressMap → 不显进度条/"下载中"
     store.commit('setDownloadProgress', {
       episodeId: p.episodeId,
       bytesDone: p.bytesDone || 0,
@@ -147,9 +171,11 @@ export function registerDownloadListeners() {
     _metaCache.delete(p.episodeId);
     store.commit('clearDownloadProgress', p.episodeId);
     // [B-35] 带上本地路径，供 Player 同步取 file:// 离线播放
+    // [C3] 带 auto：自动缓存只进 pathMap(供播放)、不进 doneIds(不显"已下载"标记)
     store.commit('addDownloadedEpisode', {
       id: p.episodeId,
       filePath: p.filePath,
+      auto: isAuto,
     });
     // [C3] 自动缓存静默完成(不打扰)；手动下载照常提示"下载完成"
     if (!isAuto) store.dispatch('showToast', '下载完成');
@@ -171,6 +197,44 @@ export function registerDownloadListeners() {
     _activeSet.delete(p.episodeId);
     _pump();
   });
+  // [缓存·B] 流播缓存代理把某集下满 → 登记为 auto 行(进 LRU/TTL 淘汰)+ pathMap(下次直接 file:// 秒播)。
+  //   已是手动下载(auto!==true)的不降级。静默(不弹"下载完成")。登记后跑一次预算淘汰。
+  ipcRenderer.on('podcast:audioCached', async (_e, p) => {
+    if (!p || !p.episodeId || !p.filePath) return;
+    const idx = p.episodeId.indexOf('::');
+    const podcastId = idx > 0 ? p.episodeId.slice(0, idx) : '';
+    try {
+      const existing = await db.episodeDownloads.get(p.episodeId);
+      if (existing && existing.status === 'done' && existing.auto !== true) {
+        return; // 手动下载已存在 → 保持手动钉住，不降级为可淘汰
+      }
+      await db.episodeDownloads.put({
+        id: p.episodeId,
+        podcastId,
+        filePath: p.filePath,
+        bytesTotal: p.bytesTotal || 0,
+        status: 'done',
+        addedAt: (existing && existing.addedAt) || Date.now(),
+        auto: true,
+        lastAccess: Date.now(),
+      });
+    } catch (e) {
+      // 登记失败不影响播放(缓存文件仍在，下次仍可命中)
+    }
+    store.commit('addDownloadedEpisode', {
+      id: p.episodeId,
+      filePath: p.filePath,
+      auto: true,
+    });
+    evictAudioCache().catch(() => {});
+  });
+  // [缓存·B] 启动取一次流播缓存代理基址(渲染端拼 /pa 播放 URL 用；dev 渲染在 webpack 端口、需显式 express 基址)
+  ipcRenderer
+    .invoke('podcast:audioProxyBase')
+    .then(b => {
+      if (b) _proxyBase = b;
+    })
+    .catch(() => {});
 }
 
 export async function startDownload(episode, opts) {
@@ -207,12 +271,15 @@ export async function startDownload(episode, opts) {
   // [B-52] 并发上限：达到上限则入队排队(status:'queued')，否则立即下载
   if (_activeSet.size >= MAX_CONCURRENT) {
     _waitQueue.push(episode);
-    store.commit('setDownloadProgress', {
-      episodeId: episode.id,
-      bytesDone: 0,
-      bytesTotal: 0,
-      status: 'queued',
-    });
+    // [C3] 自动缓存不写 progressMap → 不显"排队中"(缓存全程静默)
+    if (!opts.auto) {
+      store.commit('setDownloadProgress', {
+        episodeId: episode.id,
+        bytesDone: 0,
+        bytesTotal: 0,
+        status: 'queued',
+      });
+    }
     return { ok: true, queued: true };
   }
   _activeSet.add(episode.id);
@@ -464,35 +531,18 @@ function _audioCacheBudgetBytes() {
   return (Number(mb) || 2048) * 1024 * 1024;
 }
 
-// [C3] 听满阈值触发：未关 + 未触发过 + 未已下载/缓存 → 标 auto 后台缓存本集音频。
-//   接受 Player 的 track(netease 形)，内部抽取播客字段;每集每会话只触发一次。失败静默。
-export async function maybeAutoCacheEpisode(track) {
-  if (!_audioCacheEnabled()) return;
-  if (!track || !track.podcastEpisodeId || !track.podcastAudioUrl) return;
-  const id = track.podcastEpisodeId;
-  if (_autoTriggered.has(id)) return;
-  _autoTriggered.add(id);
-  try {
-    const existing = await db.episodeDownloads.get(id);
-    if (existing) return; // 已手动下载 或 已自动缓存 → 不重复
-    const stat = await db.episodeListenStats.get(id).catch(() => null);
-    if (stat && stat.completed) return; // [C3] 已听完不缓存(只缓存"在听未听完")
-    const idx = id.indexOf('::');
-    const podcastId = idx > 0 ? id.slice(0, idx) : '';
-    await startDownload(
-      {
-        id,
-        podcastId,
-        audioUrl: track.podcastAudioUrl,
-        title: track.name || '',
-        coverUrl: (track.al && track.al.picUrl) || '',
-        duration: Math.floor((track.dt || 0) / 1000),
-      },
-      { auto: true }
-    );
-  } catch (e) {
-    // 静默：下次播放该集仍会再判一次（_autoTriggered 仅本会话内）
-  }
+// [缓存·B] 取本地流播缓存代理的播放 URL：启用缓存 + 代理基址就绪 → 返回 /pa 地址(经它播放=边播边缓存);
+//   否则返回 ''(调用方回退直连)。Player ③CDN 路径用它替代直链，失败有 fallback 回退直连。
+export function buildAudioProxyUrl(episodeId, audioUrl) {
+  if (!_audioCacheEnabled()) return '';
+  if (!_proxyBase || !episodeId || !audioUrl) return '';
+  return (
+    _proxyBase +
+    '/pa?eid=' +
+    encodeURIComponent(episodeId) +
+    '&u=' +
+    encodeURIComponent(audioUrl)
+  );
 }
 
 // [C3] 播放命中本地即触碰 lastAccess（LRU 用）；仅更新已存在的行、失败静默。
