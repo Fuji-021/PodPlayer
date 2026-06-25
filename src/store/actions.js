@@ -219,7 +219,7 @@ export default {
     //   再入队会同一集显示两遍。起播时本就会把该集移出队列(Player.js)，故唯一重复源就是此处。
     const cur = state.player && state.player.currentTrack;
     if (cur && cur.podcastEpisodeId === ep.id) {
-      dispatch('showToast', '这一集正在播放');
+      dispatch('showToast', '正在播放');
       return;
     }
     commit('enqueueEpisodeAtFront', {

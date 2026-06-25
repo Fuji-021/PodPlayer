@@ -280,8 +280,8 @@ export default {
         this._rowClickTimer = null;
       }
     },
-    // [下载页改版] 行点击：选择模式=切换选中；否则单击延迟 250ms 进单集详情(留窗口给双击拦截)
-    //   口径与 podcastDetail onRowClick 一致(单击进详情、双击播放)。
+    // [下载页改版] 行点击：选择模式=切换选中；否则单击延迟 150ms 进单集详情(留窗口给双击拦截)
+    //   口径与 podcastDetail onRowClick 一致(单击进详情、双击播放)。150ms=尽量跟手又能抓住双击。
     onRowClick(item) {
       if (this.selectMode) {
         this.toggleSelect(item);
@@ -291,7 +291,7 @@ export default {
       this._rowClickTimer = setTimeout(() => {
         this._rowClickTimer = null;
         this.goEpisode(item);
-      }, 250);
+      }, 150);
     },
     // [下载页改版] 双击行 → 取消挂起的"进详情"，直接播放
     onRowDblClick(item) {
@@ -309,7 +309,7 @@ export default {
       this._rowClickTimer = setTimeout(() => {
         this._rowClickTimer = null;
         this.goPodcast(item);
-      }, 250);
+      }, 150);
     },
     // [下载页改版] 从 id(=feedUrl::guid) 解出 feedUrl/guid，口径与 downloads.js dirGuidFor 一致
     //   (用 indexOf/slice，guid 自身含 '::' 也不会被截断)
@@ -510,6 +510,8 @@ export default {
   justify-content: space-between;
   margin-bottom: 24px;
   gap: 12px;
+  // 右内边距与单集行一致(行 padding 0 8px)，让右上角按钮与下方"已下载"绿勾列对齐
+  padding-right: 8px;
 }
 h1 {
   font-size: 32px;
@@ -520,7 +522,8 @@ h1 {
     font-weight: 500;
     opacity: 0.4;
     margin-left: 10px;
-    vertical-align: middle;
+    // 与标题下沿(基线)对齐，而非垂直居中
+    vertical-align: baseline;
   }
 }
 // [下载页改版] 右侧操作区
@@ -534,8 +537,8 @@ h1 {
   background: transparent;
   color: var(--color-text);
   opacity: 0.55;
-  width: 38px;
-  height: 38px;
+  // 用 padding:8px(与 .dl-btn 同尺寸)，配合 .head 的 padding-right:8px，图标中心与绿勾列精确对齐
+  padding: 8px;
   border-radius: 50%;
   cursor: pointer;
   display: inline-flex;
