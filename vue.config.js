@@ -169,9 +169,13 @@ module.exports = {
           icon: 'build/icons/icon.icns',
         },
         nsis: {
-          oneClick: true,
-          perMachine: true,
-          deleteAppDataOnUninstall: true,
+          // [安装体验] 引导式(向导)安装而非一键安装：让用户能看到/选择安装位置，但不繁琐
+          //   （perMachine 跳过"为谁安装"选择页 → 向导仅「选位置→安装→完成」三步）。
+          oneClick: false,
+          perMachine: true, // 全机器安装(Program Files)，会弹一次 UAC 管理员授权
+          allowToChangeInstallationDirectory: true, // 允许用户选择安装目录
+          // [数据安全] 卸载只删程序、**保留用户数据**(订阅/历史/统计/下载/缓存)，重装即恢复。
+          deleteAppDataOnUninstall: false,
         },
       },
       // 主线程的配置文件
