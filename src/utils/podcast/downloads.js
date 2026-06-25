@@ -334,7 +334,7 @@ export async function getDownload(episodeId) {
   return await db.episodeDownloads.get(episodeId);
 }
 
-// [B-33/B-35] 我的下载页：已下载单集富对象（join 元数据），按下载时间**正序**（最早在上、最新在下）
+// [B-33/B-35] 我的下载页：已下载单集富对象（join 元数据），按下载时间**倒序**（最新在上、最早在下）
 //   [B69-F3] 原来循环内逐条 await db.episodes.get + db.podcasts.get（2N 次串行 IndexedDB 往返，
 //   下载多了明显变慢）→ 改 bulkGet 批量取（与 B-36 详情页同款）。
 export async function getDownloadedEpisodes() {
@@ -367,7 +367,8 @@ export async function getDownloadedEpisodes() {
       downloadedAt: r.addedAt || 0,
     });
   });
-  result.sort((a, b) => (a.downloadedAt || 0) - (b.downloadedAt || 0));
+  // [下载页改版] 按下载时间从新到旧（最新下载置顶）
+  result.sort((a, b) => (b.downloadedAt || 0) - (a.downloadedAt || 0));
   return result;
 }
 
