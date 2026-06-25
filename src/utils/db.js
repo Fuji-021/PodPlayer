@@ -7,6 +7,25 @@ import { rlog } from '@/utils/log';
 // [播客改造] 导出 db 实例，供 utils/podcast/db.js 复用，避免多个 Dexie 实例冲突。
 export const db = new Dexie('yesplaymusic');
 
+// [封面缓存·治本] v11：新增 coverCache 表（本地持久封面缓存）。
+//   背景：部分节目封面托管在国内不稳定的国际 CDN（实测「疯投圈」封面在 Cloudflare 台北节点），
+//     且响应头多带 `max-age=0, must-revalidate` → 浏览器每次渲染都要向 CDN 实时重校验，
+//     CDN 一抽风 <img> 就在 opacity:0 下长时间空白 =「封面加载很慢」（与图片大小无关，实测仅 15KB）。
+//   治本：封面首次成功加载后，把它 canvas 降采样成 ~360px JPEG dataURL 持久化到此表，
+//     之后 PodImage 命中即用本地 dataURL、零网络，彻底摆脱国际 CDN 实时往返；全 app 封面统一受益。
+//   key = 归一化(http→https)后的封面 url；data = dataURL；ts 供 LRU 淘汰。详见 utils/podcast/coverCache.js。
+//   纯新增表、无数据迁移，对现有表零影响。
+db.version(11).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime, [podcastId+pubTime]',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+  episodeListenStats: '&id, completed, updatedAt',
+  episodeDownloads: '&id, podcastId, addedAt',
+  listenDaily: '&key, date',
+  coverCache: '&url, ts',
+});
+
 // [T7·性能·数据层①] v10：episodes 加复合索引 [podcastId+pubTime]，
 //   供 getEpisodesByPodcast 利用 IDB 游标排序，免除内存 Array.sortBy（机核 1000+ 集从 JS 排序→DB 排序）。
 //   [podcastId+pubTime] 是 Dexie 的"复合索引"语法，IndexedDB 底层建 [feedUrl, pubTime] 联合索引。

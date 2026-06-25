@@ -3,10 +3,10 @@
        仅当「无 src」或「加载失败」时，切换为同样带 pod-img 类的占位块（纯色 + 居中图标），
        避免整块透明留白（思文败类 / Nice Try 首页空白成因）。 -->
   <img
-    v-if="!failed && normalizedSrc"
+    v-if="!failed && displaySrc"
     class="pod-img"
     :class="{ 'pod-img-loaded': loaded }"
-    :src="normalizedSrc"
+    :src="displaySrc"
     loading="lazy"
     decoding="async"
     @load="onLoad"
@@ -26,16 +26,28 @@
 //  - 已被 HTTP 缓存命中的图，@load 可能在监听挂上前就触发 → mounted/换 src 后主动判 complete 兜底。
 // 单 <img> 根：父组件的 .cover/.thumb 等样式(类/元素选择器)照常生效，替换零成本。
 // [修] R13：加载失败/无 src 时渲染占位块(同样带 pod-img 类，继承父组件尺寸)，不再透明留白。
+// [封面缓存·治本] 接入本地持久封面缓存(coverCache)：内存命中→秒用本地 dataURL(零网络)；否则先挂原图，
+//   异步查 Dexie 命中且远程尚未加载完成则换成本地图(把卡在不稳定国际 CDN——如 Cloudflare——的请求
+//   换成秒开本地图)；远程**加载成功后**复用那张已解码的 <img> 降采样落盘(零额外请求、尊重 lazy)，
+//   下次进任意封面位置即零网络秒开。一处接入、全 app 封面位置统一受益。详见 utils/podcast/coverCache.js。
+import {
+  peekCachedCover,
+  getCachedCover,
+  cacheCoverFromImg,
+} from '@/utils/podcast/coverCache';
+
 export default {
   name: 'PodImage',
   props: {
     src: { type: String, default: '' },
   },
   data() {
-    return { loaded: false, failed: false };
+    // displaySrc = 实际喂给 <img> 的地址：优先本地缓存 dataURL，否则归一化后的远程 url。
+    return { loaded: false, failed: false, displaySrc: '' };
   },
   computed: {
     // [修] R13：http:// 统一升 https://，减少混合内容被浏览器拦截致空白；其余 url 原样返回。
+    //   同时作为封面缓存的统一 key（http/https 归一为同一条缓存）。
     normalizedSrc() {
       const raw = this.src || '';
       if (raw.indexOf('http://') === 0) {
@@ -46,23 +58,48 @@ export default {
   },
   watch: {
     src() {
+      this.resolveSrc();
+    },
+  },
+  created() {
+    // 初始解析放 created：在首帧渲染前就定好 displaySrc，避免出现一瞬占位块闪烁。
+    this.resolveSrc();
+  },
+  methods: {
+    // 解析当前应显示的封面地址：同步内存命中用本地图；否则先挂原图、异步查 Dexie 命中则换本地图。
+    resolveSrc() {
       this.loaded = false;
       this.failed = false; // [修] R13：换 src 重置失败态，给新封面正常加载机会。
+      const url = this.normalizedSrc;
+      const cached = peekCachedCover(url); // 会话内存命中 → 直接本地图，零网络、零闪
+      this.displaySrc = cached || url;
       this.$nextTick(() => {
-        // 父组件在 @error 时会给本 <img> 写 inline opacity(0/0.15)，
-        // inline 优先级高于 class → 换 src 后新封面仍被旧的 inline opacity 压住隐身。
-        // 换图时清掉上一张错误图留下的 inline opacity，让 class 控制淡入。
+        // 父组件在 @error 时会给本 <img> 写 inline opacity(0/0.15)，inline 优先级高于 class
+        // → 换 src 后新封面仍被旧的 inline opacity 压住隐身。换图时清掉，让 class 控制淡入。
         if (this.$el && this.$el.style) this.$el.style.opacity = '';
         this.checkCached();
       });
+      if (!url || cached) return;
+      // 异步查 Dexie 持久缓存：命中且远程尚未加载完成 → 换成本地 dataURL，
+      //   把卡在不稳定 CDN 的远程请求替换为秒开本地图（远程已加载完则不换，避免无谓闪烁）。
+      getCachedCover(url).then(data => {
+        if (this.normalizedSrc !== url) return; // src 已切换 → 本次结果作废
+        if (data && data !== this.displaySrc && !this.loaded) {
+          this.failed = false;
+          this.displaySrc = data;
+        }
+      });
     },
-  },
-  mounted() {
-    this.checkCached();
-  },
-  methods: {
     onLoad(e) {
       this.loaded = true;
+      // 显示的是远程原图(非已命中的本地 dataURL)时，把这张已解码的图降采样持久化 → 下次零网络秒开。
+      if (
+        this.displaySrc === this.normalizedSrc &&
+        this.$el &&
+        this.$el.tagName === 'IMG'
+      ) {
+        cacheCoverFromImg(this.normalizedSrc, this.$el);
+      }
       this.$emit('load', e);
     },
     onError(e) {
@@ -74,6 +111,10 @@ export default {
       // [修] R13：占位块没有 complete/naturalWidth，仅对真实 <img> 做缓存命中兜底。
       if (el && el.tagName === 'IMG' && el.complete && el.naturalWidth > 0) {
         this.loaded = true;
+        // HTTP 缓存命中时 @load 可能早于监听挂上 → 这里补一次封面持久化（与 onLoad 同条件）。
+        if (this.displaySrc === this.normalizedSrc) {
+          cacheCoverFromImg(this.normalizedSrc, el);
+        }
       }
     },
   },
