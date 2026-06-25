@@ -5,6 +5,8 @@
     class="disc-card"
     :class="{ 'overlay-mode': overlayMode }"
     @click="onCardClick"
+    @mouseenter="onCardEnter"
+    @mouseleave="onCardEnterCancel"
     @contextmenu.prevent="onContextMenu"
   >
     <div class="cover-box">
@@ -67,6 +69,7 @@
 
 <script>
 import SvgIcon from '@/components/SvgIcon.vue';
+import { prefetchDetail } from '@/utils/podcast/detailPrefetch';
 import {
   subscribePodcast,
   hiResLogo,
@@ -152,8 +155,23 @@ export default {
   },
   beforeDestroy() {
     this.closeOverlay();
+    clearTimeout(this._prefetchTimer);
   },
   methods: {
+    // [C2/L2] 悬停 180ms 仍停留 → 预取详情进 L1(只读本地、零副作用)，点开秒显；离开则取消。
+    //   只对"本地已入库"节目生效(coverFeedUrl 有值 + prefetchDetail 内部 getPodcast 命中)，未入库 no-op、不触网。
+    onCardEnter() {
+      const url = this.coverFeedUrl;
+      if (!url || this._prefetched) return;
+      clearTimeout(this._prefetchTimer);
+      this._prefetchTimer = setTimeout(() => {
+        this._prefetched = true;
+        prefetchDetail(url);
+      }, 180);
+    },
+    onCardEnterCancel() {
+      clearTimeout(this._prefetchTimer);
+    },
     // 左键：进节目详情。已订阅用本地 feedUrl 秒进；未订阅走"预览"(入库不订阅)再进，可试听
     onCardClick() {
       if (this.overlayMode) {

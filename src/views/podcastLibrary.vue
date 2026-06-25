@@ -278,6 +278,7 @@ import {
   prefetchNasPodcast,
 } from '@/utils/podcast/nasSource';
 import { ensureTinyCover } from '@/utils/podcast/coverHalo';
+import { prefetchDetail } from '@/utils/podcast/detailPrefetch';
 import { showNotification } from '@/utils/podcast/notify';
 import SvgIcon from '@/components/SvgIcon.vue';
 
@@ -477,8 +478,9 @@ export default {
         animationDelay: delay.toFixed(2) + 's',
       };
     },
-    // [NAS·L2 预取] 悬停节目卡即后台暖该档 NAS 单集映射 → 点进详情页第一刻 wifi 标识即在(不再等加载)。
-    //   每档只暖一次(dedup)；prefetchNasPodcast 内部 NAS 未启用/不可用则 no-op。
+    // [L2 预取] 悬停节目卡即后台暖：① 详情 L1 缓存(detailPrefetch，点开秒显)；② 该档 NAS 单集映射
+    //   (prefetchNasPodcast，进详情第一刻 wifi 标识即在)。每档只暖一次(dedup)；两者内部未启用/已缓存均 no-op。
+    //   复用同一套预取闸：滚动期不触发 + 180ms 停留防抖，避免滑过狂触发 IPC/IDB 风暴。
     onCardHover(p) {
       if (!p || !p.id) return;
       // [审查 R·闸1] 滚动期间一律不预取——滚动时卡片逐张滑过指针会狂触发 mouseenter，正是 IPC 风暴来源。
@@ -490,6 +492,7 @@ export default {
       this._nasHoverTimer = setTimeout(() => {
         if (this.isScrolling || this._nasHovered.has(p.id)) return;
         this._nasHovered.add(p.id);
+        prefetchDetail(p.id); // [C2/L2] 暖详情 L1(只读本地、零副作用、已缓存即跳过)
         prefetchNasPodcast(p.id); // 闸3(并发≤2/在途去重)在 nasSource 内
       }, 180);
     },

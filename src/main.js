@@ -169,7 +169,10 @@ setTimeout(function () {
 // [F2 / B69-F2] 启动后空闲清理"预览孤儿"(发现页预览残留的 subscribed:false 零互动节目+单集)，
 //   防其长期堆积拖慢 DB。延迟到启动稳定后跑、低优先、失败静默；只删零互动的预览残留，
 //   不碰已订阅/有历史/近 1h 预览过的节目(详见 db.js prunePreviewOrphans 判据)。
-import { prunePreviewOrphans } from '@/utils/podcast/db';
+import {
+  prunePreviewOrphans,
+  getLastListenedByPodcast,
+} from '@/utils/podcast/db';
 setTimeout(() => {
   prunePreviewOrphans()
     .then(r => {
@@ -182,6 +185,19 @@ setTimeout(() => {
     })
     .catch(() => {});
 }, 6000);
+
+// [缓存·C2/L3] 启动后空闲预热：把"最近听过"的若干档详情(节目 meta + 单集列表)读进 L1 episodeCache，
+//   使首次点开(无需 hover)也近乎秒显。只读本地 Dexie、不触网；逐档 idle 串行、失败静默。
+import { prewarmDetails } from '@/utils/podcast/detailPrefetch';
+setTimeout(() => {
+  getLastListenedByPodcast()
+    .then(map => {
+      const m = map || {};
+      const urls = Object.keys(m).sort((a, b) => (m[b] || 0) - (m[a] || 0));
+      prewarmDetails(urls, 8);
+    })
+    .catch(() => {});
+}, 7000);
 
 new Vue({
   i18n,
