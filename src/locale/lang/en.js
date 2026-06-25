@@ -263,6 +263,13 @@ export default {
       downloadConcurrency: 'Concurrent downloads',
       downloadConcurrencyDesc:
         'Maximum number of downloads running at the same time during batch downloads (1 = one at a time; higher is faster but uses more bandwidth).',
+      cacheManage: 'Cache',
+      cacheCover: 'Covers',
+      cacheDiscover: 'Discover data',
+      cacheItems: 'items',
+      cacheRefresh: 'Refresh',
+      cacheClear: 'Clear cache',
+      cacheCleared: 'Cache cleared',
       exportData: 'Export listening data',
       exportDataDesc:
         'Export listening progress, stats, and daily records to a file (for data analysis or migration).',

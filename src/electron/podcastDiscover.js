@@ -3,7 +3,7 @@
 // - Apple id → RSS feedUrl：itunes.apple.com/lookup
 // 在主进程抓取以绕过渲染进程的 CORS；proxy:false 直连（交给 Clash TUN 网卡层路由）。
 import axios from 'axios';
-import { ipcMain } from 'electron';
+import { ipcMain, app } from 'electron';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -17,7 +17,87 @@ const HOT_TTL = 6 * 3600 * 1000;
 // Apple id → feedUrl 缓存（基本不变，长期缓存）
 const feedCache = new Map();
 
+// [缓存·C1] 发现榜单持久化：把内存里的 hot/new/apple 缓存落 userData\discover-cache.json，
+//   app 重启后 loadDiscoverCache() 回灌 → 首页/发现页冷启动直接显示上次榜单（再按 6h TTL 后台刷新），
+//   不必每次重启都干等一次网络。主进程 Node14：禁可选链 ?./??，用 && + ||。
+//   写盘防抖（多源同刷合并一次），读写失败一律静默（缓存非关键，绝不影响发现功能）。
+const fs = require('fs');
+const path = require('path');
+let _discoverSaveTimer = null;
+function discoverCacheFile() {
+  try {
+    return path.join(app.getPath('userData'), 'discover-cache.json');
+  } catch (e) {
+    return '';
+  }
+}
+function loadDiscoverCache() {
+  try {
+    const fp = discoverCacheFile();
+    if (!fp || !fs.existsSync(fp)) return;
+    const data = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+    if (data && data.hot && data.hot.items && data.hot.items.length)
+      hotCache = data.hot;
+    if (data && data.new && data.new.items && data.new.items.length)
+      newCache = data.new;
+    if (data && data.apple && data.apple.items && data.apple.items.length)
+      appleCache = data.apple;
+  } catch (e) {
+    // 损坏/读失败 → 忽略，当作无缓存
+  }
+}
+function saveDiscoverCache() {
+  if (_discoverSaveTimer) return; // 防抖：500ms 内多次更新合并一次写盘
+  _discoverSaveTimer = setTimeout(() => {
+    _discoverSaveTimer = null;
+    try {
+      const fp = discoverCacheFile();
+      if (!fp) return;
+      fs.writeFileSync(
+        fp,
+        JSON.stringify({ hot: hotCache, new: newCache, apple: appleCache })
+      );
+    } catch (e) {
+      // 写失败静默（磁盘满/权限），不影响发现功能
+    }
+  }, 500);
+}
+
 export function registerPodcastDiscoverIpc() {
+  // [缓存·C1] 启动即回灌上次落盘的发现榜单 → 冷启动首页/发现页直接有数据
+  loadDiscoverCache();
+
+  // [缓存·C1] 发现缓存占用/年龄（设置页"清理缓存"展示用）
+  ipcMain.handle('podcast:discoverCacheInfo', () => {
+    try {
+      const fp = discoverCacheFile();
+      let bytes = 0;
+      if (fp && fs.existsSync(fp)) bytes = fs.statSync(fp).size;
+      const newest = Math.max(
+        hotCache.ts || 0,
+        newCache.ts || 0,
+        appleCache.ts || 0
+      );
+      return { ok: true, bytes, ts: newest };
+    } catch (e) {
+      return { ok: false, bytes: 0, ts: 0 };
+    }
+  });
+
+  // [缓存·C1] 清空发现缓存（内存 + 落盘文件）；下次进发现页会重新联网抓
+  ipcMain.handle('podcast:clearDiscoverCache', () => {
+    try {
+      hotCache = { ts: 0, items: null };
+      newCache = { ts: 0, items: null };
+      appleCache = { ts: 0, items: null };
+      const fp = discoverCacheFile();
+      if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
   // 抓热门播客榜单
   ipcMain.handle('podcast:fetchHot', async (_e, force) => {
     const now = hotCache.ts; // 注意：Date.now() 在运行时可用
@@ -38,6 +118,7 @@ export function registerPodcastDiscoverIpc() {
       const items = (res.data && res.data.items) || [];
       if (items.length) {
         hotCache = { ts: Date.now(), items };
+        saveDiscoverCache();
       }
       return { ok: true, items };
     } catch (err) {
@@ -68,6 +149,7 @@ export function registerPodcastDiscoverIpc() {
       const items = (res.data && res.data.items) || [];
       if (items.length) {
         newCache = { ts: Date.now(), items };
+        saveDiscoverCache();
       }
       return { ok: true, items };
     } catch (err) {
@@ -125,7 +207,10 @@ export function registerPodcastDiscoverIpc() {
             links: [{ name: 'apple', url: url }],
           };
         });
-      if (items.length) appleCache = { ts: Date.now(), items };
+      if (items.length) {
+        appleCache = { ts: Date.now(), items };
+        saveDiscoverCache();
+      }
       return { ok: true, items };
     } catch (err) {
       if (appleCache.items) {

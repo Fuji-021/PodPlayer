@@ -258,6 +258,13 @@ export default {
       downloadConcurrency: '同時下載集數',
       downloadConcurrencyDesc:
         '批次下載時最多同時進行的下載數（1=依次下載，越大越快但更佔頻寬）',
+      cacheManage: '快取管理',
+      cacheCover: '封面',
+      cacheDiscover: '發現資料',
+      cacheItems: '項',
+      cacheRefresh: '重新整理',
+      cacheClear: '清理快取',
+      cacheCleared: '快取已清理',
       exportData: '匯出收聽資料',
       exportDataDesc:
         '把收聽進度、統計、每日記錄匯出為檔案（可用於資料分析或遷移）',

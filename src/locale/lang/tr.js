@@ -249,6 +249,13 @@ export default {
       downloadConcurrency: 'Concurrent downloads',
       downloadConcurrencyDesc:
         'Maximum number of downloads running at the same time during batch downloads (1 = one at a time; higher is faster but uses more bandwidth).',
+      cacheManage: 'Önbellek',
+      cacheCover: 'Kapaklar',
+      cacheDiscover: 'Keşfet verisi',
+      cacheItems: 'öğe',
+      cacheRefresh: 'Yenile',
+      cacheClear: 'Önbelleği temizle',
+      cacheCleared: 'Önbellek temizlendi',
       exportData: 'Export listening data',
       exportDataDesc:
         'Export listening progress, stats, and daily records to a file (for data analysis or migration).',

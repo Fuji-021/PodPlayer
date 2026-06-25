@@ -334,6 +334,25 @@
         </div>
       </div>
 
+      <!-- [缓存·C1] 缓存管理：占用展示 + 一键清理（封面 / 发现榜单；音频待 C3 接入同一接口） -->
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">{{ $t('settings.pod.cacheManage') }}</div>
+          <div class="description">
+            {{ $t('settings.pod.cacheCover') }}：{{ cacheCoverText }} ·
+            {{ $t('settings.pod.cacheDiscover') }}：{{ cacheDiscoverText }}
+          </div>
+        </div>
+        <div class="right" style="display: flex; gap: 8px">
+          <button @click="refreshCacheStats">
+            {{ $t('settings.pod.cacheRefresh') }}
+          </button>
+          <button @click="clearAllCache">
+            {{ $t('settings.pod.cacheClear') }}
+          </button>
+        </div>
+      </div>
+
       <!-- [T14] 导出收听数据：把收听统计/进度/每日记录导出为 CSV(Excel 可读) 或 JSON(完整备份) -->
       <div class="item">
         <div class="left">
@@ -586,6 +605,11 @@ import defaultShortcuts from '@/utils/shortcuts';
 import pkg from '../../package.json';
 import { db } from '@/utils/db';
 import { setDownloadConcurrency } from '@/utils/podcast/downloads';
+// [缓存·C1] 统一缓存占用统计 + 清理
+import {
+  getCacheBreakdown,
+  clearAllCaches,
+} from '@/utils/podcast/cacheManager';
 // [NAS] 配置中心：多档连接 + 自动发现库 + 一键切换（token 仅主进程）
 import {
   listNasProfiles,
@@ -622,6 +646,11 @@ export default {
         recording: false,
       },
       recordedShortcut: [],
+      // [缓存·C1] 缓存占用（设置页"缓存管理"展示，进页/清理后刷新）
+      cacheStats: {
+        cover: { count: 0, bytes: 0 },
+        discover: { bytes: 0, ts: 0 },
+      },
       // [NAS] 配置中心状态
       nas: {
         enabled: false,
@@ -656,6 +685,21 @@ export default {
     },
     version() {
       return pkg.version;
+    },
+    // [缓存·C1] 占用文本（封面：N 项 / X MB；发现：X KB）
+    cacheCoverText() {
+      const c = this.cacheStats.cover || {};
+      return (
+        (c.count || 0) +
+        ' ' +
+        this.$t('settings.pod.cacheItems') +
+        ' / ' +
+        this.formatBytes(c.bytes || 0)
+      );
+    },
+    cacheDiscoverText() {
+      const d = this.cacheStats.discover || {};
+      return this.formatBytes(d.bytes || 0);
     },
     // [NAS] 当前激活连接档 + 描述
     activeProfile() {
@@ -925,6 +969,7 @@ export default {
       this.getAllOutputDevices();
       this.loadNas();
       this.startNasPoll();
+      this.refreshCacheStats();
     }
   },
   activated() {
@@ -932,6 +977,7 @@ export default {
       this.getAllOutputDevices();
       this.loadNas();
       this.startNasPoll();
+      this.refreshCacheStats();
     }
   },
   deactivated() {
@@ -942,6 +988,38 @@ export default {
   },
   methods: {
     ...mapActions(['showToast']),
+    // [缓存·C1] 占用格式化 + 刷新 + 一键清理（封面 + 发现榜单）
+    formatBytes(b) {
+      const n = Number(b) || 0;
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+      if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+      return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    },
+    async refreshCacheStats() {
+      try {
+        const list = await getCacheBreakdown();
+        const map = {};
+        list.forEach(x => {
+          map[x.key] = x;
+        });
+        this.cacheStats = {
+          cover: map.cover || { count: 0, bytes: 0 },
+          discover: map.discover || { bytes: 0, ts: 0 },
+        };
+      } catch (e) {
+        // 忽略
+      }
+    },
+    async clearAllCache() {
+      try {
+        await clearAllCaches();
+        await this.refreshCacheStats();
+        this.showToast(this.$t('settings.pod.cacheCleared'));
+      } catch (e) {
+        // 忽略
+      }
+    },
     // [T14] 导出收听数据 CSV(Excel 可读·UTF-8 BOM)
     async exportListenStatsCsv() {
       try {
