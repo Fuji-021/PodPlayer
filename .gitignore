@@ -19,6 +19,10 @@ devserve*.log
 # Claude Code 会话/worktree 工作目录（本地工具产物，勿入库）
 .claude/
 
+# 开发过程文档（开发记录/审查报告/方案/TODO/参考素材等内部笔记，不入公开仓库；
+# 真源在独立的 Obsidian 知识库，本地 docs/ 仍保留）
+/docs/
+
 # Editor directories and files
 .idea
 .vscode
