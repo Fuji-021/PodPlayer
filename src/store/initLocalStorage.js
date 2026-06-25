@@ -34,6 +34,8 @@ let localStorage = {
     nasDeviceScope: 'local', // [T1 P1-c] 删档设备范围（local=只本机；shared=多设备共享不删）
     autoCleanCompletedDownloads: false, // [T5] 听完后自动清理已下载单集（默认关，用户主动开启）
     downloadConcurrency: 3, // [C1] 同时下载集数(1-10)，默认 3 = 维持现状(底层 MAX_CONCURRENT)
+    audioCacheEnabled: true, // [C3] 自动缓存"在听未听完"单集音频（默认开；听满60s触发，可在设置关）
+    audioCacheLimit: 2048, // [C3] 音频自动缓存上限(MB)，超出按 LRU 淘汰最久未用(未听完豁免)
     linuxEnableCustomTitlebar: false,
     trayIconTheme: 'auto',
     enabledPlaylistCategories,

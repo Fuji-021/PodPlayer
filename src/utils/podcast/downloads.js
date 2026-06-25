@@ -19,6 +19,12 @@ const _waitQueue = []; // 排队等待的 episode 对象
 // 让"我的下载"能 join 到（done 的 IPC 回包只带 episodeId/filePath/bytesTotal）
 const _metaCache = new Map(); // episodeId → episode 元数据
 
+// [缓存·C3] 自动音频缓存："听满阈值"的在听单集后台缓存到本地、按预算/TTL 淘汰。
+//   复用整条下载管线,仅在 episodeDownloads 行加 auto:true 标记区分"自动缓存"vs"手动下载";
+//   淘汰只动 auto 行、绝不碰手动下载;删除复用 removeDownload(主进程删文件,删失败不删 DB)。
+const _autoSet = new Set(); // 本次发起时标为"自动缓存"的 episodeId(done 时据此写 auto:true)
+const _autoTriggered = new Set(); // 本会话已触发过自动缓存的 episodeId(避免每秒重复判定)
+
 // [B-52] 接口预留：设置层调用以覆盖并发上限（1=队列依次下载，>1=并发）。范围 1~10。
 export function setDownloadConcurrency(n) {
   const v = Number(n);
@@ -60,6 +66,7 @@ async function _doStart(episode) {
     // [bugfix A] invoke 异常未捕获会导致 _activeSet 槽位永久泄漏、队列死锁
     _metaCache.delete(episode.id);
     _activeSet.delete(episode.id);
+    _autoSet.delete(episode.id); // [C3] 清自动缓存标记,防陈旧标记误标后续手动下载
     store.commit('clearDownloadProgress', episode.id);
     store.dispatch('showToast', '下载启动失败：' + ((e && e.message) || ''));
     _pump();
@@ -68,6 +75,7 @@ async function _doStart(episode) {
   if (!res || !res.ok) {
     _metaCache.delete(episode.id);
     _activeSet.delete(episode.id);
+    _autoSet.delete(episode.id); // [C3] 同上
     store.commit('clearDownloadProgress', episode.id);
     store.dispatch('showToast', '下载启动失败：' + ((res && res.error) || ''));
     _pump();
@@ -103,6 +111,9 @@ export function registerDownloadListeners() {
     // 取写入 DB 用的 podcastId（episodeId 格式 `${feedUrl}::${guid}`）
     const idx = p.episodeId.indexOf('::');
     const podcastId = idx > 0 ? p.episodeId.slice(0, idx) : '';
+    // [缓存·C3] 本次是否"自动缓存"发起 → 行打 auto 标记 + lastAccess(供 LRU)
+    const isAuto = _autoSet.has(p.episodeId);
+    _autoSet.delete(p.episodeId);
     try {
       await db.episodeDownloads.put({
         id: p.episodeId,
@@ -111,6 +122,8 @@ export function registerDownloadListeners() {
         bytesTotal: p.bytesTotal || 0,
         status: 'done',
         addedAt: Date.now(),
+        auto: isAuto, // [C3] true=自动缓存(可淘汰)；false/缺=手动下载(永不淘汰)
+        lastAccess: Date.now(),
       });
       // [bugfix B] 同步补写 episodes 表，避免 getDownloaded/Downloading
       // 因 db.episodes.get 为空而被丢条（done 回包不含元数据，取自 _metaCache）
@@ -138,40 +151,59 @@ export function registerDownloadListeners() {
       id: p.episodeId,
       filePath: p.filePath,
     });
-    store.dispatch('showToast', '下载完成');
+    // [C3] 自动缓存静默完成(不打扰)；手动下载照常提示"下载完成"
+    if (!isAuto) store.dispatch('showToast', '下载完成');
     // [B-52] 释放槽位，拉起排队中的下一个
     _activeSet.delete(p.episodeId);
     _pump();
+    // [C3] 自动缓存新增一集 → 跑一次预算淘汰(只淘汰 auto 行,超 2GB 删最久未用的)
+    if (isAuto) evictAudioCache().catch(() => {});
   });
   ipcRenderer.on('podcast:download:error', (_e, p) => {
     if (!p || !p.episodeId) return;
     _metaCache.delete(p.episodeId);
+    const wasAuto = _autoSet.has(p.episodeId); // [C3]
+    _autoSet.delete(p.episodeId); // [C3] 清标记
     store.commit('clearDownloadProgress', p.episodeId);
-    store.dispatch('showToast', '下载失败：' + (p.error || ''));
+    // [C3] 自动缓存失败静默(后台行为、不打扰);手动下载照常提示
+    if (!wasAuto) store.dispatch('showToast', '下载失败：' + (p.error || ''));
     // [B-52] 释放槽位，拉起排队中的下一个
     _activeSet.delete(p.episodeId);
     _pump();
   });
 }
 
-export async function startDownload(episode) {
+export async function startDownload(episode, opts) {
+  opts = opts || {}; // [C3] opts.auto=true 表示"自动缓存"(可被淘汰);手动下载不传
   if (!ipcRenderer) {
-    store.dispatch('showToast', '下载仅在桌面版可用');
+    if (!opts.auto) store.dispatch('showToast', '下载仅在桌面版可用');
     return { ok: false };
   }
   if (!episode || !episode.audioUrl) {
-    store.dispatch('showToast', '该单集没有音频地址');
+    if (!opts.auto) store.dispatch('showToast', '该单集没有音频地址');
     return { ok: false };
   }
+  // [C3·P0修] 手动下载意图永远压过"在途自动缓存"标记：用户手动点下载时(!opts.auto)，
+  //   无论该集是否正在自动缓存(在队/在下/刚完成升级)，都先清掉 _autoSet 标记 → done 时必写
+  //   auto:false(手动、永不淘汰)。否则"自动缓存在途 + 用户手动下载同集"竞态会把手动下载误标可淘汰、后被删盘。
+  if (!opts.auto) _autoSet.delete(episode.id);
   // 已下载就别重启
   const existing = await db.episodeDownloads.get(episode.id);
   if (existing && existing.status === 'done') {
+    // [C3] 用户手动下载一个原本"自动缓存"的集 → 升级为手动(钉住、不再被淘汰)
+    if (!opts.auto && existing.auto) {
+      await db.episodeDownloads
+        .update(episode.id, { auto: false })
+        .catch(() => {});
+    }
     return { ok: true, alreadyDone: true };
   }
-  // 已在下载/排队 → 忽略重复（多选批量时天然去重）
+  // 已在下载/排队 → 忽略重复（多选批量时天然去重；上面已清 _autoSet，手动意图已生效）
   if (_activeSet.has(episode.id) || _waitQueue.some(e => e.id === episode.id)) {
     return { ok: true, already: true };
   }
+  // [C3] 标记本次为自动缓存(done 时据此写 auto:true);失败/取消路径会清除该标记
+  if (opts.auto) _autoSet.add(episode.id);
   // [B-52] 并发上限：达到上限则入队排队(status:'queued')，否则立即下载
   if (_activeSet.size >= MAX_CONCURRENT) {
     _waitQueue.push(episode);
@@ -200,6 +232,7 @@ export async function cancelDownload(episodeId) {
     episodeId,
   });
   _activeSet.delete(episodeId);
+  _autoSet.delete(episodeId); // [C3] 清自动缓存标记
   store.commit('clearDownloadProgress', episodeId);
   _pump();
   return res || { ok: false };
@@ -239,7 +272,8 @@ export async function getDownload(episodeId) {
 //   下载多了明显变慢）→ 改 bulkGet 批量取（与 B-36 详情页同款）。
 export async function getDownloadedEpisodes() {
   const rows = await db.episodeDownloads.toArray();
-  const done = rows.filter(r => r && r.status === 'done');
+  // [C3] 只显"手动下载"(auto!==true);自动缓存不混入"我的下载"页与其存储占用
+  const done = rows.filter(r => r && r.status === 'done' && r.auto !== true);
   const eps = await db.episodes.bulkGet(done.map(r => r.id)).catch(() => []);
   const podIds = [
     ...new Set(
@@ -413,5 +447,149 @@ export async function cleanupCompletedDownloads() {
   } catch (e) {
     console.warn('[downloads] cleanupCompletedDownloads 失败', e);
     return { cleaned: 0 };
+  }
+}
+
+// ============ [缓存·C3] 单集音频自动缓存（在听未听完 + 体积预算 LRU + 空闲 TTL） ============
+
+function _audioCacheEnabled() {
+  // [C3·P2修] 默认开：用 !== false 与设置页 UI 对齐，老用户(localStorage 无此键)也视为开，不出现"UI 显开、实际不缓存"。
+  return !!(
+    store.state.settings && store.state.settings.audioCacheEnabled !== false
+  );
+}
+function _audioCacheBudgetBytes() {
+  const mb =
+    (store.state.settings && store.state.settings.audioCacheLimit) || 2048;
+  return (Number(mb) || 2048) * 1024 * 1024;
+}
+
+// [C3] 听满阈值触发：未关 + 未触发过 + 未已下载/缓存 → 标 auto 后台缓存本集音频。
+//   接受 Player 的 track(netease 形)，内部抽取播客字段;每集每会话只触发一次。失败静默。
+export async function maybeAutoCacheEpisode(track) {
+  if (!_audioCacheEnabled()) return;
+  if (!track || !track.podcastEpisodeId || !track.podcastAudioUrl) return;
+  const id = track.podcastEpisodeId;
+  if (_autoTriggered.has(id)) return;
+  _autoTriggered.add(id);
+  try {
+    const existing = await db.episodeDownloads.get(id);
+    if (existing) return; // 已手动下载 或 已自动缓存 → 不重复
+    const stat = await db.episodeListenStats.get(id).catch(() => null);
+    if (stat && stat.completed) return; // [C3] 已听完不缓存(只缓存"在听未听完")
+    const idx = id.indexOf('::');
+    const podcastId = idx > 0 ? id.slice(0, idx) : '';
+    await startDownload(
+      {
+        id,
+        podcastId,
+        audioUrl: track.podcastAudioUrl,
+        title: track.name || '',
+        coverUrl: (track.al && track.al.picUrl) || '',
+        duration: Math.floor((track.dt || 0) / 1000),
+      },
+      { auto: true }
+    );
+  } catch (e) {
+    // 静默：下次播放该集仍会再判一次（_autoTriggered 仅本会话内）
+  }
+}
+
+// [C3] 播放命中本地即触碰 lastAccess（LRU 用）；仅更新已存在的行、失败静默。
+export function touchDownloadAccess(episodeId) {
+  if (!episodeId) return;
+  db.episodeDownloads
+    .update(episodeId, { lastAccess: Date.now() })
+    .catch(() => {});
+}
+
+// [C3] 自动缓存占用统计（仅 auto 行）。
+export async function getAudioCacheStats() {
+  try {
+    const rows = await db.episodeDownloads.toArray();
+    const auto = rows.filter(r => r && r.status === 'done' && r.auto === true);
+    return {
+      count: auto.length,
+      bytes: auto.reduce((s, r) => s + (r.bytesTotal || 0), 0),
+    };
+  } catch (e) {
+    return { count: 0, bytes: 0 };
+  }
+}
+
+// [C3] 清空自动缓存（仅 auto 行；逐条二次校验 auto===true 再删，复用 removeDownload 安全删除）。
+export async function clearAudioCache() {
+  try {
+    const rows = await db.episodeDownloads.toArray();
+    const auto = rows.filter(r => r && r.auto === true);
+    let cleared = 0;
+    for (const r of auto) {
+      const row = await db.episodeDownloads.get(r.id);
+      if (!row || row.auto !== true) continue; // 二次校验：绝不误删手动下载
+      const res = await removeDownload(r.id);
+      if (!res || res.ok !== false) cleared++;
+    }
+    return { cleared };
+  } catch (e) {
+    return { cleared: 0 };
+  }
+}
+
+// [C3] 淘汰引擎（仅动 auto 行，手动下载永不碰）：
+//   TTL(辅)：听完 且 lastAccess 超 7 天 → 主动清回收空间(未听完豁免、不 TTL 删)；
+//   体积(主)：仍超预算 → 先删"听完的"(LRU)、不够再删"未听完的"(LRU，最后手段)。
+//   删除复用 removeDownload(主进程删文件、删失败不删 DB) + 逐条二次校验 auto===true。
+export async function evictAudioCache() {
+  try {
+    const rows = await db.episodeDownloads.toArray();
+    const auto = rows.filter(r => r && r.status === 'done' && r.auto === true);
+    if (!auto.length) return { evicted: 0 };
+    const ids = auto.map(r => r.id);
+    const stats = await db.episodeListenStats.bulkGet(ids).catch(() => []);
+    const completed = {};
+    auto.forEach((r, i) => {
+      completed[r.id] = !!(stats[i] && stats[i].completed);
+    });
+    const now = Date.now();
+    const TTL = 7 * 24 * 3600 * 1000;
+    const la = r => r.lastAccess || r.addedAt || 0;
+    const bytesOf = r => r.bytesTotal || 0;
+    const budget = _audioCacheBudgetBytes();
+    let total = auto.reduce((s, r) => s + bytesOf(r), 0);
+
+    const delIds = new Set();
+    // (1) TTL：听完 + 超 7 天 → 删（未听完豁免）
+    auto.forEach(r => {
+      if (completed[r.id] && now - la(r) > TTL) {
+        delIds.add(r.id);
+        total -= bytesOf(r);
+      }
+    });
+    // (2) 体积：仍超预算 → 听完的(LRU)先删、再未听完的(LRU)
+    if (total > budget) {
+      const remain = auto.filter(r => !delIds.has(r.id));
+      const byLru = (a, b) => la(a) - la(b);
+      const order = remain
+        .filter(r => completed[r.id])
+        .sort(byLru)
+        .concat(remain.filter(r => !completed[r.id]).sort(byLru));
+      for (const r of order) {
+        if (total <= budget) break;
+        delIds.add(r.id);
+        total -= bytesOf(r);
+      }
+    }
+    // 执行删除：逐条二次校验 auto===true（防 scan→delete 间被用户钉为手动）
+    let evicted = 0;
+    for (const id of delIds) {
+      const row = await db.episodeDownloads.get(id);
+      if (!row || row.auto !== true) continue;
+      const res = await removeDownload(id);
+      if (!res || res.ok !== false) evicted++;
+    }
+    return { evicted };
+  } catch (e) {
+    console.warn('[downloads] evictAudioCache 失败', e);
+    return { evicted: 0 };
   }
 }

@@ -9,6 +9,11 @@ import { isAccountLoggedIn } from '@/utils/auth';
 import { cacheTrackSource, getTrackSource } from '@/utils/db';
 // [播客改造 S-1] 单集进度按集保存：用 Dexie 的 episodeProgress 表
 import { saveEpisodeProgress, getEpisodeProgress } from '@/utils/podcast/db';
+// [缓存·C3] 自动音频缓存：听满阈值触发缓存 + 播放命中本地触碰 lastAccess
+import {
+  maybeAutoCacheEpisode,
+  touchDownloadAccess,
+} from '@/utils/podcast/downloads';
 // [NAS] 音源②级：本地未命中→NAS 在线则解析流URL，失败/不可用返回 null 直落 CDN
 import {
   resolveNasUrl,
@@ -450,6 +455,11 @@ export default class {
           Math.floor(this._progress)
         ).catch(() => {});
 
+        // [缓存·C3] 听满 60s 且在播 → 自动缓存本集音频(内部判设置开关/未听完/未缓存/每集每会话一次)
+        if (this._playing && this._progress > 60) {
+          maybeAutoCacheEpisode(t);
+        }
+
         // [播客改造] 真实收听统计：每秒 tick
         if (this._playing) {
           const sec = Math.floor(this._progress);
@@ -848,6 +858,7 @@ export default class {
           {};
         const fp = pathMap[track.podcastEpisodeId];
         if (fp) {
+          touchDownloadAccess(track.podcastEpisodeId); // [C3] 播放命中本地→刷新 lastAccess(LRU)
           const norm = String(fp).replace(/\\/g, '/').replace(/^\/+/, '');
           return Promise.resolve('file:///' + norm); // ① 本地已下载，最高优先级
         }

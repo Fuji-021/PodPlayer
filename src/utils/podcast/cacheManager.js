@@ -4,6 +4,7 @@
 //   返回的 breakdown 用稳定 key（cover/discover），标签由 UI 按 key 翻译，故本模块不依赖 i18n。
 //   本目录(utils/podcast)禁可选链 ?./??，统一用 && + ||。
 import { getCoverCacheStats, clearCoverCache } from './coverCache';
+import { getAudioCacheStats, clearAudioCache } from './downloads';
 
 const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
@@ -23,15 +24,21 @@ async function discoverStats() {
 export async function getCacheBreakdown() {
   const cover = await getCoverCacheStats();
   const disc = await discoverStats();
+  const audio = await getAudioCacheStats(); // [C3] 自动音频缓存
   return [
     { key: 'cover', count: cover.count, bytes: cover.bytes },
     { key: 'discover', bytes: disc.bytes, ts: disc.ts },
+    { key: 'audio', count: audio.count, bytes: audio.bytes },
   ];
 }
 
 export async function clearCache(key) {
   if (key === 'cover') {
     await clearCoverCache();
+    return;
+  }
+  if (key === 'audio') {
+    await clearAudioCache(); // [C3] 只清 auto 行(二次校验,不碰手动下载)
     return;
   }
   if (key === 'discover' && ipcRenderer) {
@@ -46,4 +53,5 @@ export async function clearCache(key) {
 export async function clearAllCaches() {
   await clearCache('cover');
   await clearCache('discover');
+  await clearCache('audio');
 }

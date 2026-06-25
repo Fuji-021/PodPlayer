@@ -268,6 +268,11 @@ export default {
       cacheRefresh: '刷新',
       cacheClear: '清理缓存',
       cacheCleared: '缓存已清理',
+      cacheAudio: '音频',
+      audioCacheToggle: '自动缓存在听单集',
+      audioCacheDesc:
+        '听满约 1 分钟的未听完单集后台缓存到本地，切回时秒续播；超出上限按最久未用淘汰（未听完的保留）',
+      audioCacheLimit: '音频缓存上限',
       exportData: '导出收听数据',
       exportDataDesc:
         '把收听进度、统计、每日记录导出为文件（可用于数据分析或迁移）',

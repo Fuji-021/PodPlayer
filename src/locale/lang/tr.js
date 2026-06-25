@@ -256,6 +256,11 @@ export default {
       cacheRefresh: 'Yenile',
       cacheClear: 'Önbelleği temizle',
       cacheCleared: 'Önbellek temizlendi',
+      cacheAudio: 'Ses',
+      audioCacheToggle: 'Dinlenen bölümleri otomatik önbelleğe al',
+      audioCacheDesc:
+        'Yaklaşık 1 dk dinlediğin (ve bitirmediğin) bölümler yerele önbelleğe alınır, böylece kaldığın yerden anında devam edersin; sınır aşılınca en az kullanılanlar silinir (bitmeyenler korunur).',
+      audioCacheLimit: 'Ses önbellek sınırı',
       exportData: 'Export listening data',
       exportDataDesc:
         'Export listening progress, stats, and daily records to a file (for data analysis or migration).',

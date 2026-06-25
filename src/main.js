@@ -199,6 +199,13 @@ setTimeout(() => {
     .catch(() => {});
 }, 7000);
 
+// [缓存·C3] 启动后空闲跑一次音频缓存淘汰：听完+超7天 TTL 回收 + 超 2GB 预算按 LRU 淘汰
+//   (只动 auto 行、未听完豁免)。延迟到启动稳定后、低优先、失败静默。
+import { evictAudioCache } from '@/utils/podcast/downloads';
+setTimeout(() => {
+  evictAudioCache().catch(() => {});
+}, 9000);
+
 new Vue({
   i18n,
   store,

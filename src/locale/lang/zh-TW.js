@@ -265,6 +265,11 @@ export default {
       cacheRefresh: '重新整理',
       cacheClear: '清理快取',
       cacheCleared: '快取已清理',
+      cacheAudio: '音訊',
+      audioCacheToggle: '自動快取在聽單集',
+      audioCacheDesc:
+        '聽滿約 1 分鐘的未聽完單集背景快取到本機，切回時秒續播；超出上限按最久未用淘汰（未聽完的保留）',
+      audioCacheLimit: '音訊快取上限',
       exportData: '匯出收聽資料',
       exportDataDesc:
         '把收聽進度、統計、每日記錄匯出為檔案（可用於資料分析或遷移）',

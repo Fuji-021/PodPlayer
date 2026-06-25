@@ -270,6 +270,11 @@ export default {
       cacheRefresh: 'Refresh',
       cacheClear: 'Clear cache',
       cacheCleared: 'Cache cleared',
+      cacheAudio: 'Audio',
+      audioCacheToggle: 'Auto-cache episodes you are listening to',
+      audioCacheDesc:
+        'Episodes you have played for ~1 min (and not finished) are cached locally so resuming is instant; least-recently-used are evicted over the limit (unfinished are kept).',
+      audioCacheLimit: 'Audio cache limit',
       exportData: 'Export listening data',
       exportDataDesc:
         'Export listening progress, stats, and daily records to a file (for data analysis or migration).',

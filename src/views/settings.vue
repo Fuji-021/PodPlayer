@@ -334,13 +334,14 @@
         </div>
       </div>
 
-      <!-- [缓存·C1] 缓存管理：占用展示 + 一键清理（封面 / 发现榜单；音频待 C3 接入同一接口） -->
+      <!-- [缓存·C1/C3] 缓存管理：占用展示(封面/发现/音频) + 一键清理 -->
       <div v-if="isElectron" class="item">
         <div class="left">
           <div class="title">{{ $t('settings.pod.cacheManage') }}</div>
           <div class="description">
             {{ $t('settings.pod.cacheCover') }}：{{ cacheCoverText }} ·
-            {{ $t('settings.pod.cacheDiscover') }}：{{ cacheDiscoverText }}
+            {{ $t('settings.pod.cacheDiscover') }}：{{ cacheDiscoverText }} ·
+            {{ $t('settings.pod.cacheAudio') }}：{{ cacheAudioText }}
           </div>
         </div>
         <div class="right" style="display: flex; gap: 8px">
@@ -350,6 +351,41 @@
           <button @click="clearAllCache">
             {{ $t('settings.pod.cacheClear') }}
           </button>
+        </div>
+      </div>
+
+      <!-- [缓存·C3] 自动缓存在听单集（听满约1分钟的未听完单集后台缓存到本地，切回秒续播） -->
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">{{ $t('settings.pod.audioCacheToggle') }}</div>
+          <div class="description">
+            {{ $t('settings.pod.audioCacheDesc') }}
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="audio-cache-enabled"
+              v-model="audioCacheEnabled"
+              type="checkbox"
+              name="audio-cache-enabled"
+            />
+            <label for="audio-cache-enabled"></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- [缓存·C3] 音频缓存上限：超出按 LRU 淘汰最久未用（未听完豁免） -->
+      <div v-if="isElectron && audioCacheEnabled" class="item">
+        <div class="left">
+          <div class="title">{{ $t('settings.pod.audioCacheLimit') }}</div>
+        </div>
+        <div class="right">
+          <select v-model.number="audioCacheLimit">
+            <option :value="1024">1 GB</option>
+            <option :value="2048">2 GB</option>
+            <option :value="5120">5 GB</option>
+          </select>
         </div>
       </div>
 
@@ -650,6 +686,7 @@ export default {
       cacheStats: {
         cover: { count: 0, bytes: 0 },
         discover: { bytes: 0, ts: 0 },
+        audio: { count: 0, bytes: 0 },
       },
       // [NAS] 配置中心状态
       nas: {
@@ -700,6 +737,39 @@ export default {
     cacheDiscoverText() {
       const d = this.cacheStats.discover || {};
       return this.formatBytes(d.bytes || 0);
+    },
+    cacheAudioText() {
+      const a = this.cacheStats.audio || {};
+      return (
+        (a.count || 0) +
+        ' ' +
+        this.$t('settings.pod.cacheItems') +
+        ' / ' +
+        this.formatBytes(a.bytes || 0)
+      );
+    },
+    // [C3] 自动音频缓存开关 + 上限(MB)
+    audioCacheEnabled: {
+      get() {
+        return this.settings.audioCacheEnabled !== false;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'audioCacheEnabled',
+          value: !!value,
+        });
+      },
+    },
+    audioCacheLimit: {
+      get() {
+        return this.settings.audioCacheLimit || 2048;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'audioCacheLimit',
+          value: Number(value) || 2048,
+        });
+      },
     },
     // [NAS] 当前激活连接档 + 描述
     activeProfile() {
@@ -1006,6 +1076,7 @@ export default {
         this.cacheStats = {
           cover: map.cover || { count: 0, bytes: 0 },
           discover: map.discover || { bytes: 0, ts: 0 },
+          audio: map.audio || { count: 0, bytes: 0 },
         };
       } catch (e) {
         // 忽略
