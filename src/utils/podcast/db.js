@@ -3,9 +3,46 @@
 import Dexie from 'dexie';
 import { db } from '@/utils/db';
 
+// [封面闪烁修] 节目行会话内存层：DiscoverCard 首帧需同步拿到 DB 封面，避免"目录 logo 版→DB 版"二次淡入闪烁。
+//   仅缓存 getPodcast/warmPodcastMem 读到的行；coverUrl 经 upsertPodcast 与 updatePodcast(订阅刷新封面同步)
+//   变更，两处 + 删除处都失效，故契约完备。纯会话内存(重启自清)；整库恢复(backup.js)后 clearPodcastMem 兜底。
+//   影响仅 DiscoverCard 封面观感、无数据风险。返回的是共享引用，调用方只读勿改。
+const _podMem = new Map();
+export function peekPodcast(id) {
+  if (!id) return null;
+  return _podMem.has(id) ? _podMem.get(id) : null;
+}
+export function clearPodcastMem() {
+  _podMem.clear();
+}
+// [封面闪烁修] 批量把若干节目行预热进 _podMem(Dexie bulkGet 一次)，使 DiscoverCard 首帧 peekPodcast 同步命中、
+//   首次翻到已订阅项也直接用 DB 封面(不二次淡入)。只填未命中的、静默失败回退各自的异步 getPodcast 原路径。
+export async function warmPodcastMem(ids) {
+  if (!ids || !ids.length) return;
+  const seen = {};
+  const need = [];
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (id && !seen[id] && !_podMem.has(id)) {
+      seen[id] = 1;
+      need.push(id);
+    }
+  }
+  if (!need.length) return;
+  try {
+    const rows = await db.podcasts.bulkGet(need);
+    for (let j = 0; j < rows.length; j++) {
+      if (rows[j]) _podMem.set(need[j], rows[j]);
+    }
+  } catch (e) {
+    /* 静默：失败则各卡片回退异步 getPodcast */
+  }
+}
+
 // === 订阅 ===
 
 export function upsertPodcast(podcast) {
+  if (podcast && podcast.id) _podMem.delete(podcast.id); // 失效会话内存层(coverUrl 等可能变)
   return db.podcasts.put({ ...podcast, updatedAt: Date.now() });
 }
 
@@ -13,6 +50,7 @@ export function upsertPodcast(podcast) {
 //   用途：订阅刷新写"新单集数 newCount"角标；进节目详情时清零。
 //   newCount 不是索引字段，Dexie 可直接存，无需升 schema 版本。
 export function updatePodcast(id, patch) {
+  if (id) _podMem.delete(id); // [封面闪烁修] 失效会话内存层(此处可能改 coverUrl，如订阅刷新的封面同步)
   return db.podcasts.update(id, patch || {});
 }
 
@@ -75,7 +113,10 @@ export async function getPodcastsByIds(ids) {
 }
 
 export function getPodcast(id) {
-  return db.podcasts.get(id);
+  return db.podcasts.get(id).then(p => {
+    if (p && id) _podMem.set(id, p); // 填会话内存层，供 peekPodcast 同步命中
+    return p;
+  });
 }
 
 // [B-55/B56-2] 取消订阅 = 软删：只把 podcasts 记录置 subscribed:false，**不删 episodes / 收听统计**。
@@ -127,6 +168,7 @@ export async function prunePreviewOrphans(opts = {}) {
       // 纯预览孤儿 → 删单集 + 节目记录
       const n = await db.episodes.where('podcastId').equals(pid).delete();
       await db.podcasts.delete(pid);
+      _podMem.delete(pid); // 失效会话内存层
       episodesDeleted += n || 0;
       pruned += 1;
     } catch (e) {

@@ -13,6 +13,7 @@
       <!-- 借鉴原项目 Cover：封面图自身虚化倒影光晕（所有位置封面一致的"背景的那个光"） -->
       <div
         class="cover-shadow"
+        :class="{ ready: shadowReady }"
         :style="cover ? { backgroundImage: `url(${cover})` } : {}"
       ></div>
       <div class="cover-wrap">
@@ -76,7 +77,7 @@ import {
   httpsify,
 } from '@/utils/podcast/discover';
 import { deletePodcast } from '@/utils/podcast/service';
-import { getPodcast } from '@/utils/podcast/db';
+import { getPodcast, peekPodcast } from '@/utils/podcast/db';
 
 export default {
   name: 'DiscoverCard',
@@ -93,6 +94,8 @@ export default {
       autoTimer: null,
       // 已订阅时从本地 DB 读到的封面（覆盖目录 logo，保证与详情/我的订阅一致）
       dbCover: '',
+      // [封面闪烁修] 辉光底图就绪态：随前景封面 @load 同步淡入，避免翻页瞬间硬切露出旧/异版辉光
+      shadowReady: false,
     };
   },
   computed: {
@@ -142,14 +145,36 @@ export default {
     coverFeedUrl: {
       immediate: true,
       handler(f) {
-        this.dbCover = '';
-        if (!f) return;
+        // [封面闪烁修·症状2] 先同步窥探会话内存层：命中则首帧 cover 即 DB 版，
+        //   不再"先显目录 logo 版(可能白底)→异步切 DB 版"的二次淡入(故事FM 白底成因)。
+        const hit = f ? peekPodcast(f) : null;
+        this.dbCover = (hit && hit.coverUrl) || '';
+        if (!f || (hit && hit.coverUrl)) return;
         getPodcast(f)
           .then(p => {
             if (p && p.coverUrl && f === this.coverFeedUrl)
               this.dbCover = p.coverUrl;
           })
           .catch(() => {});
+      },
+    },
+    // [封面闪烁修] 辉光底图随"自身 url"就绪再淡入：不借前景 @load——前景与辉光是两条独立加载，
+    //   命中缓存/dbCover 时前景可能早于辉光 background 解码，借前景会让"空辉光"提前淡入露残影。
+    //   用隐藏 Image 预载同一 url(浏览器与 background-image 复用同一解码、零额外网络)，onload 才点亮。
+    cover: {
+      immediate: true,
+      handler(url) {
+        this.shadowReady = false;
+        if (!url) return;
+        const u = url;
+        const probe = new Image();
+        probe.onload = () => {
+          if (u === this.cover) this.shadowReady = true;
+        };
+        probe.onerror = () => {
+          if (u === this.cover) this.shadowReady = true; // 失败也放行，不卡住辉光
+        };
+        probe.src = u;
       },
     },
   },
@@ -336,8 +361,9 @@ export default {
   &:hover .cover-box {
     transform: translateY(-4px) scale(1.02);
   }
-  &:hover .cover-shadow {
-    filter: blur(20px) opacity(0.6);
+  &:hover .cover-shadow.ready {
+    filter: blur(20px);
+    opacity: 0.6;
   }
   &:hover .act-btn {
     opacity: 1;
@@ -361,11 +387,17 @@ export default {
   border-radius: 12px;
   background-size: cover;
   background-position: center;
-  filter: blur(16px) opacity(0.45);
+  filter: blur(16px);
+  // [封面闪烁修] 透明度从 filter 移到 opacity → 可随 .ready 与前景封面同步淡入；
+  //   未就绪(opacity:0)时辉光不显，翻页瞬间不再硬切露出旧/异版辉光底图。
+  opacity: 0;
   transform: scale(0.92);
   z-index: 0;
-  transition: filter 0.25s;
+  transition: filter 0.25s, opacity 0.25s;
   will-change: transform;
+}
+.cover-shadow.ready {
+  opacity: 0.45;
 }
 .cover-wrap {
   position: relative;

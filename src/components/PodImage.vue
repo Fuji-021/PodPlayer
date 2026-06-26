@@ -68,11 +68,13 @@ export default {
   methods: {
     // 解析当前应显示的封面地址：同步内存命中用本地图；否则先挂原图、异步查 Dexie 命中则换本地图。
     resolveSrc() {
-      this.loaded = false;
       this.failed = false; // [修] R13：换 src 重置失败态，给新封面正常加载机会。
       const url = this.normalizedSrc;
       const cached = peekCachedCover(url); // 会话内存命中 → 直接本地图，零网络、零闪
       this.displaySrc = cached || url;
+      // [封面闪烁修] 命中本地 dataURL → 立即 opacity:1 显示(本地解码即时)，不再白白从 0 淡入造成暗块/错峰；
+      //   远程 url → loaded=false，等 @load 再淡入(隐藏 progressive JPEG 逐行解码，原行为不变)。
+      this.loaded = !!cached;
       this.$nextTick(() => {
         // 父组件在 @error 时会给本 <img> 写 inline opacity(0/0.15)，inline 优先级高于 class
         // → 换 src 后新封面仍被旧的 inline opacity 压住隐身。换图时清掉，让 class 控制淡入。
@@ -87,8 +89,28 @@ export default {
         if (data && data !== this.displaySrc && !this.loaded) {
           this.failed = false;
           this.displaySrc = data;
+          this.loaded = true; // [封面闪烁修] Dexie 命中也即时显示，不二次淡入
         }
       });
+    },
+    // [封面闪烁修] 落盘(canvas 编码)挪到空闲帧 + 二次校验：翻页整页 @load 时刻聚集，原来同步编码 ~24 张
+    //   会与各图淡入抢主线程致错峰卡顿。延迟回调里若组件已卸载/换 src/变占位块则跳过，绝不对失效 el 操作。
+    _persistCover(url) {
+      const run = () => {
+        if (
+          this.normalizedSrc === url &&
+          this.displaySrc === url &&
+          this.$el &&
+          this.$el.tagName === 'IMG'
+        ) {
+          cacheCoverFromImg(url, this.$el);
+        }
+      };
+      if (window.requestIdleCallback) {
+        window.requestIdleCallback(run, { timeout: 800 });
+      } else {
+        setTimeout(run, 0);
+      }
     },
     onLoad(e) {
       this.loaded = true;
@@ -98,7 +120,7 @@ export default {
         this.$el &&
         this.$el.tagName === 'IMG'
       ) {
-        cacheCoverFromImg(this.normalizedSrc, this.$el);
+        this._persistCover(this.normalizedSrc);
       }
       this.$emit('load', e);
     },
@@ -113,7 +135,7 @@ export default {
         this.loaded = true;
         // HTTP 缓存命中时 @load 可能早于监听挂上 → 这里补一次封面持久化（与 onLoad 同条件）。
         if (this.displaySrc === this.normalizedSrc) {
-          cacheCoverFromImg(this.normalizedSrc, el);
+          this._persistCover(this.normalizedSrc);
         }
       }
     },

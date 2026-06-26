@@ -7,6 +7,7 @@
 //   备份发生在清空之后才同样为空)。
 import { db } from '@/utils/db';
 import { exportSubscriptionsOpml } from '@/utils/podcast/service';
+import { clearPodcastMem } from '@/utils/podcast/db';
 
 const ipcRenderer = window.require
   ? window.require('electron').ipcRenderer
@@ -108,6 +109,7 @@ export async function restoreFromLatestBackup() {
   await db.episodeListenStats.bulkPut(stats);
   await db.listenDaily.bulkPut(arr('listenDaily'));
   await db.episodeDownloads.bulkPut(arr('episodeDownloads'));
+  clearPodcastMem(); // [封面闪烁修] 整库 bulkPut 绕过 upsert/update 失效出口 → 清会话内存层防过期封面
   return {
     from: res.name,
     podcasts: arr('podcasts').length,

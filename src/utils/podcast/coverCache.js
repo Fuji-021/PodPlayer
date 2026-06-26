@@ -20,6 +20,7 @@ import { db } from '@/utils/db';
 
 const _mem = new Map(); // url -> dataURL（会话内同步命中，免重复 Dexie 读）
 const _pendingGet = new Map(); // url -> Promise<string|null>（Dexie 在途读去重）
+const _warming = new Set(); // url（warmCovers 的 new Image() 在途去重，防快速连翻堆叠重复请求）
 
 const MAX_DIM = 360; // 显示档：封面卡最大 ~180px，2x 高清屏 360px 足够清晰，体积可控
 const JPEG_Q = 0.82;
@@ -103,6 +104,62 @@ function pruneCoverCache() {
     .finally(() => {
       _pruning = false;
     });
+}
+
+// [封面闪烁修] 批量预热一组封面 url：先 getCachedCover 暖 _mem(下次 peekCachedCover 同步命中→即时显示零淡入)，
+//   Dexie 未命中的用 new Image()(不插 DOM)暖浏览器 HTTP 缓存、onload 顺手 cacheCoverFromImg 落盘。
+//   小并发池防一次整页并发挤带宽。全程静默不抛、不阻塞渲染。url 须与展示同口径(httpsify(hiResLogo(...)))才命中同一 key。
+export function warmCovers(urls) {
+  if (!urls || !urls.length) return;
+  const seen = {};
+  const list = [];
+  for (let i = 0; i < urls.length; i++) {
+    const u = urls[i];
+    if (u && !seen[u]) {
+      seen[u] = 1;
+      list.push(u);
+    }
+  }
+  let idx = 0;
+  const POOL = 5;
+  const next = () => {
+    if (idx >= list.length) return;
+    const url = list[idx++];
+    getCachedCover(url)
+      .then(data => {
+        if (data) {
+          next();
+          return;
+        }
+        if (_warming.has(url)) {
+          next();
+          return;
+        }
+        try {
+          _warming.add(url);
+          const img = new Image();
+          img.onload = () => {
+            _warming.delete(url);
+            try {
+              cacheCoverFromImg(url, img);
+            } catch (e) {
+              /* ignore */
+            }
+            next();
+          };
+          img.onerror = () => {
+            _warming.delete(url);
+            next();
+          };
+          img.src = url;
+        } catch (e) {
+          _warming.delete(url);
+          next();
+        }
+      })
+      .catch(() => next());
+  };
+  for (let k = 0; k < Math.min(POOL, list.length); k++) next();
 }
 
 // [缓存·C1] 统计封面缓存占用（项数 + 近似字节 = 各 dataURL 字符串长度之和），供设置页"清理缓存"展示。
