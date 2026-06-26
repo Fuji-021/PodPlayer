@@ -14,6 +14,9 @@ export default {
   showLyrics: false,
   enableScrolling: true,
   title: 'PodPlayer',
+  // [快捷键冲突高亮] 全局快捷键注册失败的 shortcut id 列表(被其它应用/系统占用或非法组合)；
+  //   主进程每次注册后回报(成功也回报空数组以清除旧高亮)，设置页据此对应行标红提示。瞬态、不持久化。
+  failedGlobalShortcuts: [],
   liked: {
     songs: [],
     songsWithDetails: [], // 只有前12首

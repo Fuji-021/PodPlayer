@@ -134,6 +134,10 @@ export default {
   updateSettings(state, { key, value }) {
     state.settings[key] = value;
   },
+  // [快捷键冲突高亮] 记录全局快捷键注册失败的 id 列表(设置页据此标红)。每次注册后由主进程回报覆盖(可为空)。
+  updateFailedGlobalShortcuts(state, ids) {
+    state.failedGlobalShortcuts = Array.isArray(ids) ? ids : [];
+  },
   updateData(state, { key, value }) {
     state.data[key] = value;
   },

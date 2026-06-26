@@ -126,12 +126,18 @@ export function ipcRenderer(vueInstance) {
     player.switchRepeatMode();
   });
 
-  // [操作#15/#2b] 全局快捷键注册失败(被其它应用/系统占用，或非法组合) → 弹 toast 提示，不再静默失灵。
+  // [操作#15/#2b][快捷键冲突高亮] 全局快捷键注册失败(被其它应用/系统占用，或非法组合)：
+  //   ① 把失败的 shortcut id 存进 store → 设置页对应"全局"键标红；② 有失败时弹 toast。
+  //   list 为 [{id, name}](改键成功后为空数组 → 清掉旧红高亮)。
   ipcRenderer.on('globalShortcutRegisterFailed', (event, list) => {
-    if (list && list.length) {
+    const arr = list || [];
+    const ids = arr.map(x => (x && x.id) || '').filter(Boolean);
+    store.commit('updateFailedGlobalShortcuts', ids);
+    if (arr.length) {
+      const names = arr.map(x => (x && x.name) || x).filter(Boolean);
       store.dispatch(
         'showToast',
-        `快捷键 ${list.join('、')} 注册失败（被其它应用占用或非法组合）`
+        `快捷键 ${names.join('、')} 注册失败（被其它应用占用或非法组合）`
       );
     }
   });

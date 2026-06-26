@@ -270,6 +270,9 @@ export default {
       audioCacheDesc:
         '聽滿約 1 分鐘的未聽完單集背景快取到本機，切回時秒續播；超出上限按最久未用淘汰（未聽完的保留）',
       audioCacheLimit: '音訊快取上限',
+      sleepShutdown: '睡眠定時到點後關機',
+      sleepShutdownDesc:
+        '開啟後睡眠定時到點會先暫停再關機（有 60 秒可取消倒數，絕不誤關）；僅 Windows',
       exportData: '匯出收聽資料',
       exportDataDesc:
         '把收聽進度、統計、每日記錄匯出為檔案（可用於資料分析或遷移）',

@@ -261,6 +261,9 @@ export default {
       audioCacheDesc:
         'Yaklaşık 1 dk dinlediğin (ve bitirmediğin) bölümler yerele önbelleğe alınır, böylece kaldığın yerden anında devam edersin; sınır aşılınca en az kullanılanlar silinir (bitmeyenler korunur).',
       audioCacheLimit: 'Ses önbellek sınırı',
+      sleepShutdown: 'Uyku zamanlayıcı bitince bilgisayarı kapat',
+      sleepShutdownDesc:
+        'Açıkken uyku zamanlayıcı dolunca duraklatır ve Windows’u kapatır (60 sn iptal edilebilir geri sayım). Yalnızca Windows.',
       exportData: 'Export listening data',
       exportDataDesc:
         'Export listening progress, stats, and daily records to a file (for data analysis or migration).',

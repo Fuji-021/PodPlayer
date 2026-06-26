@@ -410,6 +410,21 @@ export default class {
     }
     return Promise.all(tasks).catch(() => {});
   }
+  // [睡眠到点关机] 先 flush(收听缓冲+当前进度)落盘，再请求主进程关机。
+  //   主进程仅 Windows、且仅 prod 真关机(dev/sandbox 干跑)。返回 {ok,dryRun?} 供 UI 提示。
+  async requestSystemShutdown() {
+    try {
+      await this.flushBeforeExit();
+    } catch (e) {
+      /* flush 失败也继续，别卡住关机意图 */
+    }
+    if (!ipcRenderer) return { ok: false, reason: 'no-ipc' };
+    try {
+      return await ipcRenderer.invoke('podcast:systemShutdown');
+    } catch (e) {
+      return { ok: false, reason: String((e && e.message) || e) };
+    }
+  }
   _setIntervals() {
     // 同步播放进度
     // TODO: 如果 _progress 在别的地方被改变了，
@@ -1756,6 +1771,13 @@ export default class {
     this._lastListenStep = -1;
     this._lastListenCompleted = false;
 
+    // [进度条·重开根因修] 立即把"显示进度"置为续播位置 savedPos：
+    //   重启时走 autoplay=false，howler 未播放(且 html5 未必预载触发 'load')→ _progress 原停在 0
+    //   → 进度条无填充、播放时间显 0:00，必须点播放、howler 起播后 tick 才更新 = 用户报的"重开进度条/时间没有"。
+    //   D141「重开重挂」只解决了轨道宽度测量、没恢复进度值，故没修彻底。这里同步置位，让重开即显示上次位置；
+    //   _setIntervals 的 tick 在 howler 未 loaded 时不写 _progress(有 state 守卫)，不会把这里覆盖回 0；
+    //   起播后 once('load') 会再 seek 到同一 savedPos，两者一致、无冲突。autoplay=true 亦无害。
+    this._progress = savedPos;
     // [S1 修复 bug-B] seek 逻辑下沉到 _playAudioSource 内部，
     // 保证注册在**新** howler 上（之前因为竞争注册到旧 howler，永远不触发）
     return await this._replaceCurrentTrackAudio(

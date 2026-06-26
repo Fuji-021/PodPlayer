@@ -192,7 +192,10 @@ export default {
       nasState: { enabled: false, alive: false },
       // [导航高亮] 当前所在顶层区(home/library)；进节目/单集详情(/library 子页)保持不变
       //   → 高亮不在进详情后消失，且反映"从首页还是我的订阅进来的"。
-      navSection: 'home',
+      //   [刷新高亮修] 持久化到 localStorage：在详情页刷新/reload(如 db 自愈)时 data 会重置为默认，
+      //   而路由是 podcastDetail(非 home/library)、watcher 不纠正 → 高亮错回首页。恢复上次区即正确。
+      navSection:
+        localStorage.getItem('navSection') === 'library' ? 'library' : 'home',
     };
   },
   computed: {
@@ -249,6 +252,8 @@ export default {
         const n = this.$route.name;
         if (n === 'home') this.navSection = 'home';
         else if (n === 'library') this.navSection = 'library';
+        // [刷新高亮修] 持久化当前区，供详情页刷新/reload 后恢复正确高亮(详情路由保持不变、不覆盖)
+        localStorage.setItem('navSection', this.navSection);
       },
     },
   },

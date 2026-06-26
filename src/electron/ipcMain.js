@@ -4,7 +4,8 @@ import { registerGlobalShortcut } from '@/electron/globalShortcut';
 import cloneDeep from 'lodash/cloneDeep';
 import shortcuts from '@/utils/shortcuts';
 import { createMenu } from './menu';
-import { isCreateTray, isMac } from '@/utils/platform';
+import { isCreateTray, isMac, isWindows } from '@/utils/platform';
+import { spawn } from 'child_process';
 
 const clc = require('cli-color');
 const log = text => {
@@ -247,6 +248,37 @@ export function initIpcMain(win, store, trayEventEmitter) {
       }
     }
   );
+
+  // [睡眠到点关机] 渲染端(睡眠倒计时归零、已 flush 落盘)→主进程执行 Windows 关机。
+  //   ① 仅 Windows；② 非 prod(dev/sandbox)只打日志干跑、绝不真关机(供安全验证，用户不必冒险真关)；
+  //   ③ prod(打包版/PODPLAYER_PROFILE=prod)才真执行 `shutdown /s /t 0`——不加 /f：让系统优雅请求各应用
+  //   退出、不强杀别的程序丢数据(应用内已给可取消倒计时做宽限)。electron/ 禁可选链，全用 && / ||。
+  ipcMain.handle('podcast:systemShutdown', () => {
+    if (!isWindows) return { ok: false, reason: 'unsupported' };
+    const real = app.isPackaged || process.env.PODPLAYER_PROFILE === 'prod';
+    if (!real) {
+      log(
+        '[DRY-RUN] 睡眠到点关机：将执行 `shutdown /s /t 0`（非 prod，干跑、不真关机）'
+      );
+      return { ok: true, dryRun: true };
+    }
+    try {
+      const cp = spawn(
+        'shutdown',
+        ['/s', '/t', '0', '/c', 'PodPlayer 睡眠定时到点关机'],
+        { windowsHide: true, detached: true, stdio: 'ignore' }
+      );
+      cp.on('error', err => {
+        log('shutdown spawn error: ' + ((err && err.message) || err));
+      });
+      cp.unref();
+      log('已执行系统关机命令：shutdown /s /t 0');
+      return { ok: true, dryRun: false };
+    } catch (e) {
+      log('系统关机失败：' + ((e && e.message) || e));
+      return { ok: false, reason: String((e && e.message) || e) };
+    }
+  });
 
   ipcMain.on('close', e => {
     if (isMac) {

@@ -273,6 +273,9 @@ export default {
       audioCacheDesc:
         '听满约 1 分钟的未听完单集后台缓存到本地，切回时秒续播；超出上限按最久未用淘汰（未听完的保留）',
       audioCacheLimit: '音频缓存上限',
+      sleepShutdown: '睡眠定时到点后关机',
+      sleepShutdownDesc:
+        '开启后睡眠定时到点会先暂停再关机（有 60 秒可取消倒计时，绝不误关）；仅 Windows',
       exportData: '导出收听数据',
       exportDataDesc:
         '把收听进度、统计、每日记录导出为文件（可用于数据分析或迁移）',

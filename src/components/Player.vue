@@ -3,9 +3,23 @@
        只是多出一个全屏 overlay 兄弟节点。沉浸页是「叠加皮肤」——复用本组件全部播放状态与方法
        (同一 howler 实例、同一份 Vuex)，严禁另起播放逻辑或复制状态。详见 docs/沉浸式播放页方案.md。 -->
   <div class="player-root">
+    <!-- [睡眠到点关机] 可取消的关机倒计时浮层(全屏最高层)：到 0 才真请求关机，期间随时"取消关机"，绝不误关 -->
+    <transition name="fade">
+      <div v-if="shutdownCountdown > 0" class="shutdown-overlay">
+        <div class="shutdown-card">
+          <svg-icon icon-class="moon" class="sd-icon" />
+          <div class="sd-title">睡眠定时已到</div>
+          <div class="sd-desc">
+            系统将在 <b>{{ shutdownCountdown }}</b> 秒后关机
+          </div>
+          <button class="sd-cancel" @click="cancelShutdown">取消关机</button>
+        </div>
+      </div>
+    </transition>
     <div class="player" @click="handleClick" @mousedown="handleMouseDown">
       <!-- [播客改造 A-7.8] 进度条 hover 时间预览：鼠标在任意位置浮动时显示对应时间 -->
       <div
+        ref="progressBarEl"
         class="progress-bar"
         :class="{
           nyancat: settings.nyancatStyle,
@@ -360,7 +374,7 @@
                         :drag-on-click="true"
                         :duration="0"
                         tooltip="none"
-                        :dot-size="12"
+                        :dot-size="10"
                         @change="onSleepChange"
                         @drag-end="onSleepCommit"
                       ></vue-slider>
@@ -734,7 +748,7 @@
                             :drag-on-click="true"
                             :duration="0"
                             tooltip="none"
-                            :dot-size="12"
+                            :dot-size="10"
                             @change="onSleepChange"
                             @drag-end="onSleepCommit"
                           ></vue-slider>
@@ -883,6 +897,20 @@ export default {
     VueSlider,
   },
   data() {
+    // [进度条蓝闪修] 重开时从 localStorage 恢复上次封面主色/撞色：让首帧进度条即用封面主色，
+    //   不再"先回退蓝 #335eea 再变主色"闪一下。值随播放的集由 refreshMarkColor 持久化(覆盖式)，
+    //   启动恢复的就是上次那集的色 → 与恢复的当前曲一致；切到不同节目时各自的色都会被分别覆盖持久化。
+    let _barFill = null;
+    let _barContrast = '#e67e22';
+    try {
+      const _bc = JSON.parse(localStorage.getItem('playerBarColors') || 'null');
+      if (_bc && _bc.fill) {
+        _barFill = _bc.fill;
+        _barContrast = _bc.contrast || _barContrast;
+      }
+    } catch (e) {
+      /* ignore */
+    }
     return {
       mouseDownTarget: null,
       // [播客改造 A-6] 倍速面板开关 + 当前倍速（与 player._playbackRate 双向同步）
@@ -898,13 +926,14 @@ export default {
       immProgressBarKey: 0,
       // [B-75] 标记位置：封面主色(标记按钮 >5 变色彩蛋用)、长按充能态、短按 pulse 反馈。
       //   _markColorSrc/_markTimer/_markPulseTimer/_markPressed 用裸实例属性(不入 data，免响应式+避开保留键)
-      markColor: '#e67e22',
+      markColor: _barFill || '#e67e22',
       // [进度条主色] 播放 bar「已播段」颜色 = 当前封面主色(切歌时由 refreshMarkColor 算出)。
-      //   null = 还没取到色 → CSS 回退原蓝 #335eea。(沉浸页进度条按用户要求保持原样，不用此色。)
-      coverFillColor: null,
+      //   重开用 localStorage 恢复的上次主色(_barFill)→首帧即主色、不闪蓝；仅"史上第一次运行"无值时为
+      //   null → CSS 回退原蓝 #335eea(一次性)。(沉浸页进度条按用户要求保持原样，不用此色。)
+      coverFillColor: _barFill,
       // [进度条主色] 播放 bar 标记点颜色 = 封面主色的「撞色(互补色)」，保证蓝封面下也撞得出来、看得清(用户定)。
-      //   切歌时由 refreshMarkColor 算出；默认橙(对蓝色回退底色也成立)。沉浸页标记点仍用 markColor(封面主色)。
-      markContrastColor: '#e67e22',
+      //   切歌时由 refreshMarkColor 算出；重开恢复上次撞色(_barContrast)，默认橙。沉浸页标记点仍用 markColor。
+      markContrastColor: _barContrast,
       markCharging: false,
       markPulse: false,
       markCleared: false, // [修] 长按充能满(清空标记)时给 icon 一记"清空"反馈动画(两端共用)
@@ -927,6 +956,9 @@ export default {
       sleepEndsAt: 0, // 暂停目标时间戳(ms)
       sleepRemainText: '', // 剩余 "M:SS"
       sleepSliderVal: 0, // 滑条值(分钟)=用户设定的档位；未激活=0。[B-65] 不再随倒计时自缩，倒计时只走 label
+      // [睡眠到点关机] 关机倒计时(秒)，>0 时显示浮层；归零才真请求关机
+      shutdownCountdown: 0,
+      shutdownTimer: null,
       sleepOutsideListener: null,
       // [B-63] 单滑条动态量程：开菜单时按单集剩余时间即时计算
       sleepMaxMin: 120, // 滑条最大值(分钟)
@@ -1157,6 +1189,22 @@ export default {
     // 二次兜底：底栏 slide-up 入场过渡(~0.4s)结束、布局彻底稳定后再重挂一次，覆盖 nextTick 时轨道宽未量好的边角。
     //   组件实为单例不销毁；仍存 id 并在 beforeDestroy 清理(防未来若被 v-if 条件渲染时的迟发)。
     this._barBumpTimer = setTimeout(bumpBar, 500);
+    // [进度条偶发消失·根治] vue-slider 3.2.24 不监听 resize：进度条容器宽度一旦变化(切页致内容区滚动条
+    //   出现/消失、窗口缩放、布局回流…)，slider 缓存的轨道宽变陈旧 → 已播填充按旧宽算、可能算成 0 → 进度条
+    //   "突然消失"(用户实测切界面偶发)。用 ResizeObserver 盯容器宽：真变(≥1px)才自增 :key 重挂、按新宽重测，
+    //   只在宽度确变时触发(非每次切页)、:duration=0 重挂瞬时无闪。观察容器(非 slider 自身)→重挂不改容器宽→不自激。
+    if (window.ResizeObserver && this.$refs.progressBarEl) {
+      let lastBarW = 0;
+      this._barRO = new ResizeObserver(entries => {
+        const r = entries && entries[0] && entries[0].contentRect;
+        const w = r ? r.width : 0;
+        if (w && Math.abs(w - lastBarW) >= 1) {
+          lastBarW = w;
+          bumpBar();
+        }
+      });
+      this._barRO.observe(this.$refs.progressBarEl);
+    }
     // [两端一致] 沉浸页进度条随面板 v-if 挂载，开启瞬间同样可能是暂停态 → 开启时也重挂一次。
     this.$watch(
       () => this.immersiveOpen,
@@ -1164,6 +1212,18 @@ export default {
         if (!open) return;
         this.$nextTick(() => {
           this.immProgressBarKey++;
+        });
+      }
+    );
+    // [进度条偶发消失·根治] 切页后(布局稳定时)重挂一次进度条：覆盖"切到别的界面进度条偶发消失"——
+    //   不论是轨道宽陈旧、还是 slider 内部态在某次切页重渲时算错，重挂(按当前 progress/duration/宽重新实例化)
+    //   都能恢复。仅在容器有有效宽度时重挂，绝不在宽=0 的瞬态重挂(否则反而算成 0 宽=消失)。:duration=0 重挂瞬时无闪。
+    this.$watch(
+      () => this.$route && this.$route.fullPath,
+      () => {
+        this.$nextTick(() => {
+          const el = this.$refs.progressBarEl;
+          if (el && el.offsetWidth > 0) this.progressBarKey++;
         });
       }
     );
@@ -1176,6 +1236,13 @@ export default {
     // [B-46] 卸载睡眠定时器的监听与计时器
     this.closeSleepMenu();
     this.clearSleep();
+    // [睡眠到点关机] 清理关机倒计时(防销毁后仍触发关机)
+    this.clearShutdownTimer();
+    // [进度条偶发消失·根治] 断开进度条宽度观察器
+    if (this._barRO) {
+      this._barRO.disconnect();
+      this._barRO = null;
+    }
     // [B-75] 清理标记长按/pulse/清空 计时器
     clearTimeout(this._markTimer);
     clearTimeout(this._markPulseTimer);
@@ -1265,6 +1332,15 @@ export default {
             this.coverFillColor = c; // 播放 bar 已播段 = 封面主色
             // 播放 bar 标记点 = 封面主色的撞色(互补色 hue+180)，高饱和高对比 → 任何封面(含蓝)都看得清
             this.markContrastColor = `hsl(${(hsl[0] + 180) % 360}, 85%, 55%)`;
+            // [进度条蓝闪修] 覆盖式持久化当前封面主色/撞色 → 下次重开 data() 即取到、首帧就是主色，不闪蓝。
+            try {
+              localStorage.setItem(
+                'playerBarColors',
+                JSON.stringify({ fill: c, contrast: this.markContrastColor })
+              );
+            } catch (e) {
+              /* ignore */
+            }
           }
         })
         .catch(() => {});
@@ -1594,8 +1670,71 @@ export default {
       this.sleepMode = 'off';
       this.sleepRemainText = '';
       this.sleepSliderVal = 0;
+      // [睡眠到点关机] 开了"到点关机"→暂停后启动可取消的关机倒计时；否则只暂停(原行为)。
+      if (this.settings && this.settings.sleepShutdown) {
+        this.showToast(wasPlaying ? '睡眠定时已到，已暂停' : '睡眠定时已到');
+        this.startShutdownCountdown();
+        return;
+      }
       // [B-64] 仅真正执行暂停才提示"已暂停"，否则文案不误导
       this.showToast(wasPlaying ? '睡眠定时已到，已暂停播放' : '睡眠定时已到');
+    },
+    // [睡眠到点关机] 启动可取消的关机倒计时：应用内宽限 60s，到 0 才真请求关机，期间随时可取消(绝不误关)。
+    startShutdownCountdown() {
+      this.clearShutdownTimer();
+      this._shuttingDown = false; // [审P2-2] 每次新倒计时复位防重入标志
+      this.shutdownCountdown = 60;
+      this.shutdownTimer = setInterval(() => {
+        this.shutdownCountdown -= 1;
+        if (this.shutdownCountdown <= 0) {
+          this.clearShutdownTimer();
+          this.doShutdown();
+        }
+      }, 1000);
+      // [审nit] ESC 也可取消关机(无障碍/顺手)；监听随倒计时挂、随 clearShutdownTimer 摘
+      this._shutdownEsc = e => {
+        if (e.key === 'Escape') this.cancelShutdown();
+      };
+      window.addEventListener('keydown', this._shutdownEsc);
+    },
+    cancelShutdown() {
+      this.clearShutdownTimer();
+      this.shutdownCountdown = 0;
+      this.showToast('已取消关机');
+    },
+    clearShutdownTimer() {
+      if (this.shutdownTimer) {
+        clearInterval(this.shutdownTimer);
+        this.shutdownTimer = null;
+      }
+      if (this._shutdownEsc) {
+        window.removeEventListener('keydown', this._shutdownEsc);
+        this._shutdownEsc = null;
+      }
+    },
+    // 倒计时归零 → 先 flush 落盘再请求主进程关机(主进程仅 Windows、且仅 prod 真关机、dev 干跑)。
+    async doShutdown() {
+      if (this._shuttingDown) return; // [审P2-2] 防重入(将来若加"立即关机"也不会双触发)
+      this._shuttingDown = true;
+      this.shutdownCountdown = 0;
+      let r = null;
+      try {
+        if (this.player && this.player.requestSystemShutdown) {
+          r = await this.player.requestSystemShutdown();
+        }
+      } catch (e) {
+        r = null;
+      }
+      if (r && r.dryRun) {
+        this.showToast('（开发版）已演练关机流程，未真正关机');
+      } else if (r && r.ok) {
+        this.showToast('数据已保存，正在关机…');
+      } else if (r && r.reason === 'unsupported') {
+        this.showToast('关机未执行（仅支持 Windows）');
+      } else {
+        // [审P2-1] 真机执行失败(spawn 抛错/无 IPC) → 如实提示，不误显"仅支持 Windows"
+        this.showToast('关机命令执行失败');
+      }
     },
     clearSleep() {
       if (this.sleepTimer) {
@@ -3169,5 +3308,69 @@ export default {
   height: 32px;
   z-index: 3;
   -webkit-app-region: drag;
+}
+/* [睡眠到点关机] 可取消的关机倒计时浮层 */
+.shutdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+}
+.shutdown-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 40px;
+  // [关机弹窗固定面积] 固定宽度：避免倒计时数字位数变化(60→9)致卡片宽度跳动
+  width: 300px;
+  box-sizing: border-box;
+  border-radius: 16px;
+  background: var(--color-body-bg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  color: var(--color-text);
+  text-align: center;
+  .sd-icon {
+    width: 40px;
+    height: 40px;
+    color: var(--color-primary);
+  }
+  .sd-title {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .sd-desc {
+    font-size: 14px;
+    opacity: 0.7;
+    b {
+      // [关机弹窗固定面积] 数字占固定槽宽 + 等宽数字 → 1↔2 位切换时文字不左右挪动
+      display: inline-block;
+      min-width: 1.4em;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      color: var(--color-primary);
+      font-size: 16px;
+    }
+  }
+  .sd-cancel {
+    margin-top: 4px;
+    padding: 10px 28px;
+    border: none;
+    border-radius: 10px;
+    background: var(--color-primary);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s, opacity 0.15s;
+    &:hover {
+      transform: scale(1.04);
+      opacity: 0.92;
+    }
+  }
 }
 </style>

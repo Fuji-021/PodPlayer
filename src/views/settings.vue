@@ -375,6 +375,27 @@
         </div>
       </div>
 
+      <!-- [睡眠到点关机] 睡眠定时到点后关机(仅 Windows)：开=到点暂停并关机(有可取消倒计时)，关=仅暂停 -->
+      <div v-if="isElectron && isWindows" class="item">
+        <div class="left">
+          <div class="title">{{ $t('settings.pod.sleepShutdown') }}</div>
+          <div class="description">
+            {{ $t('settings.pod.sleepShutdownDesc') }}
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="sleep-shutdown"
+              v-model="sleepShutdown"
+              type="checkbox"
+              name="sleep-shutdown"
+            />
+            <label for="sleep-shutdown"></label>
+          </div>
+        </div>
+      </div>
+
       <!-- [缓存·C3] 音频缓存上限：超出按 LRU 淘汰最久未用（未听完豁免） -->
       <div v-if="isElectron && audioCacheEnabled" class="item">
         <div class="left">
@@ -507,12 +528,19 @@
             </div>
             <div class="col">
               <div
+                v-tip="
+                  enableGlobalShortcut && failedGlobalSet.has(shortcut.id)
+                    ? '此全局快捷键注册失败（被其它应用/系统占用或非法组合），点这里改个别的键'
+                    : ''
+                "
                 class="keyboard-input"
                 :class="{
                   active:
                     shortcutInput.id === shortcut.id &&
                     shortcutInput.type === 'globalShortcut' &&
                     enableGlobalShortcut,
+                  conflict:
+                    enableGlobalShortcut && failedGlobalSet.has(shortcut.id),
                 }"
                 @click.stop="
                   readyToRecordShortcut(shortcut.id, 'globalShortcut')
@@ -719,6 +747,25 @@ export default {
     },
     isLinux() {
       return process.platform === 'linux';
+    },
+    isWindows() {
+      return process.platform === 'win32';
+    },
+    // [快捷键冲突高亮] 全局快捷键注册失败的 id 集合(主进程注册后回报)，用于对应行"全局"键标红
+    failedGlobalSet() {
+      return new Set(this.$store.state.failedGlobalShortcuts || []);
+    },
+    // [睡眠到点关机] 睡眠定时到点后关机(仅 Windows)；默认关
+    sleepShutdown: {
+      get() {
+        return !!this.settings.sleepShutdown;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'sleepShutdown',
+          value: !!value,
+        });
+      },
     },
     version() {
       return pkg.version;
@@ -1712,6 +1759,26 @@ input[type='number'] {
     &.active {
       color: var(--color-primary);
       background-color: var(--color-primary-bg);
+    }
+    // [快捷键冲突高亮] 该全局键注册失败 → 红环圈出 + 右上角红色感叹号徽标(零布局位移)；hover 有 v-tip 说明
+    &.conflict {
+      position: relative;
+      box-shadow: 0 0 0 1.5px #e74c3c;
+    }
+    &.conflict::after {
+      content: '!';
+      position: absolute;
+      top: -7px;
+      right: -7px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #e74c3c;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 16px;
+      text-align: center;
     }
   }
   .restore-default-shortcut {

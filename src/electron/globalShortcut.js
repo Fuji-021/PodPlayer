@@ -47,11 +47,12 @@ export function registerGlobalShortcut(win, store) {
     try {
       const ok = globalShortcut.register(accel, handler);
       if (!ok) {
-        failedKeys.push(sc.name || accel); // 优先用友好名(如"播放/暂停")，缺失回退 accelerator
+        // [快捷键冲突高亮] 同时回报 id(供设置页定位标红那一行) + 友好名(供 toast 文案)
+        failedKeys.push({ id, name: sc.name || accel });
         log(`配置键 ${id} (${accel}) 注册失败(被占用/非法键)，跳过`);
       }
     } catch (e) {
-      failedKeys.push(sc.name || accel); // 优先用友好名(如"播放/暂停")，缺失回退 accelerator
+      failedKeys.push({ id, name: sc.name || accel });
       log(`配置键 ${id} 注册异常：${(e && e.message) || e}`);
     }
   });
@@ -79,8 +80,9 @@ export function registerGlobalShortcut(win, store) {
     }
   });
 
-  // [操作#15/#2b] 配置键有注册失败 → 回报渲染端弹 toast(改键时即时反馈；启动首次渲染端若未就绪则跳过、无害)
-  if (failedKeys.length && win && !win.isDestroyed()) {
+  // [操作#15/#2b][快捷键冲突高亮] 每次注册后都回报(即便为空)：有失败→弹 toast + 设置页对应行标红；
+  //   改键修好后(本次为空)→渲染端清掉旧红高亮。启动首次渲染端若未就绪则跳过、无害。
+  if (win && !win.isDestroyed()) {
     win.webContents.send('globalShortcutRegisterFailed', failedKeys);
   }
 }

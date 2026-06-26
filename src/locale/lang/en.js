@@ -275,6 +275,9 @@ export default {
       audioCacheDesc:
         'Episodes you have played for ~1 min (and not finished) are cached locally so resuming is instant; least-recently-used are evicted over the limit (unfinished are kept).',
       audioCacheLimit: 'Audio cache limit',
+      sleepShutdown: 'Shut down PC when sleep timer ends',
+      sleepShutdownDesc:
+        'When on, the sleep timer pauses playback then shuts down Windows (with a 60s cancelable countdown). Windows only.',
       exportData: 'Export listening data',
       exportDataDesc:
         'Export listening progress, stats, and daily records to a file (for data analysis or migration).',
