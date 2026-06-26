@@ -273,7 +273,15 @@ export default class {
           /* ignore */
         }
       };
-      if (this._howler.state() === 'loaded') {
+      // [播放期坏元素防从0] 播放途中底层 <audio> 已 error/掉到不可播(load 曾成功 → state() 仍恒为
+      //   'loaded' 骗过下面判断；但 duration=NaN → howler seek 写不进 currentTime，随后 play() 重载
+      //   file:// 归零)。对这种“坏死元素”绝不再原地 seek，改走通用恢复重建续播到 value。
+      //   仅当 howler 自认 loaded 时才把 readyState<2 视作坏死(否则是初次加载，应走下面的 once('load'))。
+      const node = this._howler._sounds?.[0]?._node;
+      const loaded = this._howler.state() === 'loaded';
+      if (node && (node.error || (loaded && node.readyState < 2))) {
+        this._recoverCurrentSource(value, true); // exact：用户拖动目标，精确(含向后拖)
+      } else if (loaded) {
         applySeek();
       } else {
         this._howler.once('load', applySeek);
@@ -455,6 +463,28 @@ export default class {
           this._nasStallSec = 0;
         }
         this._nasLastPos = this._progress;
+      } else if (
+        // [播放期停滞看门狗·通用] 非 NAS / 非代理(file:// / 直链 CDN)：howler 自认在播但位置连续 ~3s
+        //   不前进 = 播放途中停滞且无 'error' 事件(stalled-without-error)→ 通用恢复重建续播 + 清流光。
+        //   独立计数器(_genLastPos/_genStallSec)与 NAS 物理隔离；仅 playing() 为真时计数，暂停态零误伤。
+        !this._nasSourceActive &&
+        !this._proxyDirectFallback &&
+        this._howler.playing()
+      ) {
+        if (
+          this._genLastPos != null &&
+          Math.abs(this._progress - this._genLastPos) < 0.25
+        ) {
+          this._genStallSec = (this._genStallSec || 0) + 1;
+          if (this._genStallSec >= 3) {
+            this._genStallSec = 0;
+            this._recoverCurrentSource(this._progress);
+            return;
+          }
+        } else {
+          this._genStallSec = 0;
+        }
+        this._genLastPos = this._progress;
       }
       const t = this._currentTrack;
       if (
@@ -609,6 +639,9 @@ export default class {
     // [P3] 新一轮播放：重置 NAS 中途掉线看门狗计数（上一集/上次失败的残留清零）。
     this._nasLastPos = null;
     this._nasStallSec = 0;
+    // [播放期停滞看门狗·通用] 同步重置通用(file:///CDN)停滞计数，与 NAS 计数物理隔离、互不干扰。
+    this._genLastPos = null;
+    this._genStallSec = 0;
 
     // [播客改造 C-14] 仅 autoplay=true 时显示缓冲条；重启恢复(autoplay=false)
     // Howler 只是静默 preload，不需要给用户显示"加载中"（且不显示就不会永久停留）
@@ -685,6 +718,27 @@ export default class {
         this._howler.once('load', doSeek);
       }
     }
+    // [播放期故障接管] 给底层 <audio> 挂运行期 'error' 监听：howler html5 只在 load 阶段/play() reject 报错，
+    //   对"已 load 成功后、播放途中"的 <audio> 运行期 error 完全不接管。挂在 load 时机(而非 once('play'))
+    //   → 暂停态重建(autoplay=false)的元素也覆盖、不必等用户起播；统一交给 _recoverCurrentSource
+    //   (它内部把 NAS/代理交还各自 failover、file:///CDN 走通用重建续播，绝不抢路)。__podErrHooked 去重。
+    const hookMediaError = () => {
+      const node = this._howler?._sounds?.[0]?._node;
+      if (node && !node.__podErrHooked) {
+        node.__podErrHooked = true;
+        node.addEventListener('error', () => {
+          const pos = Math.floor(
+            Math.max(this._howler?.seek() || 0, this._progress || 0)
+          );
+          this._recoverCurrentSource(pos);
+        });
+      }
+    };
+    if (this._howler.state() === 'loaded') {
+      hookMediaError();
+    } else {
+      this._howler.once('load', hookMediaError);
+    }
     this._howler.on('loaderror', (_, errCode) => {
       // [缓存·B] 当前是流播缓存代理且加载失败 → 回退直连续播(绝不让缓存代理害到播放)。
       if (this._proxyDirectFallback) {
@@ -737,7 +791,10 @@ export default class {
     let pos = 0;
     try {
       const s = this._howler && this._howler.seek();
-      pos = Math.floor((typeof s === 'number' ? s : this._progress) || 0);
+      const sn = typeof s === 'number' ? s : 0;
+      // [seek 回退根治] 出错/被中断的 howl，seek() 可能回 0 → 不能据此从头重建(=用户报的"拖动后从头播放")。
+      //   取与 _progress(权威续播位：拖动 set progress 与每秒 tick 都会写)的较大值 → 回退/切源后从所在位置续播。
+      pos = Math.floor(Math.max(sn, this._progress || 0));
     } catch (e) {
       pos = Math.floor(this._progress || 0);
     }
@@ -764,12 +821,71 @@ export default class {
     let pos = 0;
     try {
       const s = this._howler && this._howler.seek();
-      pos = Math.floor((typeof s === 'number' ? s : this._progress) || 0);
+      const sn = typeof s === 'number' ? s : 0;
+      // [seek 回退根治] 出错/被中断的 howl，seek() 可能回 0 → 不能据此从头重建(=用户报的"拖动后从头播放")。
+      //   取与 _progress(权威续播位：拖动 set progress 与每秒 tick 都会写)的较大值 → 回退/切源后从所在位置续播。
+      pos = Math.floor(Math.max(sn, this._progress || 0));
     } catch (e) {
       pos = Math.floor(this._progress || 0);
     }
     console.warn('[player] 流播缓存代理失败，回退直连续播');
     this._playAudioSource(direct, true, pos);
+  }
+  // [播放期故障通用恢复] 已下载 file:// / 直链 CDN 在“播放途中”底层 <audio> 触发 media error 或长时间
+  //   停滞时，howler 的 html5 实现不接管(loaderror/playerror 只覆盖 load 阶段与 play() reject)，
+  //   于是：①缓冲流光的 waiting 之后 playing/canplay 永不再来 → 流光卡死；②暂停后拖动时元素已坏死
+  //   (duration=NaN/readyState 掉到 0)，howler seek 写不进 currentTime、随后 play() 重载 file:// 归零
+  //   → “拖到哪都从头播”。这里把 NAS/代理已验证的“取较大 pos + 重建续播”范式推广到 file:///CDN。
+  //   NAS/代理源各有自己的自愈路径，这里一律交还、绝不抢路。
+  // exact=true：调用方给的是“用户明确要去的目标位置”(拖动/快进快退)，必须精确到该点(含向后拖)，
+  //   不能与 _progress 取 max(否则向后拖会被旧位置吃掉)；exact=false(故障自愈)：seek() 可能回 0，
+  //   取 max(pos, seek, _progress) 防归零。
+  _recoverCurrentSource(pos, exact = false) {
+    if (this._nasSourceActive) return this._failoverNasToCdn();
+    if (this._proxyDirectFallback) return this._fallbackProxyToDirect();
+    const track = this._currentTrack;
+    const epId = track?.podcastEpisodeId;
+    if (!track || !track.podcastAudioUrl) return;
+    // 防重入(解析期) + 防回退循环节流(坏文件每次重建都失败时，至少 4s 才再试一次，不打死循环)。
+    const now = Date.now();
+    if (this._mediaRecovering) return;
+    if (this._lastRecoverAt && now - this._lastRecoverAt < 4000) return;
+    this._lastRecoverAt = now;
+    this._mediaRecovering = true;
+    // 立即停掉卡死的缓冲流光(重建成功后 once('play') 还会再清一次)。
+    try {
+      store.commit('setAudioBuffering', false);
+    } catch (e) {
+      /* ignore */
+    }
+    const wasPlaying = this._playing; // 保留播放/暂停态：暂停时拖动恢复不应强行起播
+    let p = 0;
+    try {
+      const s = this._howler && this._howler.seek();
+      const sn = typeof s === 'number' ? s : 0;
+      // 用户明确目标(exact)→精确取该点(含向后拖)；故障自愈→取较大值防坏元素 seek() 回 0 归零。
+      p = exact
+        ? Math.max(0, Math.floor(Number(pos) || 0))
+        : Math.floor(Math.max(Number(pos) || 0, sn, this._progress || 0));
+    } catch (e) {
+      p = exact
+        ? Math.max(0, Math.floor(Number(pos) || 0))
+        : Math.floor(Math.max(Number(pos) || 0, this._progress || 0));
+    }
+    this._getAudioSource(track)
+      .then(source => {
+        // 重建前再校验当前集未变(迟到的 error/stalled 事件若集已切走，绝不把新集打回旧集)。
+        if (!source || this._currentTrack?.podcastEpisodeId !== epId) {
+          this._mediaRecovering = false;
+          return;
+        }
+        // 经 _playAudioSource：受并发令牌(++_playSourceToken)保护，load 后由 seekToOnLoad 补 seek 到 p。
+        this._playAudioSource(source, wasPlaying, p);
+        this._mediaRecovering = false;
+      })
+      .catch(() => {
+        this._mediaRecovering = false;
+      });
   }
   _getAudioSourceBlobURL(data) {
     // Create a new object URL.
@@ -1446,7 +1562,14 @@ export default class {
     if (time !== null) {
       // [B-81 修] howler 未 loaded 时直接 seek 会被忽略(时间戳/快进"点了不动"真因之一)。
       //   与 progress setter(224) 同范式：loaded 才立即 seek，否则挂 once('load') 等加载完成再 seek。
-      if (this._howler && this._howler.state() !== 'loaded') {
+      // [播放期坏元素防从0] 与 set progress 对称：底层 <audio> 已 error/掉到不可播时绝不原地 seek
+      //   (会触发 file:// 重载从0)，改走通用恢复重建续播到 time。仅 loaded 时把 readyState<2 视作坏死。
+      const node = this._howler?._sounds?.[0]?._node;
+      const loaded = this._howler && this._howler.state() === 'loaded';
+      if (node && (node.error || (loaded && node.readyState < 2))) {
+        this._recoverCurrentSource(time, true); // exact：用户快进/快退/拖动目标，精确(含向后)
+        return time;
+      } else if (this._howler && !loaded) {
         // [B-81 自审] 捕获当前 howler 引用 h：避免 load 触发前用户切了集，
         //   回调里 this._howler 已指向新实例 → 把新单集误 seek 到旧时间戳(跨集污染)。
         //   对被替换/卸载的旧实例 seek 无害，且绝不误碰新实例。

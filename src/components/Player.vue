@@ -269,23 +269,6 @@
                       清空
                     </button>
                   </div>
-                  <!-- [播放列表] 正在播放：置顶信息行，复用 qp-item 样式 + 标签（不可拖/删/点）。
-                       左侧空位(与队列行拖动点等宽)保证封面与下方对齐；右侧"正在播放"标签即足以标识，去掉音波图标。 -->
-                  <div v-if="nowPlayingItem" class="qp-item qp-now">
-                    <div class="qp-now-blank"></div>
-                    <PodImage
-                      v-if="nowPlayingItem.coverUrl"
-                      class="qp-cover"
-                      :src="nowPlayingItem.coverUrl"
-                    />
-                    <div class="qp-meta">
-                      <div class="qp-title">{{ nowPlayingItem.title }}</div>
-                      <div class="qp-sub">{{
-                        nowPlayingItem.podcastTitle
-                      }}</div>
-                    </div>
-                    <span class="qp-now-tag">正在播放</span>
-                  </div>
                   <div
                     v-if="!podcastQueue.length && !nowPlayingItem"
                     class="qp-empty"
@@ -293,8 +276,34 @@
                     队列空空。在节目里加入单集后会出现在这里。
                   </div>
                   <div v-else class="qp-list">
+                    <!-- [播放列表] 正在播放：sticky 置顶行(放进 qp-list 内 → 与队列行同容器、同滚动条预留，
+                         × 与封面都对齐)。左侧用封面主色的播放/暂停图标占位(=⋮⋮宽，无圆圈)且可点切换；右侧 × 剔除。 -->
+                    <div v-if="nowPlayingItem" class="qp-item qp-now">
+                      <button
+                        v-tip="playing ? '暂停' : '播放'"
+                        class="qp-now-play"
+                        :style="{ color: coverFillColor }"
+                        @click.stop="playOrPause"
+                      >
+                        <svg-icon :icon-class="playing ? 'pause' : 'play'" />
+                      </button>
+                      <PodImage
+                        v-if="nowPlayingItem.coverUrl"
+                        class="qp-cover"
+                        :src="nowPlayingItem.coverUrl"
+                      />
+                      <div class="qp-meta">
+                        <div class="qp-title">{{ nowPlayingItem.title }}</div>
+                        <div class="qp-sub">{{
+                          nowPlayingItem.podcastTitle
+                        }}</div>
+                      </div>
+                      <button class="qp-del" @click.stop="removeNowPlaying">
+                        ×
+                      </button>
+                    </div>
                     <div
-                      v-for="(item, idx) in podcastQueue.slice(0, 10)"
+                      v-for="(item, idx) in podcastQueue"
                       :key="item.id"
                       class="qp-item"
                       :class="{ 'drag-over': dragOverIdx === idx }"
@@ -323,9 +332,6 @@
                       >
                         ×
                       </button>
-                    </div>
-                    <div v-if="podcastQueue.length > 10" class="qp-more">
-                      还有 {{ podcastQueue.length - 10 }} 项 …
                     </div>
                   </div>
                 </div>
@@ -440,7 +446,7 @@
                   :drag-on-click="true"
                   :duration="0"
                   tooltip="none"
-                  :dot-size="12"
+                  :dot-size="10"
                 ></vue-slider>
               </div>
             </div>
@@ -646,22 +652,6 @@
                           清空
                         </button>
                       </div>
-                      <!-- [播放列表] 正在播放：置顶信息行(沉浸页，与播放 bar 一致) -->
-                      <div v-if="nowPlayingItem" class="qp-item qp-now">
-                        <div class="qp-now-blank"></div>
-                        <PodImage
-                          v-if="nowPlayingItem.coverUrl"
-                          class="qp-cover"
-                          :src="nowPlayingItem.coverUrl"
-                        />
-                        <div class="qp-meta">
-                          <div class="qp-title">{{ nowPlayingItem.title }}</div>
-                          <div class="qp-sub">
-                            {{ nowPlayingItem.podcastTitle }}
-                          </div>
-                        </div>
-                        <span class="qp-now-tag">正在播放</span>
-                      </div>
                       <div
                         v-if="!podcastQueue.length && !nowPlayingItem"
                         class="qp-empty"
@@ -669,8 +659,37 @@
                         队列空空。在节目里加入单集后会出现在这里。
                       </div>
                       <div v-else class="qp-list">
+                        <!-- [播放列表] 正在播放 sticky 置顶行(沉浸页，与播放 bar 一致；放进 qp-list 内对齐) -->
+                        <div v-if="nowPlayingItem" class="qp-item qp-now">
+                          <button
+                            v-tip="playing ? '暂停' : '播放'"
+                            class="qp-now-play"
+                            :style="{ color: coverFillColor }"
+                            @click.stop="playOrPause"
+                          >
+                            <svg-icon
+                              :icon-class="playing ? 'pause' : 'play'"
+                            />
+                          </button>
+                          <PodImage
+                            v-if="nowPlayingItem.coverUrl"
+                            class="qp-cover"
+                            :src="nowPlayingItem.coverUrl"
+                          />
+                          <div class="qp-meta">
+                            <div class="qp-title">
+                              {{ nowPlayingItem.title }}
+                            </div>
+                            <div class="qp-sub">
+                              {{ nowPlayingItem.podcastTitle }}
+                            </div>
+                          </div>
+                          <button class="qp-del" @click.stop="removeNowPlaying">
+                            ×
+                          </button>
+                        </div>
                         <div
-                          v-for="(item, idx) in podcastQueue.slice(0, 10)"
+                          v-for="(item, idx) in podcastQueue"
                           :key="item.id"
                           class="qp-item"
                           :class="{ 'drag-over': dragOverIdx === idx }"
@@ -698,9 +717,6 @@
                           >
                             ×
                           </button>
-                        </div>
-                        <div v-if="podcastQueue.length > 10" class="qp-more">
-                          还有 {{ podcastQueue.length - 10 }} 项 …
                         </div>
                       </div>
                     </div>
@@ -858,7 +874,7 @@
                             :drag-on-click="true"
                             :duration="0"
                             tooltip="none"
-                            :dot-size="12"
+                            :dot-size="10"
                           ></vue-slider>
                         </div>
                       </div>
@@ -1836,6 +1852,15 @@ export default {
     removeFromQueue(item) {
       this.$store.commit('removeFromQueue', item.id);
     },
+    // [播放列表] 剔除"正在播放"的这一集：有后续队列 → 直接播下一首(等同把当前集移出播放)；
+    //   队列为空 → 暂停(无下一集可顶上，保留信息行避免突兀清空)。
+    removeNowPlaying() {
+      if (this.podcastQueue.length) {
+        this.playFromQueue(this.podcastQueue[0]);
+      } else {
+        this.player.pause();
+      }
+    },
     clearQueue() {
       this.$store.commit('clearQueue');
     },
@@ -2176,6 +2201,10 @@ export default {
   background-repeat: no-repeat;
   animation: bufferingFlow 1.2s linear infinite;
   opacity: 0.85;
+  // [加载条衔接] 左缘(贴播放头处)做 24px 渐隐遮罩 → 流光从已播段柔和"浮现"，
+  //   不再在播放头硬切出现(根治用户报的"左边出现割裂、没有衔接")。
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 24px);
+  mask-image: linear-gradient(90deg, transparent 0, #000 24px);
 }
 @keyframes bufferingFlow {
   0% {
@@ -2578,6 +2607,7 @@ export default {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-shrink: 0;
   }
   .qp-clear {
     background: transparent;
@@ -2600,7 +2630,9 @@ export default {
   }
   .qp-list {
     overflow-y: auto;
-    max-height: 380px;
+    // [播放列表] 不再硬截断 10 项：渲染全部 + 弹性高度(受面板 max-height 约束)滚动查看
+    flex: 1 1 auto;
+    min-height: 0;
   }
   .qp-item {
     display: flex;
@@ -2624,12 +2656,12 @@ export default {
       line-height: 1;
       letter-spacing: -2px;
       user-select: none;
-      // [播放列表对齐] 固定宽度 → 与"正在播放"行的等宽空位(.qp-now-blank)对齐，保证两行封面同一起点
-      width: 20px;
+      // [播放列表] 收窄拖动列(原 20→16)，但保持字号14/字距-2 → ⋮⋮ 两列清晰可辨(不能并成 ⋮)
+      width: 16px;
       box-sizing: border-box;
       text-align: center;
       flex-shrink: 0;
-      padding: 2px 4px;
+      padding: 2px 0;
       &:hover {
         opacity: 0.85;
       }
@@ -2682,34 +2714,45 @@ export default {
   // [播放列表] 正在播放置顶行：复用 .qp-item，但非交互(不可点/拖/删)
   .qp-now {
     cursor: default;
-    // [播放列表] 与下方队列之间用稍粗分隔线区隔(比行间 1px 略粗)
+    // [播放列表] sticky 置顶：随 qp-list 滚动钉在顶部(在 qp-list 内 → 与队列行同容器/同滚动条预留，× 与封面对齐)；
+    //   不透明底 + z-index 防下方队列行滚动时透视上来。
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--color-body-bg);
+    // 与下方队列之间用稍粗分隔线区隔(比行间 1px 略粗)
     border-bottom-width: 2px;
     &:hover {
-      background: transparent;
+      background: var(--color-body-bg);
     }
-    // [播放列表对齐] 左侧等宽空位(替代原音波图标)：与队列行拖动点 .qp-handle 等宽 → 封面对齐；不占交互
-    .qp-now-blank {
-      width: 20px;
+    // [播放列表] 左侧播放/暂停图标(无圆圈)：着色=封面主色(行内 style)，占位宽=队列行 .qp-handle(16px) → 封面对齐；
+    //   点击 = playOrPause(同金刚键)。去掉圆底后只剩图标本身，不再有"图标在圆内偏心"的问题。
+    .qp-now-play {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
       box-sizing: border-box;
-      padding: 2px 4px;
-      flex-shrink: 0;
+      padding: 0;
+      border: none;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: transform 0.15s, opacity 0.15s;
+      .svg-icon {
+        width: 12px;
+        height: 12px;
+        display: block;
+      }
+      &:hover {
+        transform: scale(1.15);
+        opacity: 0.85;
+      }
+      &:active {
+        transform: scale(0.9);
+      }
     }
-    .qp-now-tag {
-      flex-shrink: 0;
-      font-size: 10px;
-      font-weight: 700;
-      color: var(--color-primary);
-      background: var(--color-primary-bg-for-transparent);
-      padding: 2px 7px;
-      border-radius: 10px;
-      white-space: nowrap;
-    }
-  }
-  .qp-more {
-    padding: 8px 16px;
-    text-align: center;
-    font-size: 11px;
-    opacity: 0.45;
   }
 }
 
