@@ -394,16 +394,22 @@ export default {
     barColor(item) {
       // [B-41] 封面主色 → 低饱和纯色 + 半透明（透明度低于实色封面，参考小宇宙：
       // 封面是实色焦点，时长条用同色系的"淡一档"衬托，不抢封面）。
+      let c;
       if (item.colorHsl) {
         const [h, s, l] = item.colorHsl;
-        return `hsla(${h}, ${s}%, ${l}%, 0.6)`;
+        c = `hsla(${h}, ${s}%, ${l}%, 0.6)`;
+      } else {
+        const str = item.podcastId || item.title || '';
+        let h = 0;
+        for (let i = 0; i < str.length; i++) {
+          h = (h * 31 + str.charCodeAt(i)) % 360;
+        }
+        c = `hsla(${h}, 30%, 52%, 0.6)`;
       }
-      const str = item.podcastId || item.title || '';
-      let h = 0;
-      for (let i = 0; i < str.length; i++) {
-        h = (h * 31 + str.charCodeAt(i)) % 360;
-      }
-      return `hsla(${h}, 30%, 52%, 0.6)`;
+      // [裁切修 2026-06-26] 条用「半透明色 ×2 + body-bg 不透明底」双层背景：视觉与原半透明条
+      //   完全一致(半透明色压在页面色上)，但整条变**不透明** → 重排交叉时条只用自身宽度干净
+      //   覆盖下层条，不再依赖"整行铺不透明底"去盖(那会把相邻条按整行宽裁掉=用户截图的裁切)。
+      return `linear-gradient(${c}, ${c}), var(--color-body-bg)`;
     },
     fmtDur(sec) {
       sec = Math.floor(sec || 0);
@@ -600,15 +606,11 @@ export default {
   //   [进度条不渐隐] opacity 过渡已移到 .label(只文字淡出)，进度条 .bar 只走自身 width 过渡自然伸缩。
   transition: transform calc(0.65s * var(--stat-k, 1))
     cubic-bezier(0.22, 1, 0.36, 1);
-  // [v1.5.2/毛刺修] 页面同色 2px 光环：FLIP 移动中每行是独立合成层、位移带亚像素小数，
-  //   相邻两行层边缘会出现发丝缝，缝里漏出底下长途穿行行(如深度对话 周#5→全部#1 纵贯全表)
-  //   的 1px 色丝=毛刺。给每行一圈与页面同色的不透明描边(spread)，随行移动把 ≤2px 的
-  //   发丝缝全部盖死。静态下与背景同色=完全隐形。
-  box-shadow: 0 0 0 2px var(--color-body-bg);
-  // [统计动画 v1.3] 整行不透明底色(=页面色，静态外观零变化) → 重排交叉时"行覆盖行"，
-  //   连同条与文字一起被上层行实实在在遮挡。这才是残影/文字叠糊的根治：
-  //   时长条是 hsla(...,0.6) 半透明、z-index 压再低也会透出下层，唯有让整行不透明才能真正盖住。
-  background: var(--color-body-bg);
+  // [裁切修 2026-06-26] 去掉原「整行不透明底色 + 2px 同色描边」——它们为盖半透明条而**铺满整行**，
+  //   副作用=重排交叉时按整行宽把相邻条裁掉(用户截图"卡片宽度被裁、形状不完整")。
+  //   改由「条自带 body-bg 不透明底(见 barColor 双层背景) + 文字自带 body-bg 底」承担覆盖：
+  //   覆盖只发生在条/文字各自宽度内 → 空白区透明、相邻条**完整透出不被裁**；条/文字不透明仍能
+  //   干净自盖、不糊叠、不留残影(原 v1.3 残影根治的目的达成，方式从整行铺底改为元素自带底)。
   // [B-38] bar 宽度=时长比例（不再 flex:1），封面叠在条右端
   .bar {
     height: 40px;
@@ -641,6 +643,9 @@ export default {
     min-width: 0;
     flex-shrink: 1;
     cursor: pointer; // [点击区收窄] 名字/时长可点跳转
+    // [裁切修 2026-06-26] 文字自带 body-bg 不透明底：交叉时上行文字干净盖住下行文字(替代原整行铺底)，
+    //   只占文字自身宽度、不裁邻条；静态下与页面同色=隐形。幽灵行随 _op 淡出时底色一并淡出，符合预期。
+    background: var(--color-body-bg);
     // [文字渐隐] 幽灵行文字 opacity 1→0 淡出，与 .bar width 缩回同时长同缓动(进度条本身不淡出)
     transition: opacity calc(0.6s * var(--stat-k, 1))
       cubic-bezier(0.22, 1, 0.36, 1);
