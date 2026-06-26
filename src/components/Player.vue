@@ -269,11 +269,10 @@
                       清空
                     </button>
                   </div>
-                  <!-- [播放列表] 正在播放：置顶信息行，复用 qp-item 样式 + 标签（不可拖/删/点） -->
+                  <!-- [播放列表] 正在播放：置顶信息行，复用 qp-item 样式 + 标签（不可拖/删/点）。
+                       左侧空位(与队列行拖动点等宽)保证封面与下方对齐；右侧"正在播放"标签即足以标识，去掉音波图标。 -->
                   <div v-if="nowPlayingItem" class="qp-item qp-now">
-                    <div class="qp-now-ico">
-                      <svg-icon icon-class="waveform" />
-                    </div>
+                    <div class="qp-now-blank"></div>
                     <PodImage
                       v-if="nowPlayingItem.coverUrl"
                       class="qp-cover"
@@ -649,9 +648,7 @@
                       </div>
                       <!-- [播放列表] 正在播放：置顶信息行(沉浸页，与播放 bar 一致) -->
                       <div v-if="nowPlayingItem" class="qp-item qp-now">
-                        <div class="qp-now-ico">
-                          <svg-icon icon-class="waveform" />
-                        </div>
+                        <div class="qp-now-blank"></div>
                         <PodImage
                           v-if="nowPlayingItem.coverUrl"
                           class="qp-cover"
@@ -2188,6 +2185,25 @@ export default {
     background-position: 150% 0;
   }
 }
+// [加载条配色] 加载高光条原用 --color-primary(蓝)。改为与各自进度条一致：
+//   底栏 = 封面主色(--prog-fill，与已播段同色)；沉浸页 = 浅色 --imm-accent(保持沉浸页原浅色，不用蓝)。
+//   用 background-image 只覆盖渐变色，保留基类的 size/repeat/动画。
+.progress-bar .buffering-bar {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--prog-fill, #335eea) 50%,
+    transparent 100%
+  );
+}
+.imm-progress .buffering-bar {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--imm-accent) 50%,
+    transparent 100%
+  );
+}
 
 // [播客改造 A-7.8] 进度条 hover 时间小气泡：跟主题色一致，不扎眼，位置稍下移但不紧贴
 .progress-hover-tip {
@@ -2608,6 +2624,11 @@ export default {
       line-height: 1;
       letter-spacing: -2px;
       user-select: none;
+      // [播放列表对齐] 固定宽度 → 与"正在播放"行的等宽空位(.qp-now-blank)对齐，保证两行封面同一起点
+      width: 20px;
+      box-sizing: border-box;
+      text-align: center;
+      flex-shrink: 0;
       padding: 2px 4px;
       &:hover {
         opacity: 0.85;
@@ -2661,20 +2682,17 @@ export default {
   // [播放列表] 正在播放置顶行：复用 .qp-item，但非交互(不可点/拖/删)
   .qp-now {
     cursor: default;
+    // [播放列表] 与下方队列之间用稍粗分隔线区隔(比行间 1px 略粗)
+    border-bottom-width: 2px;
     &:hover {
       background: transparent;
     }
-    .qp-now-ico {
-      flex-shrink: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+    // [播放列表对齐] 左侧等宽空位(替代原音波图标)：与队列行拖动点 .qp-handle 等宽 → 封面对齐；不占交互
+    .qp-now-blank {
+      width: 20px;
+      box-sizing: border-box;
       padding: 2px 4px;
-      color: var(--color-primary);
-      .svg-icon {
-        width: 14px;
-        height: 14px;
-      }
+      flex-shrink: 0;
     }
     .qp-now-tag {
       flex-shrink: 0;

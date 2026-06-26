@@ -987,8 +987,9 @@ export default {
       else this.selectedEpIds.push(ep.id);
     },
     // [B-34] 单集行点击：多选模式 → 勾选；否则延迟进单集详情(留窗口给双击拦截)
-    // [TODO4] 单击进详情、双击直接播放：单击先挂起 ~150ms；这期间来 dblclick 则取消导航、改播放。
-    //   150ms(原 250ms)：缩短延迟让单击跳转更跟手，仍能抓住双击。
+    // [TODO4] 单击进详情、双击直接播放：单击先挂起 ~250ms；这期间来 dblclick 则取消导航、改播放。
+    //   250ms：150ms 太短，双击两下间隔稍大就会在第二下之前触发单击导航(变成"双击却进了详情")，
+    //   250ms 才能稳定抓住双击=播放(双击=只播放、单击=进详情)。
     onRowClick(ep) {
       if (this.selectMode) {
         this.toggleSelect(ep);
@@ -998,7 +999,7 @@ export default {
       this._rowClickTimer = setTimeout(() => {
         this._rowClickTimer = null;
         this.goEpisodeDetail(ep);
-      }, 150);
+      }, 250);
     },
     // [TODO4] 双击单集行 → 取消挂起的"进详情"，直接播放
     onRowDblClick(ep) {

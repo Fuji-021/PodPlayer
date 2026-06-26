@@ -280,8 +280,9 @@ export default {
         this._rowClickTimer = null;
       }
     },
-    // [下载页改版] 行点击：选择模式=切换选中；否则单击延迟 150ms 进单集详情(留窗口给双击拦截)
-    //   口径与 podcastDetail onRowClick 一致(单击进详情、双击播放)。150ms=尽量跟手又能抓住双击。
+    // [下载页改版] 行点击：选择模式=切换选中；否则单击延迟 250ms 进单集详情(留窗口给双击拦截)
+    //   口径与 podcastDetail onRowClick 一致(单击进详情、双击播放)。250ms：150ms 太短，双击两下间隔稍大就
+    //   会在第二下之前触发单击导航(变成"双击却进了详情")；250ms 才能稳定抓住双击=播放。
     onRowClick(item) {
       if (this.selectMode) {
         this.toggleSelect(item);
@@ -291,7 +292,7 @@ export default {
       this._rowClickTimer = setTimeout(() => {
         this._rowClickTimer = null;
         this.goEpisode(item);
-      }, 150);
+      }, 250);
     },
     // [下载页改版] 双击行 → 取消挂起的"进详情"，直接播放
     onRowDblClick(item) {
@@ -309,7 +310,7 @@ export default {
       this._rowClickTimer = setTimeout(() => {
         this._rowClickTimer = null;
         this.goPodcast(item);
-      }, 150);
+      }, 250);
     },
     // [下载页改版] 从 id(=feedUrl::guid) 解出 feedUrl/guid，口径与 downloads.js dirGuidFor 一致
     //   (用 indexOf/slice，guid 自身含 '::' 也不会被截断)
