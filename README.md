@@ -8,10 +8,9 @@
   <img alt="electron" src="https://img.shields.io/badge/Electron-13-47848F?logo=electron&logoColor=white">
   <img alt="vue" src="https://img.shields.io/badge/Vue-2-42b883?logo=vuedotjs&logoColor=white">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
-  <img alt="based on" src="https://img.shields.io/badge/based%20on-YesPlayMusic-c5283d">
 </p>
 
-PodPlayer 是基于 [YesPlayMusic](https://github.com/qier222/YesPlayMusic) 深度改造的个人自用桌面播客客户端——把一个网易云音乐播放器，改造成专注「订阅 / 收听 / 管理」播客的工具，定位类似桌面版小宇宙 / Apple Podcasts。
+PodPlayer 是一个深度改造的个人自用桌面播客客户端——由一个开源网易云音乐播放器改造而来，聚焦「订阅 / 收听 / 管理」播客，定位类似桌面版小宇宙 / Apple Podcasts。
 
 > 这是个人项目，按自己的使用习惯打磨，不保证通用性。欢迎 fork 自用。
 
@@ -142,13 +141,13 @@ yarn electron:build-linux  # Linux（AppImage / deb / rpm 等）
 - **启动后「数据没了」？** 多半是开发 devserver 端口被残留进程占用导致换了端口（IndexedDB 按端口隔离）。先用启动脚本清理端口残留再启动，数据会回来。
 - **启动时弹防火墙询问？** 因本机起了回环服务（neapi / express）。本机回环即可，允许 / 取消都不影响使用。
 - **必须 Node 16 吗？** 是。系统若装了更高版本 Node，请用 nvm 切到 16 再 `yarn install`，否则原生模块可能编译失败。
-- **能和网易云版 YesPlayMusic 同时开吗？** 能。PodPlayer 用独立应用身份 / 数据目录 / 端口，与上游正式版互不干扰。
+- **能和原网易云音乐播放器版同时开吗？** 能。PodPlayer 用独立应用身份 / 数据目录 / 端口，与它互不干扰。
 
 ## 致谢
 
-- 基于 [qier222/YesPlayMusic](https://github.com/qier222/YesPlayMusic)。
+- 由一个开源的网易云音乐播放器深度改造而来；上游版权与许可见 [LICENSE](./LICENSE)。
 - NAS 就近音源对接 [Audiobookshelf](https://www.audiobookshelf.org/)。
 
 ## 许可
 
-沿用上游 [MIT License](https://opensource.org/licenses/MIT)。仅供个人学习研究与自用，请勿用于商业及非法用途。
+[MIT License](https://opensource.org/licenses/MIT)，详见 [LICENSE](./LICENSE)。仅供个人学习研究与自用，请勿用于商业及非法用途。
