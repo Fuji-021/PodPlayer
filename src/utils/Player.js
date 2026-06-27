@@ -13,6 +13,7 @@ import { saveEpisodeProgress, getEpisodeProgress } from '@/utils/podcast/db';
 import {
   buildAudioProxyUrl,
   touchDownloadAccess,
+  relinkDownloads,
 } from '@/utils/podcast/downloads';
 // [NAS] 音源②级：本地未命中→NAS 在线则解析流URL，失败/不可用返回 null 直落 CDN
 import {
@@ -32,6 +33,10 @@ import { isCreateMpris, isCreateTray } from '@/utils/platform';
 import { Howl, Howler } from 'howler';
 import shuffle from 'lodash/shuffle';
 import { decode as base642Buffer } from '@/utils/base64';
+
+// [D163后续·gap①] 已对某集触发过"本地文件缺失→relink 自愈"的集合：每集每会话只试一次，
+//   避免文件真被删时每次播放都重扫磁盘。
+const _relinkTriedIds = new Set();
 
 const PLAY_PAUSE_FADE_DURATION = 200;
 
@@ -1040,9 +1045,42 @@ export default class {
           {};
         const fp = pathMap[track.podcastEpisodeId];
         if (fp) {
-          touchDownloadAccess(track.podcastEpisodeId); // [C3] 播放命中本地→刷新 lastAccess(LRU)
-          const norm = String(fp).replace(/\\/g, '/').replace(/^\/+/, '');
-          return Promise.resolve('file:///' + norm); // ① 本地已下载，最高优先级
+          // [D163后续·gap①] 取源时校验本地文件确实存在：pathMap/记录可能指向已被移走或删除的旧路径
+          //   (整盘搬迁、用户在文件管理器里删了文件)。原来不校验就返 file://，坏路径要等 howler load
+          //   失败再靠 _recoverCurrentSource(D161) 兜——这里在源头拦：存在才返 file://；不存在则当未下载
+          //   落 ②NAS/③流播继续能听，并触发一次 relink 自愈记录(按 sha1 反查当前 getPodcastsDir 纠正/复活；
+          //   文件真没了则反查不到、记录自然不再命中本地)。
+          let fileOk = true;
+          if (ipcRenderer) {
+            try {
+              const r = await ipcRenderer.invoke('podcast:download:exists', {
+                filePath: fp,
+              });
+              // 校验明确返回不存在才判缺失；其余(无返回/异常)按存在处理，不回归(宁可试本地再靠运行期恢复网兜)。
+              fileOk = !r || r.exists !== false;
+            } catch (e) {
+              fileOk = true;
+            }
+          }
+          if (fileOk) {
+            touchDownloadAccess(track.podcastEpisodeId); // [C3] 播放命中本地→刷新 lastAccess(LRU)
+            const norm = String(fp).replace(/\\/g, '/').replace(/^\/+/, '');
+            return Promise.resolve('file:///' + norm); // ① 本地已下载，最高优先级
+          }
+          console.warn(
+            '[player] 已下载记录指向的本地文件不存在，落流播并触发 relink 自愈：',
+            fp
+          );
+          if (!_relinkTriedIds.has(track.podcastEpisodeId)) {
+            _relinkTriedIds.add(track.podcastEpisodeId);
+            // 不 await：不阻塞本次取源；自愈在后台跑，找回则下次播放即用对的 file:// 路径。
+            try {
+              relinkDownloads().catch(() => {});
+            } catch (e) {
+              /* ignore */
+            }
+          }
+          // 不 return：继续往下落 ②NAS → ③CDN/流播代理，本次仍能听。
         }
         // ② [NAS] 本地未命中 → NAS 启用且在线则试解析流 URL；resolveNasUrl 内含熔断
         //    (未启用/不可用同步返回 null、零等待)，失败/查不到也返回 null → 直落 ③CDN，绝不阻断播放。
