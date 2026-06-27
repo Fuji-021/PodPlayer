@@ -2,11 +2,13 @@
 # Kill by project electron.exe path because renderers listen on no port; spare a LIVE sandbox
 # (ports 20202/27234). ASCII-only + single-line Where-Object for Windows PowerShell 5.1.
 #
-# NOTE on the 2026-06-27 "DB can't open" saga: the deepest cause was environment, not this script
-# -- the assistant tool ran as Administrator in a sandbox while the human double-clicks as a
-# different user (Fuji); whichever account's instance holds the IndexedDB lock blocks the other,
-# and neither can kill the other's processes. So: do NOT leave stray dev instances from another
-# account/session running. This script still reliably clears THIS user's dev instances.
+# NOTE on the 2026-06-27 "DB can't open" saga: this script (and the cross-account "lock contention"
+# idea) turned out to be a RED HERRING. The real, verified cause was NOT lock contention -- a single
+# clean instance failed too. It was: the old data dir C:\Users\Administrator\...\PodPlayerDev got an
+# AppContainer ACL from the sandbox, so a Medium-integrity normal double-click could not open the
+# IndexedDB there (High-integrity could). Fixed by moving userData to a clean fixed disk path
+# (D:\MyYesPlayerMusic\PodPlayerData) in background.js -- see KB D162 / the sandbox-ACL incident.
+# This script is kept only as reasonable dev hygiene (clear THIS user's stray dev instances).
 
 $ErrorActionPreference = 'SilentlyContinue'
 $projDir = 'D:\MyYesPlayerMusic\YesPlayMusic\node_modules\'

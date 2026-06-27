@@ -7,11 +7,13 @@ echo ============================================================
 echo.
 
 REM Instance isolation: this script starts/cleans ONLY the dev instance.
-REM Identity PodPlayerDev -> %APPDATA%\PodPlayerDev\ -> its own IndexedDB,
-REM never sharing a LevelDB LOCK with prod(PodPlayer)/sandbox(PodPlayerSandbox).
-REM NOTE: keep this file ASCII-only. Chinese + special chars in comments get
-REM garbled under the default console code page when double-clicked, which can
-REM corrupt parsing and silently skip the kill step (caused the DB-lock bug).
+REM Identity PodPlayerDev -> userData D:\MyYesPlayerMusic\PodPlayerData\PodPlayerDev
+REM   (FIXED disk path set in background.js, NOT %APPDATA%; see KB D162 / sandbox-ACL incident)
+REM   -> its own IndexedDB, separate from prod(PodPlayer)/sandbox(PodPlayerSandbox).
+REM NOTE: keep this file ASCII-only -- defensive only (Chinese/special chars can be garbled under
+REM   the default console code page on double-click and corrupt parsing). This ASCII rule and the
+REM   process-kill below were RED HERRINGS during the 2026-06-27 "DB can't open" probe; the real
+REM   cause was sandbox AppContainer ACL on the old %APPDATA% data dir + Medium token (see KB D162).
 
 REM 0) profile + ports (inherited by electron main and vue-cli)
 set "PODPLAYER_PROFILE=dev"
