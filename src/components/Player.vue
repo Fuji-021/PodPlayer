@@ -142,10 +142,7 @@
             </div>
             <!-- [播客改造 A-7.1] 爱心收藏：当前播放是播客则走本地收藏，否则保留原网易云逻辑 -->
             <div class="like-button" :class="{ favorited: isFavorited }">
-              <button-icon
-                v-tip="isFavorited ? '取消收藏' : '收藏'"
-                @click.native.stop="toggleFavorite"
-              >
+              <button-icon @click.native.stop="toggleFavorite">
                 <svg-icon v-show="!isFavorited" icon-class="heart"></svg-icon>
                 <svg-icon
                   v-show="isFavorited"
@@ -165,24 +162,18 @@
                图标暂用原项目的 previous/next（自绘 SVG 风格不一致，暂缓） -->
             <button-icon
               v-show="!player.isPersonalFM"
-              v-tip="'后退 15 秒'"
               @click.native="seekBackward15"
               ><svg-icon icon-class="previous"
             /></button-icon>
             <button-icon
               v-show="player.isPersonalFM"
-              v-tip="'不喜欢'"
               @click.native="moveToFMTrash"
               ><svg-icon icon-class="thumbs-down"
             /></button-icon>
-            <button-icon
-              v-tip="$t(player.playing ? 'player.pause' : 'player.play')"
-              class="play"
-              @click.native="playOrPause"
-            >
+            <button-icon class="play" @click.native="playOrPause">
               <svg-icon :icon-class="player.playing ? 'pause' : 'play'"
             /></button-icon>
-            <button-icon v-tip="'前进 30 秒'" @click.native="seekForward30"
+            <button-icon @click.native="seekForward30"
               ><svg-icon icon-class="next"
             /></button-icon>
           </div>
@@ -280,7 +271,6 @@
                          × 与封面都对齐)。左侧用封面主色的播放/暂停图标占位(=⋮⋮宽，无圆圈)且可点切换；右侧 × 剔除。 -->
                     <div v-if="nowPlayingItem" class="qp-item qp-now">
                       <button
-                        v-tip="playing ? '暂停' : '播放'"
                         class="qp-now-play"
                         :style="{ color: coverFillColor }"
                         @click.stop="playOrPause"
@@ -388,12 +378,9 @@
                 </div>
               </transition>
             </div>
+            <!-- [播客改造] 取消循环播放按钮（播客不需要；与随机播放一致，源码保留可逆） -->
             <button-icon
-              v-tip="
-                player.repeatMode === 'one'
-                  ? $t('player.repeatTrack')
-                  : $t('player.repeat')
-              "
+              v-if="false"
               :class="{
                 active: player.repeatMode !== 'off',
                 disabled: player.isPersonalFM,
@@ -419,7 +406,6 @@
             /></button-icon>
             <button-icon
               v-if="settings.enableReversedMode"
-              v-tip="$t('player.reversed')"
               :class="{
                 active: player.reversed,
                 disabled: player.isPersonalFM,
@@ -429,7 +415,7 @@
             /></button-icon>
             <!-- [播客改造 A-7.4] 滚轮调音量：在音量按钮或音量条上滚动均可 -->
             <div class="volume-control" @wheel.prevent="onVolumeWheel">
-              <button-icon v-tip="$t('player.mute')" @click.native="mute">
+              <button-icon @click.native="mute">
                 <svg-icon v-show="volume > 0.5" icon-class="volume" />
                 <svg-icon v-show="volume === 0" icon-class="volume-mute" />
                 <svg-icon
@@ -454,7 +440,6 @@
             <!-- [沉浸式播放页 P0] 展开沉浸页按钮：arrow-up = 向上展开全屏沉浸页。
                原 toggleLyrics(老网易云歌词页)已不适用播客，改调 toggleImmersive；歌词代码原样保留(可逆)。 -->
             <button-icon
-              v-tip="'沉浸页'"
               class="lyrics-button"
               style="margin-left: 12px"
               @click.native="toggleImmersive"
@@ -485,10 +470,7 @@
 
         <!-- 顶部：收起按钮（z-index 高于 drag-bar，点击不受 drag 影响） -->
         <div class="imm-top">
-          <button-icon
-            v-tip="'收起'"
-            class="imm-collapse"
-            @click.native="closeImmersive"
+          <button-icon class="imm-collapse" @click.native="closeImmersive"
             ><svg-icon icon-class="arrow-down"
           /></button-icon>
         </div>
@@ -601,7 +583,6 @@
                   @click.stop
                 >
                   <button
-                    v-tip="'倍速'"
                     class="rate-button"
                     :class="{ active: playbackRate !== 1 }"
                     @click="toggleRateMenu"
@@ -635,7 +616,6 @@
                 <!-- 播放列表(复用 queuePanelOpen/toggleQueuePanel + 队列状态/方法) -->
                 <div ref="queueControlImm" class="queue-control" @click.stop>
                   <button-icon
-                    v-tip="'播放列表'"
                     :class="{ active: queuePanelOpen }"
                     @click.native="toggleQueuePanel"
                     ><svg-icon icon-class="queue"
@@ -662,7 +642,6 @@
                         <!-- [播放列表] 正在播放 sticky 置顶行(沉浸页，与播放 bar 一致；放进 qp-list 内对齐) -->
                         <div v-if="nowPlayingItem" class="qp-item qp-now">
                           <button
-                            v-tip="playing ? '暂停' : '播放'"
                             class="qp-now-play"
                             :style="{ color: coverFillColor }"
                             @click.stop="playOrPause"
@@ -725,7 +704,6 @@
                 <!-- 睡眠(复用 sleepMenuOpen/toggleSleepMenu + 睡眠状态/方法) -->
                 <div ref="sleepControlImm" class="sleep-control" @click.stop>
                   <button-icon
-                    v-tip="'睡眠定时'"
                     :class="{ active: sleepMode !== 'off' }"
                     @click.native="toggleSleepMenu"
                     ><svg-icon icon-class="moon"
@@ -774,22 +752,13 @@
 
               <!-- 三大金刚：后退15 / 播放暂停(无圈) / 前进30 -->
               <div class="imm-king">
-                <button-icon
-                  v-tip="'后退 15 秒'"
-                  class="imm-seek"
-                  @click.native="seekBackward15"
+                <button-icon class="imm-seek" @click.native="seekBackward15"
                   ><svg-icon icon-class="previous"
                 /></button-icon>
-                <button-icon
-                  v-tip="$t(player.playing ? 'player.pause' : 'player.play')"
-                  class="imm-play"
-                  @click.native="playOrPause"
+                <button-icon class="imm-play" @click.native="playOrPause"
                   ><svg-icon :icon-class="player.playing ? 'pause' : 'play'"
                 /></button-icon>
-                <button-icon
-                  v-tip="'前进 30 秒'"
-                  class="imm-seek"
-                  @click.native="seekForward30"
+                <button-icon class="imm-seek" @click.native="seekForward30"
                   ><svg-icon icon-class="next"
                 /></button-icon>
               </div>
@@ -822,10 +791,7 @@
                 </div>
                 <!-- 收藏 -->
                 <div class="imm-like" :class="{ favorited: isFavorited }">
-                  <button-icon
-                    v-tip="isFavorited ? '取消收藏' : '收藏'"
-                    @click.native="toggleFavorite"
-                  >
+                  <button-icon @click.native="toggleFavorite">
                     <svg-icon
                       v-show="!isFavorited"
                       icon-class="heart"
@@ -844,7 +810,6 @@
                   @click.stop
                 >
                   <button-icon
-                    v-tip="'音量'"
                     :class="{ active: volMenuOpen }"
                     @click.native="toggleVolMenu"
                   >
