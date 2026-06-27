@@ -1,6 +1,6 @@
 {
   "name": "podplayer",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "private": true,
   "description": "A personal desktop podcast client (forked from YesPlayMusic)",
   "author": "Fujii",
