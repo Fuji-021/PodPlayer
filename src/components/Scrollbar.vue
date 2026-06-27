@@ -61,9 +61,24 @@ export default {
 
   methods: {
     handleScroll() {
-      const clintHeight = this.main.clientHeight - 128;
-      const scrollHeight = this.main.scrollHeight - 128;
-      const scrollTop = this.main.scrollTop;
+      const main = this.main;
+      // [首页滚动卡顿修·P1] 原来每个 scroll 事件(键盘 rAF 滚动时 ~60 次/秒)都同步读 clientHeight +
+      //   scrollHeight，紧跟在 rAF 写 scrollTop 之后 → 教科书式 forced synchronous layout(layout
+      //   thrash)。首页一次性铺 40+ 张封面卡(不虚拟化)，每帧整页 reflow → 卡顿；单集详情页虚拟化
+      //   DOM 极少故无感。修：这俩几何量在一次连续滚动里基本不变，节流到 ~每 250ms 才重读一次；每帧
+      //   只读 scrollTop(轻)。自愈：内容/视口变化最多 250ms 后反映到滚动条，无需挂 resize/路由钩子。
+      const now =
+        typeof performance !== 'undefined' && performance.now
+          ? performance.now()
+          : Date.now();
+      if (!this._metricsTs || now - this._metricsTs > 250 || !this._cScrollH) {
+        this._cClientH = main.clientHeight - 128;
+        this._cScrollH = main.scrollHeight - 128;
+        this._metricsTs = now;
+      }
+      const clintHeight = this._cClientH;
+      const scrollHeight = this._cScrollH;
+      const scrollTop = main.scrollTop;
       let top = ~~((scrollTop / scrollHeight) * clintHeight);
       let thumbHeight = ~~((clintHeight / scrollHeight) * clintHeight);
 

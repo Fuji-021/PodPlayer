@@ -97,7 +97,16 @@ export default {
   created() {
     if (this.isElectron) ipcRenderer(this);
     window.addEventListener('keydown', this.handleKeydown);
+    // [键盘滚动] 长按连续平滑滚动需要成对的 keyup(松开收尾)与 blur(切窗口防卡在持续滚动)。
+    window.addEventListener('keyup', this.handleScrollKeyup);
+    window.addEventListener('blur', this.stopKbScroll);
     this.fetchData();
+  },
+  beforeDestroy() {
+    window.removeEventListener('keydown', this.handleKeydown);
+    window.removeEventListener('keyup', this.handleScrollKeyup);
+    window.removeEventListener('blur', this.stopKbScroll);
+    this.stopKbScroll();
   },
   methods: {
     handleKeydown(e) {
@@ -106,8 +115,118 @@ export default {
         if (this.$route.name === 'mv') return false;
         e.preventDefault();
         this.player.playOrPause();
+        return;
+      }
+      // [键盘滚动] ↑/↓ 滚一步、PageUp/PageDown 滚一屏，作用于全站唯一滚动容器 <main>。
+      this.handleScrollKeydown(e);
+    },
+    // [键盘滚动] 用键盘连续平滑滚动主内容区。<main> 是全站唯一滚动容器(position:fixed，默认键盘
+    //   滚不动，故显式接管)。手感关键：不是「每次 keydown 跳一格」(那样长按受系统按键重复频率限制 →
+    //   一顿一顿)，而是按住即用 requestAnimationFrame 每帧按速度推进 scrollTop(60fps 连续)、松开缓动
+    //   停住，像鼠标中键自动滚。多重让行：① 只认裸 ↑/↓/PageUp/PageDown；② 带 Ctrl/Cmd/Alt 让给既有
+    //   快捷键(如 Ctrl+↑/↓ 音量)；③ mv/沉浸页/歌词页(overlay 锁 enableScrolling=false)不抢；
+    //   ④ 焦点在输入框/可编辑区(方向键给光标)、或在 vue-slider 滑块(方向键调值)时不抢。
+    handleScrollKeydown(e) {
+      const code = e.code;
+      let dir = 0;
+      if (code === 'ArrowUp' || code === 'PageUp') dir = -1;
+      else if (code === 'ArrowDown' || code === 'PageDown') dir = 1;
+      else return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (this.$route.name === 'mv') return;
+      if (this.showLyrics) return;
+      if (!this.enableScrolling) return;
+      const t = e.target;
+      if (t) {
+        const tag = t.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          t.isContentEditable
+        ) {
+          return;
+        }
+        if (typeof t.closest === 'function' && t.closest('.vue-slider')) return;
+      }
+      const main = this.$refs.main;
+      if (!main) return;
+      e.preventDefault(); // 顶掉系统默认滚动，避免与 rAF 双滚
+      const isPage = code === 'PageUp' || code === 'PageDown';
+      // 目标速度(px/s)：方向键平稳、翻页键约 3.2 屏/秒(随视口高自适应)。连续 rAF 滚，
+      //   手感不受系统按键重复频率影响 = 长按不再一顿一顿。
+      const speed = isPage ? Math.max(main.clientHeight * 3.2, 2600) : 1100;
+      this._kbScrollActive = code;
+      this._kbScrollTargetVel = dir * speed;
+      this.startKbScroll();
+    },
+    startKbScroll() {
+      // [首页滚动卡顿修·P2] 滚动期给 body 打标记 → 全局 CSS 冻结封面淡入/辉光过渡(见本文件 style)，
+      //   砍掉慢速逐张进场时叠加的 transition 重算峰值(订阅页同款 .scrolling 冻结方案)。鼠标滚轮另说，
+      //   这里只在键盘连续滚动期间冻结、松开即恢复。
+      if (typeof document !== 'undefined') {
+        document.body.classList.add('is-kb-scrolling');
+      }
+      if (this._kbScrollRAF) return; // 已在滚，仅更新目标速度即可
+      this._kbScrollLastTs = 0;
+      this._kbScrollRAF = requestAnimationFrame(this.kbScrollStep);
+    },
+    kbScrollStep(ts) {
+      const main = this.$refs.main;
+      if (!main) {
+        this._kbScrollRAF = null;
+        return;
+      }
+      if (!this._kbScrollLastTs) this._kbScrollLastTs = ts;
+      let dt = (ts - this._kbScrollLastTs) / 1000;
+      this._kbScrollLastTs = ts;
+      if (dt > 0.05) dt = 0.05; // 掉帧/切走回来别一次猛跳
+      const target = this._kbScrollTargetVel || 0;
+      // 速度向目标缓动：起步/收尾都顺(不是硬启停)，约 200ms 到位。
+      const ease = Math.min(1, dt * 14);
+      const cur = this._kbScrollVel || 0;
+      const v = cur + (target - cur) * ease;
+      this._kbScrollVel = v;
+      // [抖动修] 单帧位移封顶 ≈1.5 个 60fps 帧的量。长按久了偶发的掉帧(单集列表跨行重渲染、GC、
+      //   播放器每秒落盘任务都会让某帧 dt 变大)若按 v*dt 照搬就会「猛跳一下」= 肉眼抖动；封顶后该帧只是
+      //   少滚一点点(几乎无感)、把跳变摊匀 → 长按全程持续顺滑。dt 法本身仍保证不同刷新率下速度一致。
+      let delta = v * dt;
+      const maxStep = (Math.abs(v) / 60) * 1.5;
+      if (delta > maxStep) delta = maxStep;
+      else if (delta < -maxStep) delta = -maxStep;
+      main.scrollTop += delta;
+      // 松键(target=0)且基本停下 → 收尾、结束循环、恢复封面过渡。
+      if (target === 0 && Math.abs(v) < 4) {
+        this._kbScrollVel = 0;
+        this._kbScrollRAF = null;
+        if (typeof document !== 'undefined') {
+          document.body.classList.remove('is-kb-scrolling');
+        }
+        return;
+      }
+      this._kbScrollRAF = requestAnimationFrame(this.kbScrollStep);
+    },
+    handleScrollKeyup(e) {
+      // 只在松开「当前驱动滚动的那个键」时收尾；松开别的键不打断(多键同按由后按的键接管)。
+      if (e.code === this._kbScrollActive) {
+        this._kbScrollTargetVel = 0; // 缓动到 0 后 kbScrollStep 自停
+        this._kbScrollActive = null;
       }
     },
+    stopKbScroll() {
+      // 切窗口/失焦：keyup 可能收不到 → 立即硬停，防卡在持续滚动。
+      this._kbScrollTargetVel = 0;
+      this._kbScrollVel = 0;
+      this._kbScrollActive = null;
+      if (this._kbScrollRAF) {
+        cancelAnimationFrame(this._kbScrollRAF);
+        this._kbScrollRAF = null;
+      }
+      if (typeof document !== 'undefined') {
+        document.body.classList.remove('is-kb-scrolling');
+      }
+    },
+    // 自定义 Scrollbar 由 <main @scroll="handleScroll"> 在每帧 scrollTop 变化时自动同步，无需手动调。
     fetchData() {
       if (!isLooseLoggedIn()) return;
       this.$store.dispatch('fetchLikedSongs');
@@ -143,6 +262,15 @@ export default {
   // [B-33] 只过渡主题色，不用 transition: all——否则窗口 resize 时宽/高也被动画化，
   // 内容滞后于窗口边缘 → 露出底色"黑边"，非常割裂。这是缩放不丝滑的主因。
   transition: background-color 0.4s, color 0.4s;
+}
+
+// [首页滚动卡顿修·P2] 键盘连续滚动期间(body.is-kb-scrolling，由 App.vue startKbScroll/stopKbScroll 切)
+//   冻结封面淡入(PodImage .pod-img 的 0.4s opacity)与发现卡辉光(DiscoverCard .cover-shadow 的
+//   filter/opacity 过渡)。慢速 ↑/↓ 滚动时封面逐张进场，这些过渡逐帧重算叠加成峰值=卡顿；滚动期按住
+//   基态、松开即恢复(订阅页 .scrolling 同款思路)。非 scoped 全局样式 + !important 才能压过组件 scoped 过渡。
+body.is-kb-scrolling .pod-img,
+body.is-kb-scrolling .cover-shadow {
+  transition: none !important;
 }
 
 main {
