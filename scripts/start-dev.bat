@@ -22,11 +22,15 @@ set "PATH=C:\nvm4w\nodejs;%PATH%"
 
 REM 2) 只释放「本实例(dev)」占用的端口，绝不再 taskkill /IM electron.exe 一锅端
 REM    （那会误杀测试床/其它实例）。按端口精确清理：20201(webpack) 10755(neapi) 27233(express)。
-echo [1/4] Releasing DEV ports 20201 / 10755 / 27233 ...
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20201" ^| findstr "LISTENING"') do taskkill /F /PID %%P >nul 2>&1
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":10755" ^| findstr "LISTENING"') do taskkill /F /PID %%P >nul 2>&1
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":27233" ^| findstr "LISTENING"') do taskkill /F /PID %%P >nul 2>&1
-timeout /t 1 /nobreak >nul
+REM    [事故根治·关键] 用 /T 连子进程树一起杀：electron 主进程(占 27233 express)的「渲染子进程」
+REM    才是真正持有 PodPlayerDev IndexedDB(LevelDB)文件锁的人；只杀主进程会留下渲染子进程攥着锁，
+REM    导致重开时新实例报「本地数据库无法打开 / Internal error opening backing store」。/T = 杀整棵树。
+echo [1/4] Releasing DEV ports 20201 / 10755 / 27233 (kill whole process tree) ...
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20201" ^| findstr "LISTENING"') do taskkill /F /T /PID %%P >nul 2>&1
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":10755" ^| findstr "LISTENING"') do taskkill /F /T /PID %%P >nul 2>&1
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":27233" ^| findstr "LISTENING"') do taskkill /F /T /PID %%P >nul 2>&1
+REM 等 3s 让 OS 释放 LevelDB 文件锁(渲染进程退出到锁真正释放有延迟，1s 偶发不够 → 撞锁)。
+timeout /t 3 /nobreak >nul
 
 REM 3) Enter project dir
 echo [2/4] Entering project dir...

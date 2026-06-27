@@ -31,12 +31,12 @@ export function initMainLogger() {
   } catch (e) {
     p = '(path-pending)';
   }
-  log.info(
-    '====== app start ====== profile=' +
-      (process.env.PODPLAYER_PROFILE || 'prod') +
-      ' logfile=' +
-      p
-  );
+  // [修] 与 background.js 同口径解析 profile：未显式设 PODPLAYER_PROFILE 时，有 WEBPACK_DEV_SERVER_URL
+  //   即 dev、否则 prod。原来直接 `env || 'prod'` 会把"裸跑 yarn electron:serve(实为 dev)"误记成 prod。
+  var _profile =
+    process.env.PODPLAYER_PROFILE ||
+    (process.env.WEBPACK_DEV_SERVER_URL ? 'dev' : 'prod');
+  log.info('====== app start ====== profile=' + _profile + ' logfile=' + p);
   // 主进程未捕获异常/拒绝 → 落文件(与 background.js 既有 console 兜底并存，不退出)
   process.on('uncaughtException', err => {
     try {
