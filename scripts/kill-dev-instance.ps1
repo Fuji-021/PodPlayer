@@ -1,26 +1,48 @@
-# [事故根治·实例隔离] 杀掉「开发版(dev)」实例：占用 dev 端口 20201(webpack)/10755(neapi)/27233(express)
-#   的进程及其整棵子进程树(taskkill /F /T)。electron 主进程是 webpack(20201)节点的后代，杀这几棵树即
-#   连同 electron 主进程 + 渲染子进程一起干掉——渲染子进程才是真正攥着 PodPlayerDev IndexedDB(LevelDB)
-#   文件锁的人；不杀干净，重开就报「本地数据库无法打开 / Internal error opening backing store」。
+# Kill the DEV instance reliably. Covers:
+#   (1) the dev electron main + renderer processes, and
+#   (2) electron processes that SURVIVE after closing the terminal / minimizing to tray
+#       and still hold the PodPlayerDev IndexedDB (LevelDB) file lock.
 #
-#   为什么独立成 .ps1：原来在 start-dev.bat 里用 `netstat^|findstr^|for /f` 或 `powershell -Command "...|..."`
-#   都不可靠(cmd 对管道/引号的解析会让杀进程静默失败 → 重开时旧实例没死 → 新旧两实例撞同一个库锁=故障真因)。
-#   用 -File 调用本脚本可彻底绕开 cmd 的引号/管道地狱，行为与手动运行一致、可靠。
+# Why kill by project electron.exe path (not only by port): renderer processes
+# (--type=renderer) listen on NO TCP port. If electron survives a terminal close,
+# a port-based kill cannot find it, so it keeps the DB lock and the next launch fails
+# with "Internal error opening backing store". That is the real root cause.
 #
-#   只针对 dev 三端口 → 绝不误伤：测试床(sandbox: 20202/27234)、正式版(打包，exe 路径不同)、其它 Electron 应用。
+# Only this project's node_modules\electron processes are killed (dev). A LIVE sandbox
+# is spared by excluding the process tree rooted at the sandbox ports (20202 / 27234).
+# Prod is a packaged exe (different path) and is never affected.
+#
+# NOTE: keep this file ASCII-only. PowerShell 5.1 reads a BOM-less .ps1 using the system
+# ANSI code page (GBK on zh-CN Windows); UTF-8 Chinese comments get mis-decoded and break
+# parsing (ParserError -> whole script skipped -> kill silently fails).
 
 $ErrorActionPreference = 'SilentlyContinue'
-$ports = 20201, 10755, 27233
-$ids = @()
-foreach ($pt in $ports) {
-  $conns = Get-NetTCPConnection -State Listen -LocalPort $pt -ErrorAction SilentlyContinue
-  foreach ($c in $conns) {
-    $procId = $c.OwningProcess
-    if ($procId -and ($ids -notcontains $procId)) { $ids += $procId }
-  }
+$projDir = 'D:\MyYesPlayerMusic\YesPlayMusic\node_modules\'
+$all = Get-CimInstance Win32_Process
+
+function Get-Tree($rootPid) {
+  $acc = @([int]$rootPid)
+  $kids = $all | Where-Object { $_.ParentProcessId -eq $rootPid }
+  foreach ($c in $kids) { $acc += Get-Tree ([int]$c.ProcessId) }
+  return $acc
 }
-foreach ($procId in $ids) {
-  if ($procId) {
-    & taskkill /F /T /PID $procId 2>$null | Out-Null
-  }
+
+# 1) Spare set = full process tree of any LIVE sandbox (ports 20202 webpack / 27234 express).
+$spare = @()
+foreach ($sbPort in 20202, 27234) {
+  $owners = (Get-NetTCPConnection -State Listen -LocalPort $sbPort -ErrorAction SilentlyContinue).OwningProcess
+  foreach ($owner in $owners) { if ($owner) { $spare += Get-Tree ([int]$owner) } }
+}
+$spare = $spare | Sort-Object -Unique
+
+# 2) Kill every project electron.exe not in the sandbox spare set (main + renderer + survivors).
+$elec = $all | Where-Object { $_.Name -eq 'electron.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($projDir) }
+foreach ($p in $elec) {
+  if ($spare -notcontains [int]$p.ProcessId) { & taskkill /F /T /PID $p.ProcessId 2>$null | Out-Null }
+}
+
+# 3) Kill the dev-port (20201/10755/27233) owning trees - dev-only ports, never the sandbox.
+foreach ($devPort in 20201, 10755, 27233) {
+  $owners = (Get-NetTCPConnection -State Listen -LocalPort $devPort -ErrorAction SilentlyContinue).OwningProcess
+  foreach ($owner in $owners) { if ($owner -and ($spare -notcontains [int]$owner)) { & taskkill /F /T /PID $owner 2>$null | Out-Null } }
 }
