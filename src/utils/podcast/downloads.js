@@ -451,37 +451,60 @@ export async function relinkDownloads() {
 export async function recoverDownloadsOnce() {
   if (!ipcRenderer) return;
   try {
-    const FLAG = 'podplayer_dlpath_migrated_v1';
-    if (window.localStorage.getItem(FLAG)) return;
     const userData = await ipcRenderer.invoke('podcast:userDataDir');
     const cur = String(userData || '')
       .replace(/[\\/]+$/, '')
       .split(/[\\/]/)
       .pop();
-    let migrated = 0;
-    if (cur && cur !== 'YesPlayMusicPodcast') {
-      const OLD = '\\YesPlayMusicPodcast\\';
-      const NEW = '\\' + cur + '\\';
-      const rows = await db.episodeDownloads.toArray();
-      for (const r of rows) {
-        if (r && r.filePath && r.filePath.indexOf(OLD) !== -1) {
-          await db.episodeDownloads.update(r.id, {
-            filePath: r.filePath.split(OLD).join(NEW),
-          });
-          migrated++;
+
+    // ① [v1·一次性] 实例改名(YesPlayMusicPodcast → 当前身份)的旧绝对前缀迁移。
+    const FLAG = 'podplayer_dlpath_migrated_v1';
+    if (!window.localStorage.getItem(FLAG)) {
+      let migrated = 0;
+      if (cur && cur !== 'YesPlayMusicPodcast') {
+        const OLD = '\\YesPlayMusicPodcast\\';
+        const NEW = '\\' + cur + '\\';
+        const rows = await db.episodeDownloads.toArray();
+        for (const r of rows) {
+          if (r && r.filePath && r.filePath.indexOf(OLD) !== -1) {
+            await db.episodeDownloads.update(r.id, {
+              filePath: r.filePath.split(OLD).join(NEW),
+            });
+            migrated++;
+          }
         }
       }
+      if (migrated > 0) {
+        try {
+          await relinkDownloads();
+        } catch (e) {
+          // ignore
+        }
+        console.log(`[downloads] 已迁移 ${migrated} 条下载路径 → ${cur}`);
+      }
+      window.localStorage.setItem(FLAG, '1');
     }
-    // 仅当确有旧前缀记录被改写时，才用 sha1 反查兜底（避免对空库做无谓全盘扫描）。
-    if (migrated > 0) {
+
+    // ② [v2·一次性·D163] userData 整盘迁移(%APPDATA% → D:\PodPlayerData)兜底：
+    //   v1 只改 \YesPlayMusicPodcast\ 前缀，不覆盖"换盘/换父目录"。下载文件随 userData 搬到
+    //   当前 getPodcastsDir 后，旧记录仍是旧绝对路径(如 C:\...\AppData\Roaming\PodPlayerDev\)，
+    //   在新目录找不到 → 被当成"未下载"去流播(CDN 一卡就永远缓冲)。这里无条件 relink 一次：
+    //   按 sha1 反查当前 getPodcastsDir、把记录路径纠正到磁盘实测位置。幂等：无匹配即 no-op
+    //   (全新用户/无下载自然跳过)。
+    const FLAG2 = 'podplayer_dlpath_relinked_v2';
+    if (!window.localStorage.getItem(FLAG2)) {
       try {
-        await relinkDownloads();
+        const r = await relinkDownloads();
+        if (r && r.relinked > 0) {
+          console.log(
+            `[downloads] 整盘迁移 relink 纠正 ${r.relinked} 条下载路径`
+          );
+        }
       } catch (e) {
         // ignore
       }
-      console.log(`[downloads] 已迁移 ${migrated} 条下载路径 → ${cur}`);
+      window.localStorage.setItem(FLAG2, '1');
     }
-    window.localStorage.setItem(FLAG, '1');
   } catch (e) {
     console.warn('[downloads] recoverDownloadsOnce 失败', e);
   }

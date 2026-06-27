@@ -486,8 +486,13 @@ export function registerPodcastDownloadIpc(getWindow) {
         continue;
       }
       // [orphan-download] 排除 .part 半成品(启动期 sweep 通常已删，此为双保险)，只认正式名。
+      // [D163] 同时排除 .pcache(流播缓存半成品)：同目录可能同时有 <hash>.m4a(完整下载) 与
+      //   <hash>.m4a.pcache(残缺流播缓存)，前缀都命中；绝不能 relink 到 .pcache(会挂上残缺文件→播放卡死)。
       const hit = files.find(
-        n => n.indexOf(prefix) === 0 && n.slice(-5) !== '.part'
+        n =>
+          n.indexOf(prefix) === 0 &&
+          n.slice(-5) !== '.part' &&
+          n.slice(-7) !== '.pcache'
       );
       if (!hit) continue;
       const fp = path.join(dir, hit);
