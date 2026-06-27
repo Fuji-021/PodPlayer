@@ -485,6 +485,27 @@ export default class {
           this._genStallSec = 0;
         }
         this._genLastPos = this._progress;
+      } else if (this._proxyDirectFallback && this._howler.playing()) {
+        // [流播缓存代理停滞看门狗·D163后续] 走 /pa 流播代理(_proxyDirectFallback 已记原始直链)时，
+        //   howler 自认在播但位置连续 ~3s 不前进 = 上游 CDN 停滞却不报 'error'(国际 CDN 被污染/冻结的
+        //   典型，loaderror/playerror 都不触发)→ 此前无人接管 = 永久缓冲。这里回退原始直链续播
+        //   (renderer/Chromium+TUN 是另一条网络路径，给第二次机会)。独立计数器(_proxyLastPos/
+        //   _proxyStallSec)与 NAS/通用物理隔离；_fallbackProxyToDirect 会清 _proxyDirectFallback，
+        //   之后转由通用看门狗接管直链，不会困在代理里反复停滞。阈值 3s 与 NAS/通用看门狗一致。
+        if (
+          this._proxyLastPos != null &&
+          Math.abs(this._progress - this._proxyLastPos) < 0.25
+        ) {
+          this._proxyStallSec = (this._proxyStallSec || 0) + 1;
+          if (this._proxyStallSec >= 3) {
+            this._proxyStallSec = 0;
+            this._fallbackProxyToDirect();
+            return;
+          }
+        } else {
+          this._proxyStallSec = 0;
+        }
+        this._proxyLastPos = this._progress;
       }
       const t = this._currentTrack;
       if (
@@ -642,6 +663,9 @@ export default class {
     // [播放期停滞看门狗·通用] 同步重置通用(file:///CDN)停滞计数，与 NAS 计数物理隔离、互不干扰。
     this._genLastPos = null;
     this._genStallSec = 0;
+    // [流播缓存代理停滞看门狗·D163后续] 同步重置代理停滞计数，与 NAS/通用物理隔离、互不干扰。
+    this._proxyLastPos = null;
+    this._proxyStallSec = 0;
 
     // [播客改造 C-14] 仅 autoplay=true 时显示缓冲条；重启恢复(autoplay=false)
     // Howler 只是静默 preload，不需要给用户显示"加载中"（且不显示就不会永久停留）
