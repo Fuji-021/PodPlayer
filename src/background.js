@@ -166,9 +166,16 @@ class Background {
     //   app.setName(X) 决定 userData = %APPDATA%\X\ 决定 IndexedDB 物理位置 …\X\IndexedDB\。
     //   name 唯一 → 库物理隔离 → 多实例永不抢同一 LevelDB LOCK。详见 docs/实例隔离规范.md。
     app.setName(PROFILE.name);
+    // [同一份数据·与账户/完整性无关] userData 固定到一个所有身份(普通双击/提权/打包正式版)都能完全读写的
+    //   绝对目录，不再依赖 %APPDATA%。本机 %APPDATA% 落在 C:\Users\Administrator(内置管理员=Fuji 的家目录)，
+    //   该目录被沙箱 AppContainer 的 ACL 沾染，导致「中完整性的普通双击」开不了 IndexedDB(报“本地数据库无法打开”)，
+    //   而提权/沙箱(高完整性)能开 → 出现“你拉起能行、我双击不行”。改用固定 DATA_ROOT 后，无论谁、怎么开都同一份库。
+    //   可用环境变量 PODPLAYER_DATA_ROOT 覆盖；默认 D:\MyYesPlayerMusic\PodPlayerData。profile 仍各自子目录隔离。
+    var PODPLAYER_DATA_ROOT =
+      process.env.PODPLAYER_DATA_ROOT || 'D:\\MyYesPlayerMusic\\PodPlayerData';
     app.setPath(
       'userData',
-      require('path').join(app.getPath('appData'), PROFILE.name)
+      require('path').join(PODPLAYER_DATA_ROOT, PROFILE.name)
     );
     // [日志] 必须在 setName/setPath 之后初始化：确保 electron-log 写到本 profile 的
     //   userData\logs\main.log（而非默认 app 名目录）。
