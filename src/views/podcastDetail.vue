@@ -166,6 +166,19 @@
           >
             <svg-icon icon-class="heart-solid" />
           </button>
+          <!-- [转文字稿] 转录状态/操作：未转录点击即转(未下载先下载再转)；转录中/排队/下载中
+               转圈；已转录高亮可查看。状态变更不打断正在转的任务(走单任务队列入队)。 -->
+          <button
+            v-if="!selectMode"
+            v-tip="asrTip(ep)"
+            class="ep-asr-btn"
+            :class="'asr-' + asrStateOf(ep)"
+            @click.stop="onAsrClick(ep)"
+            @dblclick.stop
+          >
+            <span v-if="asrBusy(ep)" class="ep-asr-spin"></span>
+            <svg-icon v-else icon-class="waveform" />
+          </button>
           <!-- 播放 + 更多 -->
           <button
             v-if="!selectMode"
@@ -310,6 +323,11 @@ import {
   cancelDownload,
   removeDownload,
 } from '@/utils/podcast/downloads';
+import {
+  startTranscribe,
+  transcribeState,
+  listTranscriptStatuses,
+} from '@/utils/podcast/transcripts';
 import { stripHtmlToText } from '@/utils/podcast/sanitizeHtml';
 import { getCoverColor } from '@/utils/podcast/coverColor';
 import { getEpisodeCache, setEpisodeCache } from '@/utils/podcast/episodeCache';
@@ -359,6 +377,10 @@ export default {
       // [B-34] 多选下载模式
       selectMode: false,
       selectedEpIds: [],
+      // [转文字稿] 各集转录持久态(id→done|running|paused|error)；进入页面批量读 Dexie 填充，
+      //   活动任务实时态另读 transcribeState。asrPendingMap=点了转录但未下载、正在下载待转的集。
+      asrStatusMap: {},
+      asrPendingMap: {},
       // [F1·方案C] 固定行高窗口虚拟化：episodes 始终全量(批量下载/选择/播放广播都用它)，
       //   只渲染可视窗口 [winStart,winEnd) 一段。配 top/bottom spacer 撑出 n×rowH 的恒定总高，
       //   故 main.scrollHeight 数学恒定不抖、自绘条不跳(根治 B-74 命门:Scrollbar 每帧实时读 main.scrollHeight)。
@@ -408,6 +430,11 @@ export default {
     cleanDescription() {
       return stripHtmlToText((this.podcast && this.podcast.description) || '');
     },
+    // [转文字稿] 活动转录任务的 (集+态) 键：仅集/态变化(开始/完成/出错)才驱动列表对应行重渲 +
+    //   同步到 asrStatusMap。**不读 processedSec**，避免每 ~300ms 进度 tick 触发整列表重渲。
+    asrLiveKey() {
+      return transcribeState.episodeId + '|' + transcribeState.status;
+    },
   },
   watch: {
     // 路由切换到另一档节目时重新加载
@@ -445,6 +472,36 @@ export default {
           // [修]取色出错也置 ready：回落默认底色，按钮可见
           if (this._subBtnColorSrc === url) this.subBtnReady = true;
         });
+    },
+    // [转文字稿] 活动任务状态变化 → 同步该集到列表状态图（完成显✓、出错显重试、运行/取消同步）
+    asrLiveKey() {
+      const s = transcribeState;
+      if (!s.episodeId) return;
+      if (s.status === 'done')
+        this.$set(this.asrStatusMap, s.episodeId, 'done');
+      else if (s.status === 'error')
+        this.$set(this.asrStatusMap, s.episodeId, 'error');
+      else if (s.status === 'running')
+        this.$set(this.asrStatusMap, s.episodeId, 'running');
+      else if (s.status === 'canceled')
+        this.$set(this.asrStatusMap, s.episodeId, 'paused');
+    },
+    // [转文字稿] 下载完成 → 对"点了转录但当时未下载"的集自动开始转录（pathMap 出现该集路径即完成）
+    '$store.state.podcastDownloads.pathMap': {
+      deep: true,
+      handler(pm) {
+        const ids = Object.keys(this.asrPendingMap);
+        if (!ids.length || !pm) return;
+        ids.forEach(id => {
+          if (!pm[id]) return;
+          this.$delete(this.asrPendingMap, id);
+          const ep = this.episodes.find(e => e.id === id);
+          if (!ep) return;
+          startTranscribe(ep).then(r => {
+            if (r && r.ok) this.$set(this.asrStatusMap, id, 'running');
+          });
+        });
+      },
     },
     // [B-31] 监听播放器广播：若广播的 episodeId 在自己列表里 → 重读那一集 listenStats
     '$store.state.podcastListening.listenTick'() {
@@ -694,6 +751,7 @@ export default {
         this.podcast = cached.podcast;
         this.episodes = cached.episodes;
         this._presentEpisodes();
+        this._loadAsrStatuses(); // [转文字稿] 各集转录态(Dexie，渲染端)
       }
       // 权威重读
       const podcast = await getPodcast(feedUrl);
@@ -724,6 +782,7 @@ export default {
       this.podcast = podcast;
       this.episodes = mapped;
       setEpisodeCache(feedUrl, { podcast, episodes: mapped }); // [B-77/L1] 写缓存供下次秒显
+      this._loadAsrStatuses(); // [转文字稿] 权威数据回来后刷新各集转录态
       // [B-83/预取] 后台限流补全本档"被小宇宙截断"的单集完整文稿(每集一次、已补全的跳过)，
       //   使你点进单集时完整内容已在本地、秒显无闪。失败静默，不影响列表。
       prefetchShownotesForEpisodes(mapped).catch(() => {});
@@ -1063,6 +1122,88 @@ export default {
           guidEncoded: encodeURIComponent(ep.guid),
         },
       });
+    },
+    // ---- [转文字稿] 单集行转录状态/操作（全程走渲染端 IPC，入队而非打断；不碰主进程代码）----
+    async _loadAsrStatuses() {
+      try {
+        this.asrStatusMap = await listTranscriptStatuses(
+          this.episodes.map(e => e.id)
+        );
+      } catch (e) {
+        this.asrStatusMap = {};
+      }
+    },
+    // 单集转录态：done | running(本集正在转) | queued(已入队) | downloading(下载待转) | paused | error | none
+    asrStateOf(ep) {
+      if (!ep) return 'none';
+      if (transcribeState.episodeId === ep.id) {
+        if (transcribeState.status === 'running') return 'running';
+        if (transcribeState.status === 'done') return 'done';
+      }
+      if (this.asrPendingMap[ep.id]) return 'downloading';
+      const s = this.asrStatusMap[ep.id];
+      if (s === 'done') return 'done';
+      if (s === 'running') return 'queued'; // Dexie 'running' 但非活动 = 已入队(活动那条上面已 return)
+      if (s === 'paused') return 'paused';
+      if (s === 'error') return 'error';
+      return 'none';
+    },
+    asrBusy(ep) {
+      const st = this.asrStateOf(ep);
+      return st === 'running' || st === 'queued' || st === 'downloading';
+    },
+    asrTip(ep) {
+      switch (this.asrStateOf(ep)) {
+        case 'running':
+          return '正在转录本集';
+        case 'queued':
+          return '已在转录队列中';
+        case 'downloading':
+          return '下载中，完成后自动转录';
+        case 'done':
+          return '已生成文字稿（点击查看）';
+        case 'paused':
+          return '转录未完成（点击继续）';
+        case 'error':
+          return '转录失败（点击重试）';
+        default:
+          return '生成文字稿';
+      }
+    },
+    onAsrClick(ep) {
+      const st = this.asrStateOf(ep);
+      if (st === 'running') {
+        this.$store.dispatch('showToast', '正在转录本集');
+        return;
+      }
+      if (st === 'queued' || st === 'downloading') {
+        this.$store.dispatch(
+          'showToast',
+          st === 'queued' ? '已在转录队列中' : '正在下载，完成后自动转录'
+        );
+        return;
+      }
+      if (st === 'done') {
+        this.goEpisodeDetail(ep); // 已转录 → 进详情查看文字稿
+        return;
+      }
+      this.startAsr(ep); // none / paused / error → 转录(未下载先下载)
+    },
+    async startAsr(ep) {
+      if (!ep) return;
+      // 未下载 → 先下载，下载完成后由 pathMap watcher 自动转录
+      if (!this.isDownloaded(ep)) {
+        this.$set(this.asrPendingMap, ep.id, true);
+        if (this.downloadPercent(ep) < 0 && !this.isQueued(ep))
+          startDownload(ep);
+        this.$store.dispatch('showToast', '已开始下载，完成后自动转录');
+        return;
+      }
+      const res = await startTranscribe(ep);
+      if (res && res.ok) {
+        this.$set(this.asrStatusMap, ep.id, 'running'); // 乐观：已入队/开始
+        this.$store.dispatch('showToast', '已加入转录队列');
+      }
     },
     // [C-4 改] 单集状态：优先用真实收听统计 listenStats，回退到 episodeProgress
     isFinished(ep) {
@@ -1479,6 +1620,7 @@ export default {
   .ep-menu-btn,
   .ep-downloaded-btn,
   .ep-fav-btn,
+  .ep-asr-btn,
   .ep-queued {
     position: relative;
     z-index: 1;
@@ -1539,6 +1681,59 @@ export default {
     &:hover {
       background: var(--color-secondary-bg-for-transparent);
       opacity: 1;
+    }
+  }
+  // [转文字稿] 转录状态/操作按钮：waveform 图标，状态用色区分；转录中/排队/下载中显转圈
+  .ep-asr-btn {
+    background: transparent;
+    color: var(--color-text);
+    opacity: 0.5;
+    padding: 8px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.15s;
+    flex-shrink: 0;
+    .svg-icon {
+      width: 18px;
+      height: 18px;
+    }
+    &:hover {
+      background: var(--color-secondary-bg-for-transparent);
+      opacity: 1;
+    }
+    &.asr-done {
+      color: var(--color-primary);
+      opacity: 0.95;
+    }
+    &.asr-error {
+      color: #e74c3c;
+      opacity: 0.9;
+    }
+    &.asr-paused {
+      opacity: 0.78;
+    }
+  }
+  // 转录中/排队/下载中 的转圈（替代 waveform 图标）
+  .ep-asr-spin {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--color-text);
+    border-top-color: transparent;
+    border-radius: 50%;
+    opacity: 0.7;
+    animation: ep-asr-spin 0.7s linear infinite;
+  }
+  .ep-asr-btn.asr-running .ep-asr-spin {
+    border-color: var(--color-primary);
+    border-top-color: transparent;
+    opacity: 0.95;
+  }
+  @keyframes ep-asr-spin {
+    to {
+      transform: rotate(360deg);
     }
   }
   .ep-main {

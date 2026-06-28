@@ -40,6 +40,23 @@ export function getTranscript(episodeId) {
   return db.transcripts.get(episodeId);
 }
 
+// 批量读多集的转录持久态(Dexie，渲染端，不碰主进程)：episodeId → status。
+//   供列表(如节目详情)显示各集转录状态。仅一次 bulkGet。
+export async function listTranscriptStatuses(episodeIds) {
+  const map = {};
+  const ids = episodeIds || [];
+  if (!ids.length) return map;
+  try {
+    const rows = await db.transcripts.bulkGet(ids);
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i] && rows[i].status) map[ids[i]] = rows[i].status;
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  return map;
+}
+
 export async function saveTranscript(episodeId, data) {
   const podcastId = String(episodeId).split('::')[0];
   let existing = null;
@@ -319,7 +336,15 @@ export async function startTranscribe(episode) {
     store.dispatch('showToast', '请先下载本集，再生成文字稿');
     return { ok: false, reason: 'not-downloaded' };
   }
-  resetLive(episode.id, episode.duration || 0);
+  // [批量入队·不抢占] 仅当当前无其它正在跑的任务、或就是本集时，才接管实时态显示；
+  //   否则(已有别集在转，如批量逐集转录)只入队，不把进度显示从正在转的那条抢过来。
+  if (
+    !transcribeState.episodeId ||
+    transcribeState.status !== 'running' ||
+    transcribeState.episodeId === episode.id
+  ) {
+    resetLive(episode.id, episode.duration || 0);
+  }
   try {
     await saveTranscript(episode.id, {
       status: 'running',
