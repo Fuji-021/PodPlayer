@@ -164,23 +164,28 @@
         @scroll.passive="onListScroll"
         @mouseup="onSelectText"
       >
-        <template v-for="(row, ri) in rows">
+        <div class="seg-spacer" :style="{ height: topPad + 'px' }"></div>
+        <template v-for="w in winRows">
           <div
-            v-if="row.type === 'seg'"
-            :key="'s' + row.vi"
-            :data-vi="row.vi"
+            v-if="w.row.type === 'seg'"
+            :key="'s' + w.row.vi"
+            :data-ri="w.ri"
+            :data-vi="w.row.vi"
             class="seg-row"
-            :class="{ active: row.vi === curIdx }"
-            @click="onSegClick(row.seg)"
+            :class="{ active: w.row.vi === curIdx }"
+            @click="onSegClick(w.row.seg)"
           >
-            <span class="seg-time">{{ fmtClock(row.seg.start) }}</span>
-            <span class="seg-text">{{ row.seg.display }}</span>
+            <span class="seg-time">{{ fmtClock(w.row.seg.start) }}</span>
+            <span class="seg-text">{{ w.row.seg.display }}</span>
           </div>
-          <div v-else :key="'g' + ri" class="seg-gap">
-            {{ row.music ? '♪ 音乐' : '···' }}
-            <span v-if="row.count > 1" class="seg-gap-n">×{{ row.count }}</span>
+          <div v-else :key="'g' + w.ri" :data-ri="w.ri" class="seg-gap">
+            {{ w.row.music ? '♪ 音乐' : '···' }}
+            <span v-if="w.row.count > 1" class="seg-gap-n"
+              >×{{ w.row.count }}</span
+            >
           </div>
         </template>
+        <div class="seg-spacer" :style="{ height: botPad + 'px' }"></div>
       </div>
     </template>
 
@@ -230,6 +235,11 @@ export default {
       follow: true,
       queuedLocal: false,
       scrollPauseUntil: 0,
+      // [性能·虚拟化] 变高窗口虚拟滚动：只渲染可视区±缓冲，DOM 节点数与文稿长度脱钩
+      //   (根治几千段 content-visibility 节点常驻 → 滚动 layout 风暴致电脑级卡顿)
+      winStart: 0,
+      winEnd: 60,
+      rowH: {}, // 行 key → 实测高(估高兜底)
       // [质量优化] 专名词典(exact 精确 + anchor 拼音锚定) + 原文切换 + 选中加词典 + 词典管理
       dictParts: { exact: [], anchors: [] },
       dictRows: [],
@@ -357,6 +367,46 @@ export default {
       if (gap) out.push(gap);
       return out;
     },
+    // [性能·虚拟化] 行高(实测优先,否则估高) → 前缀和 offsets → 可视窗口 + 上下占位高
+    offsets() {
+      const rws = this.rows;
+      const arr = new Array(rws.length + 1);
+      arr[0] = 0;
+      for (let i = 0; i < rws.length; i++) {
+        const k = this.rowKey(rws[i], i);
+        const h = this.rowH[k] || this.estRowH(rws[i]);
+        arr[i + 1] = arr[i] + h;
+      }
+      return arr;
+    },
+    totalH() {
+      const o = this.offsets;
+      return o[o.length - 1] || 0;
+    },
+    winRows() {
+      const out = [];
+      const end = Math.min(this.winEnd, this.rows.length);
+      for (let i = this.winStart; i < end; i++) {
+        out.push({ row: this.rows[i], ri: i });
+      }
+      return out;
+    },
+    topPad() {
+      return this.offsets[Math.min(this.winStart, this.rows.length)] || 0;
+    },
+    botPad() {
+      const endOff =
+        this.offsets[Math.min(this.winEnd, this.rows.length)] || this.totalH;
+      return Math.max(0, this.totalH - endOff);
+    },
+    viToRowIndex() {
+      const map = {};
+      const rws = this.rows;
+      for (let i = 0; i < rws.length; i++) {
+        if (rws[i].type === 'seg') map[rws[i].vi] = i;
+      }
+      return map;
+    },
     dictCount() {
       return (this.dictRows && this.dictRows.length) || 0;
     },
@@ -364,6 +414,10 @@ export default {
   watch: {
     episodeId() {
       this.init();
+    },
+    // [性能·虚拟化] 行集变化(切集 / 词典 / 原文切换) → 重置窗口并重算
+    rows() {
+      this.resetWindow();
     },
     // 实时态完成/失败/取消 → 重载 Dexie 行与段列表，切到对应终态
     'live.status'(s) {
@@ -676,8 +730,79 @@ export default {
       if (this.follow) this.scrollToCurrent();
     },
     onListScroll() {
-      // 用户手动滚动 → 暂时不抢滚动（避免与跟随打架）；2.5s 内不自动滚
-      this.scrollPauseUntil = Date.now() + 2500;
+      // 程序滚动(跟随自动滚)触发的 scroll 不算"用户滚动"，不抢跟随
+      if (Date.now() > (this._progScrollUntil || 0)) {
+        this.scrollPauseUntil = Date.now() + 2500;
+      }
+      if (this._scrollRAF) return;
+      this._scrollRAF = requestAnimationFrame(() => {
+        this._scrollRAF = null;
+        this.recalcWindow();
+      });
+    },
+    estRowH(row) {
+      if (!row || row.type === 'gap') return 30;
+      const len =
+        row.seg && row.seg.display ? Array.from(row.seg.display).length : 0;
+      const lines = Math.max(1, Math.ceil(len / 34));
+      return 16 + lines * 23; // 估高：padding + 行数 × 行高
+    },
+    rowKey(row, i) {
+      return row.type === 'seg' ? 's' + row.vi : 'g' + i;
+    },
+    // 按当前 scrollTop 二分 offsets 算可视窗口 [winStart,winEnd)（含缓冲）
+    recalcWindow() {
+      const list = this.$refs.list;
+      if (!list) return;
+      const top = list.scrollTop;
+      const viewH = list.clientHeight || 400;
+      const off = this.offsets;
+      const n = this.rows.length;
+      let lo = 0;
+      let hi = n;
+      let start = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if ((off[mid] || 0) <= top) {
+          start = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      let end = start;
+      while (end < n && (off[end] || 0) < top + viewH) end++;
+      const BUF = 8;
+      this.winStart = Math.max(0, start - BUF);
+      this.winEnd = Math.min(n, end + BUF);
+      this.measureVisible();
+    },
+    // 实测当前渲染行真实高度 → 更新 rowH（只测可视区，故只影响下方 offset，视口不跳）
+    measureVisible() {
+      this.$nextTick(() => {
+        const list = this.$refs.list;
+        if (!list) return;
+        const els = list.querySelectorAll('[data-ri]');
+        const updates = {};
+        let changed = false;
+        for (let i = 0; i < els.length; i++) {
+          const el = els[i];
+          const ri = parseInt(el.getAttribute('data-ri'), 10);
+          if (isNaN(ri) || !this.rows[ri]) continue;
+          const k = this.rowKey(this.rows[ri], ri);
+          const h = el.offsetHeight;
+          if (h && this.rowH[k] !== h) {
+            updates[k] = h;
+            changed = true;
+          }
+        }
+        if (changed) this.rowH = Object.assign({}, this.rowH, updates);
+      });
+    },
+    resetWindow() {
+      this.winStart = 0;
+      this.winEnd = 60;
+      this.$nextTick(() => this.recalcWindow());
     },
     updateHighlight() {
       if (this.mode !== 'done' && this.mode !== 'paused') return;
@@ -691,36 +816,44 @@ export default {
         if (this.follow) this.scrollToCurrent();
       }
     },
-    // 最后一个 start <= sec 的段（落在静音间隙时高亮"刚说过"的那段）
+    // 最后一个 start <= sec 的段；若落在被折叠的 noise/music 段，回退到最近的上一句 speech。
+    //   (curIdx 必须落在 speech 段才有 viToRowIndex 映射、才能高亮+跟随；否则经过噪声/音乐间隙时高亮会消失)
     findSegIndex(sec) {
-      const segs = this.segments;
+      const vs = this.viewSegments;
       let lo = 0;
-      let hi = segs.length - 1;
-      let ans = -1;
+      let hi = vs.length - 1;
+      let pos = -1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if ((segs[mid].start || 0) <= sec) {
-          ans = mid;
+        if ((vs[mid].start || 0) <= sec) {
+          pos = mid;
           lo = mid + 1;
         } else {
           hi = mid - 1;
         }
       }
-      return ans;
+      for (let i = pos; i >= 0; i--) {
+        if (vs[i].kind === 'speech') return i;
+      }
+      return -1;
     },
     scrollToCurrent() {
       if (this.curIdx < 0) return;
       if (Date.now() < this.scrollPauseUntil) return;
-      this.$nextTick(() => {
-        const list = this.$refs.list;
-        if (!list) return;
-        const row = list.querySelector(
-          '.seg-row[data-vi="' + this.curIdx + '"]'
-        );
-        if (row && row.scrollIntoView) {
-          row.scrollIntoView({ block: 'nearest' });
-        }
-      });
+      const ri = this.viToRowIndex[this.curIdx];
+      if (ri === undefined) return;
+      const list = this.$refs.list;
+      if (!list) return;
+      const top = this.offsets[ri] || 0;
+      const rowH = (this.offsets[ri + 1] || top) - top;
+      const viewH = list.clientHeight || 400;
+      const cur = list.scrollTop;
+      // 仅当目标段不在视口内才滚（虚拟化下用 offset 直接定位，不用 scrollIntoView 触发全列表 layout）
+      if (top < cur + 8 || top + rowH > cur + viewH - 8) {
+        this._progScrollUntil = Date.now() + 150;
+        list.scrollTop = Math.max(0, top - viewH * 0.4);
+        this.recalcWindow();
+      }
     },
     estRemainLabel() {
       const t = this.live.totalSec || 0;
@@ -898,10 +1031,8 @@ export default {
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.12s;
-  // [转文字稿] 变高内容用 content-visibility 做"原生虚拟滚动"
-  //   （Electron13=Chromium91 支持）：屏外段不渲染，5h 数千段也流畅，无需 JS 窗口化。
-  content-visibility: auto;
-  contain-intrinsic-size: 0 44px;
+  // [性能·虚拟化] 改用 JS 窗口虚拟化(只渲染可视区±缓冲)，不再用 content-visibility——
+  //   后者节点全常驻、变高估算不准，滚动时几千节点 layout 风暴致电脑级卡顿(已实测)。
   &:hover {
     background: var(--color-secondary-bg);
   }
@@ -912,6 +1043,10 @@ export default {
       font-weight: 600;
     }
   }
+}
+.seg-spacer {
+  width: 100%;
+  pointer-events: none;
 }
 .seg-time {
   flex-shrink: 0;
