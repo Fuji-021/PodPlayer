@@ -120,6 +120,7 @@
       <div v-if="sel.show" class="t-fix-bar">
         <span class="t-fix-from">把「{{ sel.from }}」改为</span>
         <input
+          ref="fixInput"
           v-model="sel.to"
           class="t-fix-input"
           placeholder="正确写法"
@@ -564,6 +565,13 @@ export default {
       txt = txt.trim();
       if (txt && txt.length <= 20) {
         this.sel = { show: true, from: txt, to: '', mode: 'anchor' };
+        // [修 bug] 选词弹条后把焦点直接送进输入框：选中文稿里的词时，文档里那个词仍处于
+        //   "选中高亮"态，此时点击输入框首击常只是 collapse 旧选区、焦点落不进 → 表现为
+        //   "正确写法点不动/打不了字"。自动聚焦既根治此问题、也更顺手(选完直接打字)。
+        this.$nextTick(() => {
+          const el = this.$refs.fixInput;
+          if (el && el.focus) el.focus();
+        });
       }
     },
     cancelSel() {
