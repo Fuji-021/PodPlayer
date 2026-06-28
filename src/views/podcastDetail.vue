@@ -335,6 +335,11 @@ function readCachedRowH() {
   }
 }
 
+// [返回定位] 进入某节目的单集详情前记下该节目滚动位，返回本节目时恢复(不再跳回顶部)。
+//   模块级：podcastDetail 非 keepAlive、返回时组件重建，需存活于实例之外。只记最近一次的
+//   {feedUrl, scrollTop}；被任意一次节目页加载消费(置空)，避免跨节目残留误恢复。
+let pendingRestore = null;
+
 export default {
   name: 'PodcastDetail',
   components: { SvgIcon, BouncingDots },
@@ -738,11 +743,15 @@ export default {
         });
       } else this._presentEpisodes(); // 未命中：复位滚顶 + 顶部窗口 + 测量
     },
-    // [B-75/F1] 新节目视图：渲染量回首屏 50、滚动条回顶部(不沿用上个节目深滚动位)，随后后台逐帧水合
+    // [B-75/F1] 节目视图入场：渲染量回首屏、滚动位归顶或恢复(见 _entryScrollTarget)，随后后台逐帧水合
     _presentEpisodes() {
       const main = this._scrollEl || (this.$el && this.$el.closest('main'));
-      if (main) main.scrollTop = 0;
-      // [F1·方案C] 新节目从顶部开始：先按"顶部一屏窗口"渲染秒开，nextTick 后测真实行高 + 精确重算窗口
+      // [返回定位] 从本节目单集详情返回 → 恢复进入前滚动位；否则回顶(0)。一次性消费。
+      const target = this._entryScrollTarget();
+      if (main) main.scrollTop = target;
+      // [F1·方案C] 先按"顶部一屏窗口"渲染秒开，nextTick 后测真实行高 + 精确重算窗口。
+      //   恢复深位时：总高=n×rowH 恒定(下方 spacer 兜全量)→ 深位可达；窗口由 nextTick 的
+      //   _recalcWindow 按 scrollTop 精确对齐(微任务内完成、绘制前，不闪空白)。
       const rowH = this.rowH || ROW_H_FALLBACK;
       const viewH = main ? main.clientHeight : 800;
       this.winStart = 0;
@@ -752,8 +761,20 @@ export default {
       );
       this.$nextTick(() => {
         this._measureRowH();
+        // 始终在此设最终滚动位：target=0 即归顶(覆盖 created 阶段 main 未就位、且 App.vue 因
+        //   savePosition 不再代为归顶的情形)；target>0 即恢复(虚拟高度此时就位、深位可达)。
+        const m = this._scrollEl || (this.$el && this.$el.closest('main'));
+        if (m) m.scrollTop = target;
         this._recalcWindow();
       });
+    },
+    // [返回定位] 本次进入节目页的目标滚动位：从该节目单集详情返回 → 恢复;否则 0(回顶)。
+    //   pendingRestore 任何一次节目页加载都消费掉(置空)，避免跨节目残留误恢复。
+    _entryScrollTarget() {
+      const p = pendingRestore;
+      pendingRestore = null;
+      if (p && p.feedUrl === this.feedUrl) return p.scrollTop || 0;
+      return 0;
     },
     playEpisode(ep) {
       const title = this.podcast ? this.podcast.title : '';
@@ -1029,6 +1050,12 @@ export default {
     },
     // [C-5] 进单集详情页
     goEpisodeDetail(ep) {
+      // [返回定位] 记下进入单集前本节目的滚动位(按 feedUrl)，返回时恢复 → 不再跳回顶部
+      const main = this._scrollEl || (this.$el && this.$el.closest('main'));
+      pendingRestore = {
+        feedUrl: this.feedUrl,
+        scrollTop: main ? main.scrollTop : 0,
+      };
       this.$router.push({
         name: 'episodeDetail',
         params: {

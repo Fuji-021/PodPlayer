@@ -140,6 +140,10 @@ const routes = [
     component: () => import('@/views/podcastDetail.vue'),
     meta: {
       requireLogin: false,
+      // [返回定位] savePosition 让 App.vue 进场归顶钩子跳过本页 → 由页面自身 _presentEpisodes
+      //   统一控制滚动位(进入单集前记位、返回本节目恢复；其余入口仍显式回顶)。非 keepAlive、不与
+      //   discoverList 的"keepAlive 无显式归零"隐患同列(本页每次加载都显式设位，不会停在中间)。
+      savePosition: true,
     },
   },
   // [播客改造 C-5] 单集详情页（三级）：guidEncoded 是 encodeURIComponent 后的 guid
