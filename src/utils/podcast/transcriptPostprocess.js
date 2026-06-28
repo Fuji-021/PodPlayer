@@ -119,3 +119,89 @@ export function postprocessSegments(segments, opts) {
     return Object.assign({}, seg, { kind, display });
   });
 }
+
+// ----------------------------------------------------------------------------
+// [D · 段落重组] 把同一意群的相邻短段聚成"段落"显示，治 VAD 按声学停顿切致的断句过碎
+// （能力有限《亚洲足球》"更是历史上/首次/扩军的48支球队/参加比赛"一句被切 4 行）。
+//
+// 关键设计：**不合并成新段**（那会毁掉点读/高亮的时间锚点），而是只决定"哪些相邻段
+//   属于同一段落"，组内每个原始段仍独立保留 {vi, seg}（vi=在输入数组的下标，供点读/高亮）。
+//   渲染层把一组渲染成一个段落容器、组内各段作 <span> 连排；点读/高亮粒度不降反升。
+// 纯函数、不改 worker、不改 seg 本身、可重算可回退（与本文件其它 pass 一致）。
+//
+// 返回有序块数组，块为段落或 gap：
+//   { type:'para', items:[{vi,seg},…] }        —— 一个自然段落（≥1 个 speech 段连排）
+//   { type:'gap',  music:bool, count, items:[…] } —— 连续 noise/music 折叠占位（不并入段落）
+const SENT_END_RE = /[。！？!?…]+["'""'）)】」』]*\s*$/; // 句末标点（。！？?!…，可带收尾引号/括号）
+
+function paraTextLen(t) {
+  // 段落长度预算：display 可见字符数（去空白），用于"超长断段"兜底
+  return Array.from(String(t || '').replace(/\s+/g, '')).length;
+}
+function segGapSec(prev, cur) {
+  // 相邻段时间间隔；无 end 用 start 近似；拿不到时间则当 0（不因缺时间戳硬断段）
+  const ps = prev && prev.end != null ? prev.end : prev && prev.start;
+  const cs = cur && cur.start;
+  if (ps == null || cs == null) return 0;
+  const d = cs - ps;
+  return d > 0 ? d : 0;
+}
+
+// segments: 已 postprocess 的段（含 kind/display）。opts:{ enabled, gapSec, maxLen }
+//   enabled=false → 逐句模式：每个 speech 段独立成段落（块结构一致，便于统一渲染）。
+export function groupParagraphs(segments, opts) {
+  opts = opts || {};
+  const enabled = opts.enabled !== false;
+  const gapSec = opts.gapSec != null ? opts.gapSec : 1.0;
+  const maxLen = opts.maxLen != null ? opts.maxLen : 100;
+  const vs = segments || [];
+  const blocks = [];
+  let para = null;
+  let gap = null;
+  const flushPara = () => {
+    if (para) {
+      blocks.push(para);
+      para = null;
+    }
+  };
+  const flushGap = () => {
+    if (gap) {
+      blocks.push(gap);
+      gap = null;
+    }
+  };
+  for (let i = 0; i < vs.length; i++) {
+    const seg = vs[i];
+    if (!seg || seg.kind !== 'speech') {
+      // noise/music：天然分隔，断开当前段落、折叠进 gap 块（不并入任何段落）
+      flushPara();
+      if (!gap) gap = { type: 'gap', music: false, count: 0, items: [] };
+      gap.count++;
+      gap.items.push({ vi: i, seg: seg });
+      if (seg && seg.kind === 'music') gap.music = true;
+      continue;
+    }
+    // speech：先收掉前面的 gap 占位
+    flushGap();
+    const segLen = paraTextLen(seg.display);
+    if (para && enabled) {
+      const prev = para.items[para.items.length - 1].seg;
+      const prevEndsSentence = SENT_END_RE.test(String(prev.display || ''));
+      const gapDur = segGapSec(prev, seg);
+      const wouldExceed = para.len + segLen > maxLen;
+      // 并入同一段落 ⟺ 前段未以句末标点结束 且 间隔小 且 不超长
+      if (!prevEndsSentence && gapDur < gapSec && !wouldExceed) {
+        para.items.push({ vi: i, seg: seg });
+        para.len += segLen;
+        continue;
+      }
+    }
+    // 否则起新段落（逐句模式即时收口 → 每段独立）
+    flushPara();
+    para = { type: 'para', items: [{ vi: i, seg: seg }], len: segLen };
+    if (!enabled) flushPara();
+  }
+  flushPara();
+  flushGap();
+  return blocks;
+}

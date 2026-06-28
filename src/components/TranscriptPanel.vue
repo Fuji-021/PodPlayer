@@ -24,6 +24,19 @@
           {{ showRaw ? '原文' : '已优化' }}
         </button>
         <button
+          v-if="!showRaw"
+          class="t-link"
+          :class="{ on: paragraph }"
+          :title="
+            paragraph
+              ? '同一意群的相邻短段已聚成自然段落（点击改逐句）'
+              : '逐句显示（点击聚成段落）'
+          "
+          @click="paragraph = !paragraph"
+        >
+          {{ paragraph ? '段落' : '逐句' }}
+        </button>
+        <button
           class="t-link"
           title="复制全文到剪贴板"
           :disabled="!segments.length"
@@ -166,17 +179,27 @@
       >
         <div class="seg-spacer" :style="{ height: topPad + 'px' }"></div>
         <template v-for="w in winRows">
+          <!-- 段落块：组内各原始段作 span 连排；点任意句跳该句、当前句 inline 高亮 -->
           <div
-            v-if="w.row.type === 'seg'"
-            :key="'s' + w.row.vi"
+            v-if="w.row.type === 'para'"
+            :key="'p' + w.row.items[0].vi"
             :data-ri="w.ri"
-            :data-vi="w.row.vi"
             class="seg-row"
-            :class="{ active: w.row.vi === curIdx }"
-            @click="onSegClick(w.row.seg)"
+            :class="{ active: rowHasActive(w.row) }"
           >
-            <span class="seg-time">{{ fmtClock(w.row.seg.start) }}</span>
-            <span class="seg-text">{{ w.row.seg.display }}</span>
+            <span class="seg-time" @click="onSegClick(w.row.items[0].seg)">{{
+              fmtClock(w.row.items[0].seg.start)
+            }}</span>
+            <span class="seg-text"
+              ><span
+                v-for="it in w.row.items"
+                :key="it.vi"
+                class="seg-sent"
+                :class="{ active: it.vi === curIdx }"
+                @click="onSegClick(it.seg)"
+                >{{ it.seg.display }}</span
+              ></span
+            >
           </div>
           <div v-else :key="'g' + w.ri" :data-ri="w.ri" class="seg-gap">
             {{ w.row.music ? '♪ 音乐' : '···' }}
@@ -215,7 +238,10 @@ import {
 } from '@/utils/podcast/transcripts';
 import { getDownload } from '@/utils/podcast/downloads';
 import { getPodcast } from '@/utils/podcast/db';
-import { postprocessSegments } from '@/utils/podcast/transcriptPostprocess';
+import {
+  postprocessSegments,
+  groupParagraphs,
+} from '@/utils/podcast/transcriptPostprocess';
 
 export default {
   name: 'TranscriptPanel',
@@ -233,6 +259,7 @@ export default {
       loadingSegs: false,
       curIdx: -1,
       follow: true,
+      paragraph: true, // [D·段落重组] 段落聚合(默认开)；逐句模式=关
       queuedLocal: false,
       scrollPauseUntil: 0,
       // [性能·虚拟化] 变高窗口虚拟滚动：只渲染可视区±缓冲，DOM 节点数与文稿长度脱钩
@@ -345,27 +372,15 @@ export default {
         mainLang: 'zh',
       });
     },
-    // 把连续的 noise/music 段折叠成一个占位行；speech 独立成行（vi=在 viewSegments 的下标，供高亮/跳播）
+    // [D·段落重组] 段落块(组内多段连排) + noise/music 折叠占位块。
+    //   段落聚合只在"已优化"态生效；原文态/逐句态 → 每段独立(块结构一致，统一渲染)。
+    //   组内每段保留 {vi,seg}（vi=viewSegments 下标）→ 点读/高亮粒度不降。
     rows() {
-      const out = [];
-      const vs = this.viewSegments;
-      let gap = null;
-      for (let i = 0; i < vs.length; i++) {
-        const seg = vs[i];
-        if (seg.kind === 'speech') {
-          if (gap) {
-            out.push(gap);
-            gap = null;
-          }
-          out.push({ type: 'seg', vi: i, seg: seg });
-        } else {
-          if (!gap) gap = { type: 'gap', music: false, count: 0 };
-          gap.count++;
-          if (seg.kind === 'music') gap.music = true;
-        }
-      }
-      if (gap) out.push(gap);
-      return out;
+      return groupParagraphs(this.viewSegments, {
+        enabled: this.paragraph && !this.showRaw,
+        gapSec: 1.0,
+        maxLen: 100,
+      });
     },
     // [性能·虚拟化] 行高(实测优先,否则估高) → 前缀和 offsets → 可视窗口 + 上下占位高
     offsets() {
@@ -399,11 +414,15 @@ export default {
         this.offsets[Math.min(this.winEnd, this.rows.length)] || this.totalH;
       return Math.max(0, this.totalH - endOff);
     },
+    // vi → 所在块下标（段落内每段都映到同一块 → 高亮/跟随定位到该段落）
     viToRowIndex() {
       const map = {};
       const rws = this.rows;
       for (let i = 0; i < rws.length; i++) {
-        if (rws[i].type === 'seg') map[rws[i].vi] = i;
+        const r = rws[i];
+        if (r.type === 'para') {
+          for (let j = 0; j < r.items.length; j++) map[r.items[j].vi] = i;
+        }
       }
       return map;
     },
@@ -742,13 +761,26 @@ export default {
     },
     estRowH(row) {
       if (!row || row.type === 'gap') return 30;
-      const len =
-        row.seg && row.seg.display ? Array.from(row.seg.display).length : 0;
+      let len = 0;
+      const items = row.items || [];
+      for (let i = 0; i < items.length; i++) {
+        const d = items[i].seg && items[i].seg.display;
+        if (d) len += Array.from(d).length;
+      }
       const lines = Math.max(1, Math.ceil(len / 34));
       return 16 + lines * 23; // 估高：padding + 行数 × 行高
     },
     rowKey(row, i) {
-      return row.type === 'seg' ? 's' + row.vi : 'g' + i;
+      return row.type === 'para' ? 'p' + row.items[0].vi : 'g' + i;
+    },
+    // 段落块是否含当前播放段(用于整段轻底色提示，当前句另在 span 上高亮)
+    rowHasActive(row) {
+      if (!row || row.type !== 'para') return false;
+      const items = row.items;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].vi === this.curIdx) return true;
+      }
+      return false;
     },
     // 按当前 scrollTop 二分 offsets 算可视窗口 [winStart,winEnd)（含缓冲）
     recalcWindow() {
@@ -800,6 +832,9 @@ export default {
       });
     },
     resetWindow() {
+      // 行集结构变化(段落/逐句切换、原文切换、切集、词典) → 同一 rowKey 的高度可能完全不同
+      //   (段落多句 vs 逐句单句) → 必须清实测缓存，否则残留旧高 → 离屏 spacer 算错、滚动条跳。
+      this.rowH = {};
       this.winStart = 0;
       this.winEnd = 60;
       this.$nextTick(() => this.recalcWindow());
@@ -844,16 +879,34 @@ export default {
       if (ri === undefined) return;
       const list = this.$refs.list;
       if (!list) return;
+      const viewH = list.clientHeight || 400;
       const top = this.offsets[ri] || 0;
       const rowH = (this.offsets[ri + 1] || top) - top;
-      const viewH = list.clientHeight || 400;
+      // ① 段落块整体不在视口 → 按 offset 直接定位带入（虚拟化下不用 scrollIntoView 触发全列表
+      //    layout；也保证该块内的句 span 被渲染出来，供 ② 细化定位）
       const cur = list.scrollTop;
-      // 仅当目标段不在视口内才滚（虚拟化下用 offset 直接定位，不用 scrollIntoView 触发全列表 layout）
-      if (top < cur + 8 || top + rowH > cur + viewH - 8) {
+      const blockVisible = top >= cur && top + rowH <= cur + viewH;
+      if (!blockVisible) {
         this._progScrollUntil = Date.now() + 150;
         list.scrollTop = Math.max(0, top - viewH * 0.4);
         this.recalcWindow();
       }
+      // ② 段内细粒度：段落聚合后一块含多句，锚到整段顶会让"超视口长段落"每跳一句把当前句
+      //    顶出视口；故细化到当前句 span，仅当它不在视口时才滚。
+      this.$nextTick(() => {
+        const el = list.querySelector && list.querySelector('.seg-sent.active');
+        if (!el) return;
+        const lr = list.getBoundingClientRect();
+        const er = el.getBoundingClientRect();
+        const elTop = er.top - lr.top + list.scrollTop;
+        const elBot = elTop + er.height;
+        const c = list.scrollTop;
+        if (elTop < c + 8 || elBot > c + viewH - 8) {
+          this._progScrollUntil = Date.now() + 150;
+          list.scrollTop = Math.max(0, elTop - viewH * 0.4);
+          this.recalcWindow();
+        }
+      });
     },
     estRemainLabel() {
       const t = this.live.totalSec || 0;
@@ -1029,19 +1082,15 @@ export default {
   gap: 12px;
   padding: 8px 12px;
   border-radius: 8px;
-  cursor: pointer;
   transition: background 0.12s;
   // [性能·虚拟化] 改用 JS 窗口虚拟化(只渲染可视区±缓冲)，不再用 content-visibility——
   //   后者节点全常驻、变高估算不准，滚动时几千节点 layout 风暴致电脑级卡顿(已实测)。
   &:hover {
     background: var(--color-secondary-bg);
   }
+  // [D·段落重组] 当前播放段落整段轻底色；具体当前句另在 .seg-sent.active 上高亮
   &.active {
     background: var(--color-primary-bg-for-transparent);
-    .seg-text {
-      color: var(--color-primary);
-      font-weight: 600;
-    }
   }
 }
 .seg-spacer {
@@ -1055,10 +1104,27 @@ export default {
   font-variant-numeric: tabular-nums;
   padding-top: 2px;
   min-width: 48px;
+  cursor: pointer;
+  transition: opacity 0.12s;
+  &:hover {
+    opacity: 0.9;
+  }
 }
 .seg-text {
   font-size: 14px;
   line-height: 1.6;
+}
+// [D·段落重组] 段落内每个原始段=一个可点读句子；当前句 inline 高亮
+.seg-sent {
+  cursor: pointer;
+  transition: color 0.12s;
+  &:hover {
+    color: var(--color-primary);
+  }
+  &.active {
+    color: var(--color-primary);
+    font-weight: 600;
+  }
 }
 // 折叠的噪声/音乐段占位（不可点读、弱化）
 .seg-gap {
