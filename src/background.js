@@ -27,6 +27,8 @@ import { registerPodcastIpc } from './electron/podcastFetch';
 import { registerNasIpc } from './electron/nasBridge';
 import { registerPodcastDownloadIpc } from './electron/podcastDownload';
 import { registerPodcastDiscoverIpc } from './electron/podcastDiscover';
+// [转文字稿] 主进程 ASR IPC（单任务队列 + 子进程编排；模型缺失时优雅降级，不崩）
+import { registerAsrIpc } from './electron/asr';
 // [T3] 桌面通知：新单集发现 / 下载完成 → Electron Notification
 import { initNotifications } from './electron/notifications';
 import { createMenu } from './electron/menu';
@@ -537,6 +539,8 @@ class Background {
       registerPodcastDownloadIpc(() => this.window);
       // [B-39] 注册首页发现 IPC（热门榜单 + Apple id→feedUrl）
       registerPodcastDiscoverIpc();
+      // [转文字稿] 注册 ASR IPC（传 store 以读模型路径设置；与播放/下载解耦）
+      registerAsrIpc(() => this.window, this.store);
 
       // set proxy
       const proxyRules = this.store.get('proxy');

@@ -112,6 +112,15 @@
       <div v-else-if="processedNotes" v-html="processedNotes"></div>
       <div v-else class="empty">这一集没有提供 show notes / 节目简介。</div>
     </div>
+
+    <!-- [转文字稿] 单集文字稿面板：状态机（未转录/转录中/已完成/已暂停/失败/缺模型）+
+         虚拟滚动 + 跟随高亮 + 点段跳播（@seek 复用本页 seekToTimestamp 的播放/seek 逻辑）。 -->
+    <TranscriptPanel
+      v-if="episode"
+      :episode="episode"
+      :episode-id="episodeId"
+      @seek="seekToTimestamp"
+    />
   </div>
 </template>
 
@@ -134,10 +143,11 @@ import {
 import { sanitizeHtml } from '@/utils/podcast/sanitizeHtml';
 import { getCoverColor } from '@/utils/podcast/coverColor';
 import SvgIcon from '@/components/SvgIcon.vue';
+import TranscriptPanel from '@/components/TranscriptPanel.vue';
 
 export default {
   name: 'EpisodeDetail',
-  components: { SvgIcon },
+  components: { SvgIcon, TranscriptPanel },
   data() {
     return {
       podcast: null,

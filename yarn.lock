@@ -999,6 +999,16 @@
     "@babel/helper-validator-identifier" "^7.22.20"
     to-fast-properties "^2.0.0"
 
+"@derhuerst/http-basic@^8.2.0":
+  version "8.2.4"
+  resolved "https://registry.yarnpkg.com/@derhuerst/http-basic/-/http-basic-8.2.4.tgz#d021ebb8f65d54bea681ae6f4a8733ce89e7f59b"
+  integrity sha512-F9rL9k9Xjf5blCz8HsJRO4diy111cayL2vkY2XE4r4t3n0yPXVYy3KD3nJ1qbrSn9743UWSXH4IwuCa/HWlGFw==
+  dependencies:
+    caseless "^0.12.0"
+    concat-stream "^2.0.0"
+    http-response-object "^3.0.1"
+    parse-cache-control "^1.0.1"
+
 "@develar/schema-utils@~2.6.5":
   version "2.6.5"
   resolved "https://registry.npmjs.org/@develar/schema-utils/-/schema-utils-2.6.5.tgz#3ece22c5838402419a6e0425f85742b961d9b6c6"
@@ -1983,7 +1993,7 @@
   resolved "https://registry.npmjs.org/@types/node/-/node-16.9.1.tgz#0611b37db4246c937feef529ddcc018cf8e35708"
   integrity sha512-QpLcX9ZSsq3YYUUnD3nFDY8H7wctAhQj/TFKL8Ya8v5fMm3CFXxo8zStsLAl780ltoYoo1WvKUVGBQK+1ifr7g==
 
-"@types/node@^10.12.18":
+"@types/node@^10.0.3", "@types/node@^10.12.18":
   version "10.17.60"
   resolved "https://registry.npmjs.org/@types/node/-/node-10.17.60.tgz#35f3d6213daed95da7f0f73e75bcc6980e90597b"
   integrity sha512-F0KIgDJfy2nA3zMLmWGKxcH2ZVEtCZXHHdOQs2gSaQ27+lNeEfGxzkIw90aXswATX7AZ33tahPbzy6KAfUreVw==
@@ -4015,7 +4025,7 @@ case-sensitive-paths-webpack-plugin@^2.3.0:
   resolved "https://registry.npmjs.org/case-sensitive-paths-webpack-plugin/-/case-sensitive-paths-webpack-plugin-2.4.0.tgz#db64066c6422eed2e08cc14b986ca43796dbc6d4"
   integrity sha512-roIFONhcxog0JSSWbvVAh3OocukmSgpqOH6YpMkCvav/ySIV3JKg4Dc8vYtQjYi/UxpNE36r/9v+VqTQqgkYmw==
 
-caseless@~0.12.0:
+caseless@^0.12.0, caseless@~0.12.0:
   version "0.12.0"
   resolved "https://registry.npmjs.org/caseless/-/caseless-0.12.0.tgz#1b681c21ff84033c826543090689420d187151dc"
   integrity sha512-4tYFyifaFfGacoiObjJegolkwSU4xQNGbVgUiNYVUxbQ2x2lUsFvY4hVgVzGiIe6WLOPqycWXA40l+PWsxthUw==
@@ -4493,6 +4503,16 @@ concat-stream@^1.5.0, concat-stream@^1.6.2:
     buffer-from "^1.0.0"
     inherits "^2.0.3"
     readable-stream "^2.2.2"
+    typedarray "^0.0.6"
+
+concat-stream@^2.0.0:
+  version "2.0.0"
+  resolved "https://registry.yarnpkg.com/concat-stream/-/concat-stream-2.0.0.tgz#414cf5af790a48c60ab9be4527d56d5e41133cb1"
+  integrity sha512-MWufYdFw53ccGjCA+Ol7XJYpAlW6/prSMzuPOTRnJGcGzuhLn4Scrz7qf6o8bROZ514ltazcIFJZevcfbo0x7A==
+  dependencies:
+    buffer-from "^1.0.0"
+    inherits "^2.0.3"
+    readable-stream "^3.0.2"
     typedarray "^0.0.6"
 
 conf@^10.2.0:
@@ -6678,6 +6698,16 @@ fd-slicer@~1.1.0:
   dependencies:
     pend "~1.2.0"
 
+ffmpeg-static@^5.3.0:
+  version "5.3.0"
+  resolved "https://registry.yarnpkg.com/ffmpeg-static/-/ffmpeg-static-5.3.0.tgz#3089fc01d1bb9c58cbe74631986fdacbd86d8b14"
+  integrity sha512-H+K6sW6TiIX6VGend0KQwthe+kaceeH/luE8dIZyOP35ik7ahYojDuqlTV1bOrtEwl01sy2HFNGQfi5IDJvotg==
+  dependencies:
+    "@derhuerst/http-basic" "^8.2.0"
+    env-paths "^2.2.0"
+    https-proxy-agent "^5.0.0"
+    progress "^2.0.3"
+
 figgy-pudding@^3.5.1:
   version "3.5.2"
   resolved "https://registry.npmjs.org/figgy-pudding/-/figgy-pudding-3.5.2.tgz#b4eee8148abb01dcf1d1ac34367d59e12fa61d6e"
@@ -7799,6 +7829,13 @@ http-proxy@^1.17.0, http-proxy@^1.18.1:
     eventemitter3 "^4.0.0"
     follow-redirects "^1.0.0"
     requires-port "^1.0.0"
+
+http-response-object@^3.0.1:
+  version "3.0.2"
+  resolved "https://registry.yarnpkg.com/http-response-object/-/http-response-object-3.0.2.tgz#7f435bb210454e4360d074ef1f989d5ea8aa9810"
+  integrity sha512-bqX0XTF6fnXSQcEJ2Iuyr75yVakyjIDCqroJQ/aHfSdlM743Cwqoi2nDYMzLGWUcuTWGWy8AAvOKXTfiv6q9RA==
+  dependencies:
+    "@types/node" "^10.0.3"
 
 http-signature@~1.2.0:
   version "1.2.0"
@@ -10187,6 +10224,11 @@ parse-bmfont-xml@^1.1.4:
     xml-parse-from-string "^1.0.0"
     xml2js "^0.5.0"
 
+parse-cache-control@^1.0.1:
+  version "1.0.1"
+  resolved "https://registry.yarnpkg.com/parse-cache-control/-/parse-cache-control-1.0.1.tgz#8eeab3e54fa56920fe16ba38f77fa21aacc2d74e"
+  integrity sha512-60zvsJReQPX5/QP0Kzfd/VrpjScIQ7SHBW6bFCYfEP+fp0Eppr1SHhIO5nd1PjZtvclzSzES9D/p5nFJurwfWg==
+
 parse-headers@^2.0.0:
   version "2.0.5"
   resolved "https://registry.npmjs.org/parse-headers/-/parse-headers-2.0.5.tgz#069793f9356a54008571eb7f9761153e6c770da9"
@@ -11302,7 +11344,7 @@ readable-stream@1.1.x:
     isarray "0.0.1"
     string_decoder "~0.10.x"
 
-readable-stream@^3.0.0, readable-stream@^3.0.6, readable-stream@^3.1.1, readable-stream@^3.4.0, readable-stream@^3.6.0, readable-stream@^3.6.2:
+readable-stream@^3.0.0, readable-stream@^3.0.2, readable-stream@^3.0.6, readable-stream@^3.1.1, readable-stream@^3.4.0, readable-stream@^3.6.0, readable-stream@^3.6.2:
   version "3.6.2"
   resolved "https://registry.npmjs.org/readable-stream/-/readable-stream-3.6.2.tgz#56a9b36ea965c00c5a93ef31eb111a0f11056967"
   integrity sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==
@@ -12043,6 +12085,48 @@ shell-quote@^1.8.1:
   version "1.8.1"
   resolved "https://registry.npmjs.org/shell-quote/-/shell-quote-1.8.1.tgz#6dbf4db75515ad5bac63b4f1894c3a154c766680"
   integrity sha512-6j1W9l1iAs/4xYBI1SYOVZyFcCis9b4KCLQ8fgAGG07QvzaRLVVRQvAy85yNmmZSjYjg4MWh4gNvlPujU/5LpA==
+
+sherpa-onnx-darwin-arm64@^1.13.3:
+  version "1.13.3"
+  resolved "https://registry.yarnpkg.com/sherpa-onnx-darwin-arm64/-/sherpa-onnx-darwin-arm64-1.13.3.tgz#1d881eca4f605cef388cf19d0be69a6825bdf4e6"
+  integrity sha512-9x86Cbf+BDFONdtCPM3cnjvtAW0ER8tMaHK5pVfz+SHPt8GeuwRXaiR/BzcByFBUyxCgmceO09/WMZOCi44P/g==
+
+sherpa-onnx-darwin-x64@^1.13.3:
+  version "1.13.3"
+  resolved "https://registry.yarnpkg.com/sherpa-onnx-darwin-x64/-/sherpa-onnx-darwin-x64-1.13.3.tgz#fdd640977813bb2df673edfc1cfb707ab6e89fa1"
+  integrity sha512-TVQ35g7JIpDPB1lUDdcog+JtI0cI45ZzOnvHXm0DtWs/dgxnJXtWMY3uLRtBbLnysV9j5ljffwZ1IX9VDHsCzQ==
+
+sherpa-onnx-linux-arm64@^1.13.3:
+  version "1.13.3"
+  resolved "https://registry.yarnpkg.com/sherpa-onnx-linux-arm64/-/sherpa-onnx-linux-arm64-1.13.3.tgz#4c3504b19d096560c26ddc87a5bcad4f92734fd3"
+  integrity sha512-uDtZkkoP6QQ/3DHOscCpEZ2WpaiHUQsDpbyYaHURrJ7DbsjqGnS6G8l+R589Ro5Bf282QElzBy3okwxXbt3Kxw==
+
+sherpa-onnx-linux-x64@^1.13.3:
+  version "1.13.3"
+  resolved "https://registry.yarnpkg.com/sherpa-onnx-linux-x64/-/sherpa-onnx-linux-x64-1.13.3.tgz#67f12bf05dfc8715538a138674b5b13b3aab117a"
+  integrity sha512-OFVK0GYwKwKNsjxbPmfcLQm/dfA0IwAoiIQJ96s+eFYcDqhlapcY06ocdb7SNluGBcM7xgU5jEW2QXBkMIOEvQ==
+
+sherpa-onnx-node@^1.13.3:
+  version "1.13.3"
+  resolved "https://registry.yarnpkg.com/sherpa-onnx-node/-/sherpa-onnx-node-1.13.3.tgz#3b44fc275acaad14dba711768e7ed7bff8500851"
+  integrity sha512-3XEiRvfZ73QoKDZqweAkAOb+OA2LPMKcLcRY6zngjhwZ1ymV6xagdahepYzeDRIzVq0nRjhUe8IaRdlRMYoamw==
+  optionalDependencies:
+    sherpa-onnx-darwin-arm64 "^1.13.3"
+    sherpa-onnx-darwin-x64 "^1.13.3"
+    sherpa-onnx-linux-arm64 "^1.13.3"
+    sherpa-onnx-linux-x64 "^1.13.3"
+    sherpa-onnx-win-ia32 "^1.13.3"
+    sherpa-onnx-win-x64 "^1.13.3"
+
+sherpa-onnx-win-ia32@^1.13.3:
+  version "1.13.3"
+  resolved "https://registry.yarnpkg.com/sherpa-onnx-win-ia32/-/sherpa-onnx-win-ia32-1.13.3.tgz#135d289bc1f494072b8e62ae7c44f35e26265a79"
+  integrity sha512-VDZh1M7Ccx/bkP3WwBCFoJzwAwq+b5nR1KRkYRz5p1w5bfhzfa3ACBGr7vpUt5AGUge4qSLe0MSKXyKtSmy1uA==
+
+sherpa-onnx-win-x64@^1.13.3:
+  version "1.13.3"
+  resolved "https://registry.yarnpkg.com/sherpa-onnx-win-x64/-/sherpa-onnx-win-x64-1.13.3.tgz#7967529e49bcb2410211bc0e5aaed5d9b072d84f"
+  integrity sha512-ZQzcSmFvZK4jzmtWckqxocDUuEjYnBV2MHrDD21HPTeUMfGdE9yfvuSPpesIVfdzKbQzIQY42RAcfZEGWu0FbQ==
 
 side-channel@^1.0.4, side-channel@^1.0.6:
   version "1.0.6"

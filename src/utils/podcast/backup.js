@@ -25,6 +25,8 @@ export async function runBackup() {
       episodeListenStats,
       listenDaily,
       episodeDownloads,
+      transcripts,
+      transcriptDict,
     ] = await Promise.all([
       db.podcasts.toArray(),
       db.favorites.toArray(),
@@ -32,6 +34,11 @@ export async function runBackup() {
       db.episodeListenStats.toArray(),
       db.listenDaily.toArray(),
       db.episodeDownloads.toArray(),
+      // [转文字稿] 备份文稿索引：正文文件在 userData 不随 IndexedDB 一起丢，
+      //   恢复(只删/重建 IndexedDB)后索引回灌即可重新读到磁盘文稿；体积极小。
+      db.transcripts.toArray(),
+      // [转文字稿·词典] 用户手工积累的专名纠错词典=难再生资产，必须备份。
+      db.transcriptDict.toArray(),
     ]);
 
     // 安全阀：空库(无订阅/收藏/进度)直接跳过，绝不用空数据覆盖历史好备份。
@@ -52,6 +59,8 @@ export async function runBackup() {
       episodeListenStats,
       listenDaily,
       episodeDownloads,
+      transcripts,
+      transcriptDict,
     });
     let opml = '';
     try {
@@ -109,6 +118,8 @@ export async function restoreFromLatestBackup() {
   await db.episodeListenStats.bulkPut(stats);
   await db.listenDaily.bulkPut(arr('listenDaily'));
   await db.episodeDownloads.bulkPut(arr('episodeDownloads'));
+  await db.transcripts.bulkPut(arr('transcripts')); // [转文字稿] 回灌文稿索引
+  await db.transcriptDict.bulkPut(arr('transcriptDict')); // [转文字稿·词典] 回灌纠错词典
   clearPodcastMem(); // [封面闪烁修] 整库 bulkPut 绕过 upsert/update 失效出口 → 清会话内存层防过期封面
   return {
     from: res.name,
@@ -118,6 +129,8 @@ export async function restoreFromLatestBackup() {
     episodeListenStats: stats.length,
     listenDaily: arr('listenDaily').length,
     episodeDownloads: arr('episodeDownloads').length,
+    transcripts: arr('transcripts').length,
+    transcriptDict: arr('transcriptDict').length,
   };
 }
 
@@ -217,12 +230,16 @@ export async function mergeRestoreHistoryFromLatestBackup(opts) {
     db.episodeListenStats,
     db.listenDaily,
     db.episodeDownloads,
+    db.transcripts,
+    db.transcriptDict,
     async () => {
       await db.favorites.bulkPut(arr('favorites'));
       await db.episodeProgress.bulkPut(arr('episodeProgress'));
       await db.episodeListenStats.bulkPut(stats);
       await db.listenDaily.bulkPut(arr('listenDaily'));
       await db.episodeDownloads.bulkPut(arr('episodeDownloads'));
+      await db.transcripts.bulkPut(arr('transcripts')); // [转文字稿] 合并回灌文稿索引
+      await db.transcriptDict.bulkPut(arr('transcriptDict')); // [转文字稿·词典] 合并回灌纠错词典
     }
   );
   return {
@@ -232,6 +249,8 @@ export async function mergeRestoreHistoryFromLatestBackup(opts) {
     episodeListenStats: stats.length,
     listenDaily: arr('listenDaily').length,
     episodeDownloads: arr('episodeDownloads').length,
+    transcripts: arr('transcripts').length,
+    transcriptDict: arr('transcriptDict').length,
   };
 }
 

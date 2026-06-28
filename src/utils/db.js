@@ -15,6 +15,41 @@ export const db = new Dexie('yesplaymusic');
 //     之后 PodImage 命中即用本地 dataURL、零网络，彻底摆脱国际 CDN 实时往返；全 app 封面统一受益。
 //   key = 归一化(http→https)后的封面 url；data = dataURL；ts 供 LRU 淘汰。详见 utils/podcast/coverCache.js。
 //   纯新增表、无数据迁移，对现有表零影响。
+// [转文字稿·v13] 新增 transcriptDict 表（专名替换词典：节目级 + 全局）。
+//   行 { id, scope:'global'|'podcast', podcastId, from, to, createdAt, updatedAt }；
+//   id = `${scope}:${podcastId||''}:${from}` 唯一。替换是应用层 pass —— 原始文稿不动、可重算可回退。
+//   ⚠️ 节目级作用域防误伤（如「黄忠→黄峥」只在该节目生效，不污染三国话题）。纯新增表、无迁移。
+db.version(13).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime, [podcastId+pubTime]',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+  episodeListenStats: '&id, completed, updatedAt',
+  episodeDownloads: '&id, podcastId, addedAt',
+  listenDaily: '&key, date',
+  coverCache: '&url, ts',
+  transcripts: '&id, podcastId, createdAt, status',
+  transcriptDict: '&id, scope, podcastId',
+});
+
+// [转文字稿·v12] 新增 transcripts 表（单集文字稿索引；正文落盘在 userData/transcripts/<sha1(id)>/）。
+//   只存索引（状态 + 路径 + 段数/时长），正文 txt/json/srt 在磁盘文件里，表很小。
+//   id = episode.id（`${feedUrl}::${guid}`，与 episodes/episodeDownloads 等表同口径）；
+//   status: 'running'|'paused'|'done'|'error'（'idle'/未转录=表里无行）；
+//   model=引擎名；segPath/txtPath=磁盘绝对路径；segCount=段数；durationMs=音频时长。
+//   纯新增表、无迁移（照搬 v11 coverCache 增量法）。备份登记见 utils/podcast/backup.js。
+db.version(12).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime, [podcastId+pubTime]',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+  episodeListenStats: '&id, completed, updatedAt',
+  episodeDownloads: '&id, podcastId, addedAt',
+  listenDaily: '&key, date',
+  coverCache: '&url, ts',
+  transcripts: '&id, podcastId, createdAt, status',
+});
+
 db.version(11).stores({
   podcasts: '&id, feedUrl, updatedAt',
   episodes: '&id, podcastId, pubTime, [podcastId+pubTime]',

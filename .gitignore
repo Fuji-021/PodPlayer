@@ -34,6 +34,10 @@ devserve*.log
 
 .vercel
 
+# [转文字稿] ASR 模型不进仓库/不进基础安装包（开发期复用 benchmark 已部署模型；正式版一键部署）
+/resources/asr-models/
+*.onnx
+
 #Electron-builder output
 /dist_electron
 NeteaseCloudMusicApi-master
