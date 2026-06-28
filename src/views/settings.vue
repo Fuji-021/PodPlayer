@@ -243,6 +243,51 @@
         </div>
       </div>
 
+      <!-- [B路·AI精修] DeepSeek 接入(可选·默认关·自带 key)。key 仅本地保存(localStorage/electron-store)。 -->
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title">AI 文稿精修（DeepSeek）</div>
+          <div class="description">
+            可选。在转文字稿「已优化」之上，用 DeepSeek
+            做<b>段内词汇纠错</b>（同音/近音错字）。开启后点单集文字稿里的「AI
+            优化」即生效；<b>会把本集文稿联网发送到 DeepSeek</b
+            >（约几分钱/集）。留空 = 纯本地，体验不变。
+          </div>
+        </div>
+        <div class="right">
+          <input
+            v-model="deepseekKey"
+            type="password"
+            class="text-input margin-right-0"
+            placeholder="DeepSeek API Key（仅本地保存，不上传）"
+          />
+        </div>
+      </div>
+      <div v-if="isElectron && deepseekKey" class="item">
+        <div class="left">
+          <div class="title">AI 模型</div>
+        </div>
+        <div class="right">
+          <input
+            v-model="deepseekModel"
+            class="text-input margin-right-0"
+            placeholder="deepseek-chat"
+          />
+        </div>
+      </div>
+      <div v-if="isElectron && deepseekKey" class="item">
+        <div class="left">
+          <div class="title">AI Endpoint（OpenAI 兼容，可选）</div>
+        </div>
+        <div class="right">
+          <input
+            v-model="deepseekEndpoint"
+            class="text-input margin-right-0"
+            placeholder="https://api.deepseek.com"
+          />
+        </div>
+      </div>
+
       <!-- [§12] 「自定义」段(连接 Last.fm 听歌 scrobble + Discord Rich Presence「正在听」)=
            网易云音乐专属、与播客无关，已删；NAS 入口为独立的「NAS 就近音源」段。 -->
       <h3>{{ $t('settings.others') }}</h3>
@@ -1065,6 +1110,41 @@ export default {
       set(value) {
         this.$store.commit('updateSettings', {
           key: 'podcastIndexKey',
+          value: (value || '').trim(),
+        });
+      },
+    },
+    // [B路·AI精修] DeepSeek 接入：key/model/endpoint 仅本地持久化(settings)；
+    //   aiRefine.js 读取。key 绝不硬编码/打印/进 git；留空即不启用、纯本地体验。
+    deepseekKey: {
+      get() {
+        return this.settings.deepseekKey || '';
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'deepseekKey',
+          value: (value || '').trim(),
+        });
+      },
+    },
+    deepseekModel: {
+      get() {
+        return this.settings.deepseekModel || '';
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'deepseekModel',
+          value: (value || '').trim(),
+        });
+      },
+    },
+    deepseekEndpoint: {
+      get() {
+        return this.settings.deepseekEndpoint || '';
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'deepseekEndpoint',
           value: (value || '').trim(),
         });
       },

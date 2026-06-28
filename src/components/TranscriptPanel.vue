@@ -11,30 +11,70 @@
         >
           {{ follow ? '跟随中' : '跟随' }}
         </button>
+        <span class="t-seg3">
+          <button
+            class="t-link"
+            :class="{ on: viewMode === 'raw' }"
+            title="原始转录"
+            @click="viewMode = 'raw'"
+          >
+            原文
+          </button>
+          <button
+            class="t-link"
+            :class="{ on: viewMode === 'opt' }"
+            title="事件过滤 + 专名词典 + 拼音归一 + 段落重组"
+            @click="viewMode = 'opt'"
+          >
+            已优化
+          </button>
+          <button
+            class="t-link"
+            :class="{ on: viewMode === 'ai' }"
+            :disabled="!aiAvailable"
+            :title="
+              aiAvailable
+                ? 'AI 段内词汇精修(在已优化之上)'
+                : '先点「AI 优化」生成'
+            "
+            @click="aiAvailable && (viewMode = 'ai')"
+          >
+            AI精修
+          </button>
+        </span>
         <button
-          class="t-link"
-          :class="{ on: !showRaw }"
-          :title="
-            showRaw
-              ? '当前显示原始转录'
-              : '已应用事件过滤 + 专名词典（点击看原文）'
-          "
-          @click="showRaw = !showRaw"
-        >
-          {{ showRaw ? '原文' : '已优化' }}
-        </button>
-        <button
-          v-if="!showRaw"
+          v-if="viewMode !== 'raw'"
           class="t-link"
           :class="{ on: paragraph }"
           :title="
             paragraph
-              ? '同一意群的相邻短段已聚成自然段落（点击改逐句）'
+              ? '相邻短段聚成段落（点击改逐句）'
               : '逐句显示（点击聚成段落）'
           "
           @click="paragraph = !paragraph"
         >
           {{ paragraph ? '段落' : '逐句' }}
+        </button>
+        <!-- [B路·AI精修] 触发/进度/取消 -->
+        <button
+          v-if="aiLive.status === 'running' && aiLive.episodeId === episodeId"
+          class="t-link danger"
+          title="取消 AI 精修"
+          @click="onAiCancel"
+        >
+          AI中 {{ aiPct }}% · 取消
+        </button>
+        <button
+          v-else
+          class="t-link"
+          :title="
+            aiKey
+              ? 'AI 段内词汇精修（联网·发送本集文稿到 DeepSeek·约几分钱/集）'
+              : '需先在设置填 DeepSeek API Key'
+          "
+          @click="onAiRefine"
+        >
+          {{ aiAvailable ? '重跑 AI' : 'AI 优化' }}
         </button>
         <button
           class="t-link"
@@ -196,7 +236,10 @@
                 v-for="it in w.row.items"
                 :key="it.vi"
                 class="seg-sent"
-                :class="{ active: it.vi === curIdx }"
+                :class="{
+                  active: it.vi === curIdx,
+                  'ai-changed': showAi && aiChangedSet.has(it.vi),
+                }"
                 @click="onSegClick(it.seg)"
                 >{{ it.seg.display }}</span
               ></span
@@ -236,6 +279,12 @@ import {
   addDictEntry,
   removeDictEntry,
   syncAuthorAnchors,
+  startAiRefine,
+  getAiRefine,
+  deleteAiRefine,
+  cancelAiRefine,
+  aiRefineState,
+  aiPromptVersion,
 } from '@/utils/podcast/transcripts';
 import { getDownload } from '@/utils/podcast/downloads';
 import { getPodcast } from '@/utils/podcast/db';
@@ -272,7 +321,10 @@ export default {
       dictParts: { exact: [], anchors: [] },
       dictRows: [],
       showDict: false,
-      showRaw: false,
+      // [三态] raw 原文 / opt 规则优化 / ai AI精修(在 opt 之上叠加段内词汇纠错)
+      viewMode: 'opt',
+      aiMap: {}, // {viewSegments下标: AI采纳后文本}
+      aiChangedSet: new Set(), // 被 AI 改过的下标(打标记)
       sel: { show: false, from: '', to: '', mode: 'anchor' },
     };
   },
@@ -359,19 +411,50 @@ export default {
     podcastId() {
       return String(this.episodeId || '').split('::')[0];
     },
-    // 处理后的段（事件分类 + 专名词典替换）；原文模式=原样不处理。
-    //   词典/showRaw 变 → computed 自动重算 → 即时生效、可回退。原始 segments 永不改。
+    // [三态派生] showRaw=原文; showAi=AI精修态。showRaw 仍被各处读取(选词/导出)，改为 computed。
+    showRaw() {
+      return this.viewMode === 'raw';
+    },
+    showAi() {
+      return this.viewMode === 'ai';
+    },
+    aiLive() {
+      return aiRefineState;
+    },
+    aiPct() {
+      const t = this.aiLive.total || 0;
+      return t ? Math.min(99, Math.floor((this.aiLive.done / t) * 100)) : 0;
+    },
+    aiAvailable() {
+      return this.aiMap && Object.keys(this.aiMap).length > 0;
+    },
+    aiKey() {
+      const s = this.$store.state.settings;
+      return !!(s && s.deepseekKey && String(s.deepseekKey).trim());
+    },
+    // 处理后的段（事件分类 + 专名词典替换）；原文=原样；AI 态在 opt 之上叠加段内词汇纠错。
+    //   词典/viewMode/aiMap 变 → computed 自动重算 → 即时生效、可回退。原始 segments 永不改。
     viewSegments() {
       if (this.showRaw) {
         return this.segments.map(s =>
           Object.assign({}, s, { kind: 'speech', display: s.text })
         );
       }
-      return postprocessSegments(this.segments, {
+      const vs = postprocessSegments(this.segments, {
         dict: this.dictParts.exact,
         anchors: this.dictParts.anchors,
         mainLang: 'zh',
       });
+      if (this.showAi && this.aiMap) {
+        // AI 层：仅 speech 段、仅有 AI 结果的下标，用采纳后文本覆盖(段边界/数/时间戳全不动)
+        return vs.map((s, i) => {
+          if (s.kind === 'speech' && this.aiMap[i] != null) {
+            return Object.assign({}, s, { display: this.aiMap[i] });
+          }
+          return s;
+        });
+      }
+      return vs;
     },
     // [D·段落重组] 段落块(组内多段连排) + noise/music 折叠占位块。
     //   段落聚合只在"已优化"态生效；原文态/逐句态 → 每段独立(块结构一致，统一渲染)。
@@ -475,6 +558,9 @@ export default {
       this.queuedLocal = false;
       this.segments = [];
       this.curIdx = -1;
+      this.viewMode = 'opt'; // [三态] 切集回到"已优化"
+      this.aiMap = {};
+      this.aiChangedSet = new Set();
       try {
         const st = await getAsrStatus(this.episodeId);
         this.modelReady = !!(st && st.modelReady);
@@ -532,7 +618,78 @@ export default {
       }
       this.loadingSegs = false;
       await this.loadDict();
+      await this.loadAiRefine(); // [B路·AI] 载入已缓存的 AI 精修层(若有)
       this.$nextTick(() => this.updateHighlight());
+    },
+    // [B路·AI] 载入该集已缓存的 AI 精修(同 promptVer 才用，否则视为无)
+    async loadAiRefine() {
+      try {
+        const row = await getAiRefine(this.episodeId);
+        // 同 promptVer 且段数未变(续转会追加段→下标平移)才用缓存，否则视为陈旧丢弃
+        if (
+          row &&
+          row.promptVer === aiPromptVersion &&
+          row.segs &&
+          (!row.segCount || row.segCount === this.segments.length)
+        ) {
+          this.aiMap = row.segs;
+          this.aiChangedSet = new Set(row.changedIdx || []);
+          return;
+        }
+      } catch (e) {
+        /* ignore */
+      }
+      this.aiMap = {};
+      this.aiChangedSet = new Set();
+    },
+    // [B路·AI] 触发 AI 段内词汇精修：取"已优化"态的 speech 段送 DeepSeek，完成后切 AI 态
+    async onAiRefine() {
+      if (!this.aiKey) {
+        this.$store.dispatch(
+          'showToast',
+          '请先在「设置」里填入 DeepSeek API Key'
+        );
+        if (this.$router) this.$router.push('/settings').catch(() => {});
+        return;
+      }
+      const opt = postprocessSegments(this.segments, {
+        dict: this.dictParts.exact,
+        anchors: this.dictParts.anchors,
+        mainLang: 'zh',
+      });
+      const speech = [];
+      for (let i = 0; i < opt.length; i++) {
+        if (opt[i].kind === 'speech')
+          speech.push({ idx: i, text: opt[i].display });
+      }
+      if (!speech.length) return;
+      const anchors = (this.dictParts.anchors || [])
+        .map(a => a.to)
+        .filter(Boolean);
+      // 「重跑 AI」(已有完整缓存=覆盖全部 speech 段)→ 清旧缓存重算(吸收词典变更)；
+      //   部分缓存(取消后)→ 保留续跑。
+      const complete =
+        this.aiAvailable && Object.keys(this.aiMap).length >= speech.length;
+      if (complete) {
+        await deleteAiRefine(this.episodeId);
+        this.aiMap = {};
+        this.aiChangedSet = new Set();
+      }
+      const res = await startAiRefine(
+        this.episodeId,
+        this.podcastId,
+        speech,
+        anchors,
+        this.segments.length
+      );
+      if (res && res.ok) {
+        await this.loadAiRefine();
+        this.viewMode = 'ai';
+        this.$nextTick(() => this.updateHighlight());
+      }
+    },
+    onAiCancel() {
+      cancelAiRefine(this.episodeId);
     },
     async loadDict() {
       // A2: 先按 podcast.author 同步该节目的 author 来源 anchor（自动种主播名）
@@ -1133,6 +1290,15 @@ export default {
     color: var(--color-primary);
     font-weight: 600;
   }
+  // [B路·AI] 被 AI 精修改过的句：轻微虚线下划线，便于核对(不抢眼)
+  &.ai-changed {
+    border-bottom: 1px dashed var(--color-primary);
+  }
+}
+// [三态] 原文/已优化/AI精修 紧凑分组
+.t-seg3 {
+  display: inline-flex;
+  gap: 8px;
 }
 // 折叠的噪声/音乐段占位（不可点读、弱化）
 .seg-gap {

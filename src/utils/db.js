@@ -15,6 +15,24 @@ export const db = new Dexie('yesplaymusic');
 //     之后 PodImage 命中即用本地 dataURL、零网络，彻底摆脱国际 CDN 实时往返；全 app 封面统一受益。
 //   key = 归一化(http→https)后的封面 url；data = dataURL；ts 供 LRU 淘汰。详见 utils/podcast/coverCache.js。
 //   纯新增表、无数据迁移，对现有表零影响。
+// [转文字稿·v15] 新增 transcriptAi 表（B 路 AI 精修结果·第三层，可回退）。
+//   行 { id(=episodeId), podcastId, promptVer(prompt版本号,变了让旧缓存失效), segs:{下标→采纳后文本},
+//        changedIdx:[被AI改的下标], stats, createdAt, updatedAt }。
+//   原始 + 规则层不动；AI 层旁路存此表(再开不重跑)。纯新增表、无迁移。备份登记见 backup.js。
+db.version(15).stores({
+  podcasts: '&id, feedUrl, updatedAt',
+  episodes: '&id, podcastId, pubTime, [podcastId+pubTime]',
+  episodeProgress: '&id, updatedAt',
+  favorites: '&id, podcastId, addedAt',
+  episodeListenStats: '&id, completed, updatedAt',
+  episodeDownloads: '&id, podcastId, addedAt',
+  listenDaily: '&key, date',
+  coverCache: '&url, ts',
+  transcripts: '&id, podcastId, createdAt, status',
+  transcriptDict: '&id, scope, podcastId',
+  transcriptAi: '&id, podcastId',
+});
+
 // [转文字稿·v14] transcriptDict 加 mode/source 字段（A 路质量优化第二批）：
 //   mode: 'exact'(from→to 精确替换) | 'anchor'(只存正确词 to，靠模糊拼音命中近音变体)；
 //   source: 'manual'(用户加) | 'author'(由 podcast.author 自动种) | 'global'(全局通用)。

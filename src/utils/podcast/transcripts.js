@@ -6,6 +6,7 @@ import Vue from 'vue';
 import { db } from '@/utils/db';
 import store from '@/store';
 import { getDownload } from '@/utils/podcast/downloads';
+import { refineEpisode, AI_PROMPT_VERSION } from '@/utils/podcast/aiRefine';
 
 const ipcRenderer = window.require
   ? window.require('electron').ipcRenderer
@@ -499,4 +500,121 @@ export function registerTranscriptListeners() {
       /* ignore */
     }
   });
+}
+
+// ---------- [B 路·AI 精修] 第三层：调 DeepSeek 段内词汇纠错(可选/默认关/自带key)，按段存可回退 ----------
+export const aiRefineState = Vue.observable({
+  episodeId: '',
+  status: 'idle', // idle | running | done | error
+  done: 0,
+  total: 0,
+  accepted: 0,
+  rejected: 0,
+  error: '',
+});
+let _aiCancel = '';
+
+export function getAiRefine(episodeId) {
+  return db.transcriptAi.get(episodeId);
+}
+export function deleteAiRefine(episodeId) {
+  return db.transcriptAi.delete(episodeId).catch(() => {});
+}
+export function cancelAiRefine(episodeId) {
+  _aiCancel = episodeId || aiRefineState.episodeId;
+}
+
+function aiConfig() {
+  const s = (store.state && store.state.settings) || {};
+  return {
+    key: String(s.deepseekKey || '').trim(),
+    model: String(s.deepseekModel || '').trim() || 'deepseek-chat',
+    endpoint:
+      String(s.deepseekEndpoint || '').trim() || 'https://api.deepseek.com',
+  };
+}
+export function hasAiKey() {
+  return !!aiConfig().key;
+}
+export const aiPromptVersion = AI_PROMPT_VERSION;
+
+// 编排：speechSegs=[{idx,text}](idx=viewSegments 下标，仅 speech 段)，anchors=该集 anchor 专名表。
+//   读旧缓存(同 promptVer)续跑 → refineEpisode → 存 Dexie → 驱动 aiRefineState。失败优雅降级。
+export async function startAiRefine(
+  episodeId,
+  podcastId,
+  speechSegs,
+  anchors,
+  baseSegCount
+) {
+  const cfg = aiConfig();
+  if (!cfg.key) {
+    store.dispatch('showToast', '请先在设置里填入 DeepSeek API Key');
+    return { ok: false, reason: 'no-key' };
+  }
+  _aiCancel = '';
+  aiRefineState.episodeId = episodeId;
+  aiRefineState.status = 'running';
+  aiRefineState.done = 0;
+  aiRefineState.total = speechSegs.length;
+  aiRefineState.accepted = 0;
+  aiRefineState.rejected = 0;
+  aiRefineState.error = '';
+  let existing = {};
+  try {
+    const row = await getAiRefine(episodeId);
+    if (row && row.promptVer === AI_PROMPT_VERSION && row.segs)
+      existing = row.segs;
+  } catch (e) {
+    /* ignore */
+  }
+  let res;
+  try {
+    res = await refineEpisode(
+      speechSegs,
+      anchors,
+      cfg,
+      done => {
+        aiRefineState.done = done;
+      },
+      () => _aiCancel === episodeId,
+      existing
+    );
+  } catch (e) {
+    aiRefineState.status = 'error';
+    aiRefineState.error = String((e && e.message) || e);
+    store.dispatch('showToast', 'AI 精修失败：' + aiRefineState.error);
+    return { ok: false, error: aiRefineState.error };
+  }
+  try {
+    await db.transcriptAi.put({
+      id: episodeId,
+      podcastId: podcastId,
+      promptVer: AI_PROMPT_VERSION,
+      segCount: baseSegCount || 0, // 基于的总段数；段数变(续转)即弃旧缓存防下标错位
+      segs: res.map,
+      changedIdx: res.changedIdx,
+      stats: res.stats,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  } catch (e) {
+    /* ignore */
+  }
+  const canceled = _aiCancel === episodeId;
+  aiRefineState.accepted = res.stats.accepted;
+  aiRefineState.rejected = res.stats.rejected;
+  aiRefineState.status = canceled ? 'idle' : 'done';
+  if (!canceled) {
+    store.dispatch(
+      'showToast',
+      'AI 精修完成：纠正 ' +
+        res.stats.accepted +
+        ' 处' +
+        (res.stats.rejected
+          ? '（保守挡下 ' + res.stats.rejected + ' 处瞎改）'
+          : '')
+    );
+  }
+  return { ok: true, changedIdx: res.changedIdx, segs: res.map, canceled };
 }
