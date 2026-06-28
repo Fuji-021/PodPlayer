@@ -177,7 +177,7 @@
             @dblclick.stop
           >
             <span v-if="asrBusy(ep)" class="ep-asr-spin"></span>
-            <svg-icon v-else icon-class="waveform" />
+            <svg-icon v-else icon-class="notebook" />
           </button>
           <!-- 播放 + 更多 -->
           <button
