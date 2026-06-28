@@ -10499,6 +10499,11 @@ pino@6.14.0:
     quick-format-unescaped "^4.0.3"
     sonic-boom "^1.0.2"
 
+pinyin-pro@^3.28.1:
+  version "3.28.1"
+  resolved "https://registry.yarnpkg.com/pinyin-pro/-/pinyin-pro-3.28.1.tgz#dbc54ee79ab2d3025722322712f2be5b65444707"
+  integrity sha512-oqz8ulwRgtUXRi0vbqEfGNly19zpyCxYrjhkk5TibGcgSW6eNwS5woajCXRwqURi8Ehc2yOFTiB4uNoZ+NJOnA==
+
 pixelmatch@^4.0.2:
   version "4.0.2"
   resolved "https://registry.npmjs.org/pixelmatch/-/pixelmatch-4.0.2.tgz#8f47dcec5011b477b67db03c243bc1f3085e8854"

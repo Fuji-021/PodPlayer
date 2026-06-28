@@ -5,8 +5,10 @@
 //     —— 主力=垃圾文本特征(纯日文假名 / 孤立 the·yeah·单字)，event 仅辅助判"纯音乐歌词段"。
 //        实测：event=BGM/Laughter 多是"有效配乐口播 / 带笑对话"，不能据此丢字；而真正的
 //        吐垃圾段(あ/Yeah/The/でいいね) event 往往还是 Speech → 必须靠文本特征兜底。
-//  2) applyDict：专名替换（节目级 + 全局词典，长匹配优先，确定性字符串替换）。
+//  2) applyDict：专名精确替换（节目级 + 全局词典，长匹配优先，确定性字符串替换）。
+//  3) pinyinNormalize：anchor 模糊拼音同音归一（节目级 + author，破解同音变体枚举不完）。
 // 词典更新 → 重跑本模块即可即时生效；切到"原文"=不调用本模块。
+import { buildAnchors, pinyinNormalize } from './pinyinNormalize';
 
 const KANA_RE = /[぀-ヿ]/; // 日文 平假名 + 片假名
 // 孤立的英文虚词 / 语气词单独成段（the / yeah / oh / um …）= 噪声
@@ -101,14 +103,19 @@ export function applyDict(text, entries) {
 //  - speech：display = 词典替换后的文本
 //  - noise/music：display = 原文（面板会折叠为占位，不直接展示）
 // opts: { dict:[{from,to}], mainLang:'zh' }
+// opts: { dict:[{from,to}] 精确, anchors:[{to}] 拼音锚定, mainLang:'zh' }
 export function postprocessSegments(segments, opts) {
   opts = opts || {};
   const replace = buildReplacer(opts.dict);
+  const anchors = buildAnchors(opts.anchors);
   const mainLang = opts.mainLang || 'zh';
   return (segments || []).map(seg => {
     const kind = classifySegment(seg, { mainLang });
-    const display =
-      kind === 'speech' ? replace(seg.text || '') : seg.text || '';
+    let display = seg.text || '';
+    if (kind === 'speech') {
+      // 顺序：精确替换 → 拼音同音归一
+      display = pinyinNormalize(replace(display), anchors);
+    }
     return Object.assign({}, seg, { kind, display });
   });
 }

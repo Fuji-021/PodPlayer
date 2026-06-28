@@ -15,6 +15,33 @@ export const db = new Dexie('yesplaymusic');
 //     之后 PodImage 命中即用本地 dataURL、零网络，彻底摆脱国际 CDN 实时往返；全 app 封面统一受益。
 //   key = 归一化(http→https)后的封面 url；data = dataURL；ts 供 LRU 淘汰。详见 utils/podcast/coverCache.js。
 //   纯新增表、无数据迁移，对现有表零影响。
+// [转文字稿·v14] transcriptDict 加 mode/source 字段（A 路质量优化第二批）：
+//   mode: 'exact'(from→to 精确替换) | 'anchor'(只存正确词 to，靠模糊拼音命中近音变体)；
+//   source: 'manual'(用户加) | 'author'(由 podcast.author 自动种) | 'global'(全局通用)。
+//   纯增量(字段非索引、stores 不变)；upgrade 给旧条目补默认 mode='exact'/source='manual'，不破坏第一批数据。
+db.version(14)
+  .stores({
+    podcasts: '&id, feedUrl, updatedAt',
+    episodes: '&id, podcastId, pubTime, [podcastId+pubTime]',
+    episodeProgress: '&id, updatedAt',
+    favorites: '&id, podcastId, addedAt',
+    episodeListenStats: '&id, completed, updatedAt',
+    episodeDownloads: '&id, podcastId, addedAt',
+    listenDaily: '&key, date',
+    coverCache: '&url, ts',
+    transcripts: '&id, podcastId, createdAt, status',
+    transcriptDict: '&id, scope, podcastId',
+  })
+  .upgrade(tx =>
+    tx
+      .table('transcriptDict')
+      .toCollection()
+      .modify(r => {
+        if (!r.mode) r.mode = 'exact';
+        if (!r.source) r.source = 'manual';
+      })
+  );
+
 // [转文字稿·v13] 新增 transcriptDict 表（专名替换词典：节目级 + 全局）。
 //   行 { id, scope:'global'|'podcast', podcastId, from, to, createdAt, updatedAt }；
 //   id = `${scope}:${podcastId||''}:${from}` 唯一。替换是应用层 pass —— 原始文稿不动、可重算可回退。

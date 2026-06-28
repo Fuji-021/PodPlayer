@@ -39,6 +39,14 @@
         >
           导出
         </button>
+        <button
+          class="t-link"
+          :class="{ on: showDict }"
+          title="管理本节目纠错词典"
+          @click="showDict = !showDict"
+        >
+          词典{{ dictCount ? '·' + dictCount : '' }}
+        </button>
         <button class="t-link" title="删除文字稿" @click="onDelete"
           >删除</button
         >
@@ -104,8 +112,44 @@
           placeholder="正确写法"
           @keyup.enter="addSelToDict"
         />
+        <label
+          class="t-fix-mode"
+          title="勾选=连同近音变体一起归一(锚定)；不勾=只精确替换这个词"
+        >
+          <input
+            type="checkbox"
+            :checked="sel.mode === 'anchor'"
+            @change="sel.mode = sel.mode === 'anchor' ? 'exact' : 'anchor'"
+          />
+          治近音
+        </label>
         <button class="t-btn small" @click="addSelToDict">加入词典</button>
         <button class="t-link" @click="cancelSel">取消</button>
+      </div>
+      <!-- 词典管理：来源标记 + 删除（author/global 只读） -->
+      <div v-if="showDict" class="t-dict">
+        <div v-if="!dictRows.length" class="t-dict-empty">
+          暂无词条。选中文稿里的错词即可加入；主播名(author)会自动加入。
+        </div>
+        <div v-for="row in dictRows" :key="row.id" class="t-dict-row">
+          <span class="t-dict-tag" :class="'src-' + (row.source || 'manual')">{{
+            srcLabel(row.source)
+          }}</span>
+          <span class="t-dict-body">
+            <template v-if="row.mode === 'anchor'"
+              >{{ row.to }} <i class="t-dict-mode">近音</i></template
+            >
+            <template v-else>{{ row.from }} → {{ row.to }}</template>
+          </span>
+          <button
+            v-if="row.source !== 'author' && row.source !== 'global'"
+            class="t-link"
+            @click="removeDictRow(row)"
+          >
+            删
+          </button>
+          <span v-else class="t-dict-ro">只读</span>
+        </div>
       </div>
       <div v-if="loadingSegs" class="t-hint">
         <span class="t-spin"></span>加载文稿…
@@ -158,10 +202,14 @@ import {
   cancelTranscribe,
   deleteTranscript,
   exportTranscriptText,
-  getDictFor,
+  getDictParts,
+  listDict,
   addDictEntry,
+  removeDictEntry,
+  syncAuthorAnchors,
 } from '@/utils/podcast/transcripts';
 import { getDownload } from '@/utils/podcast/downloads';
+import { getPodcast } from '@/utils/podcast/db';
 import { postprocessSegments } from '@/utils/podcast/transcriptPostprocess';
 
 export default {
@@ -182,10 +230,12 @@ export default {
       follow: true,
       queuedLocal: false,
       scrollPauseUntil: 0,
-      // [质量优化] 专名词典 + 原文/已优化切换 + 选中加词典交互
-      dict: [],
+      // [质量优化] 专名词典(exact 精确 + anchor 拼音锚定) + 原文切换 + 选中加词典 + 词典管理
+      dictParts: { exact: [], anchors: [] },
+      dictRows: [],
+      showDict: false,
       showRaw: false,
-      sel: { show: false, from: '', to: '' },
+      sel: { show: false, from: '', to: '', mode: 'anchor' },
     };
   },
   computed: {
@@ -280,7 +330,8 @@ export default {
         );
       }
       return postprocessSegments(this.segments, {
-        dict: this.dict,
+        dict: this.dictParts.exact,
+        anchors: this.dictParts.anchors,
         mainLang: 'zh',
       });
     },
@@ -307,7 +358,7 @@ export default {
       return out;
     },
     dictCount() {
-      return (this.dict && this.dict.length) || 0;
+      return (this.dictRows && this.dictRows.length) || 0;
     },
   },
   watch: {
@@ -410,13 +461,25 @@ export default {
       this.$nextTick(() => this.updateHighlight());
     },
     async loadDict() {
+      // A2: 先按 podcast.author 同步该节目的 author 来源 anchor（自动种主播名）
       try {
-        this.dict = await getDictFor(this.podcastId);
+        const pod = await getPodcast(this.podcastId);
+        await syncAuthorAnchors(this.podcastId, (pod && pod.author) || '');
       } catch (e) {
-        this.dict = [];
+        /* ignore */
+      }
+      try {
+        this.dictParts = await getDictParts(this.podcastId);
+      } catch (e) {
+        this.dictParts = { exact: [], anchors: [] };
+      }
+      try {
+        this.dictRows = await listDict(this.podcastId);
+      } catch (e) {
+        this.dictRows = [];
       }
     },
-    // 在文稿里选中错词 → 弹纠错条（只接受词级短选择，避免整段）
+    // 在文稿里选中错词 → 弹纠错条（只接受词级短选择，避免整段）；默认 anchor 治同音
     onSelectText() {
       if (this.showRaw) return; // 原文模式不提供加词典
       let txt = '';
@@ -427,28 +490,33 @@ export default {
       }
       txt = txt.trim();
       if (txt && txt.length <= 20) {
-        this.sel = { show: true, from: txt, to: '' };
+        this.sel = { show: true, from: txt, to: '', mode: 'anchor' };
       }
     },
     cancelSel() {
-      this.sel = { show: false, from: '', to: '' };
+      this.sel = { show: false, from: '', to: '', mode: 'anchor' };
     },
     async addSelToDict() {
       const from = (this.sel.from || '').trim();
       const to = (this.sel.to || '').trim();
-      if (!from || !to) return;
+      if (!to) return;
+      const mode = this.sel.mode === 'exact' ? 'exact' : 'anchor';
       const res = await addDictEntry({
         scope: 'podcast',
         podcastId: this.podcastId,
         from: from,
         to: to,
+        mode: mode,
+        source: 'manual',
       });
       if (res && res.ok) {
-        await this.loadDict(); // dict 变 → viewSegments computed 自动重算、即时生效
+        await this.loadDict(); // 词典变 → viewSegments computed 自动重算、即时生效
         this.cancelSel();
         this.$store.dispatch(
           'showToast',
-          '已加入本节目词典：' + from + ' → ' + to
+          mode === 'anchor'
+            ? '已加入(锚定近音)：' + to
+            : '已加入：' + from + ' → ' + to
         );
       } else {
         this.$store.dispatch(
@@ -456,6 +524,17 @@ export default {
           '加入失败：' + ((res && res.error) || '')
         );
       }
+    },
+    async removeDictRow(row) {
+      if (!row || !row.id) return;
+      if (row.source === 'author' || row.source === 'global') return; // 自动/全局只读
+      await removeDictEntry(row.id);
+      await this.loadDict();
+    },
+    srcLabel(source) {
+      if (source === 'author') return '主播';
+      if (source === 'global') return '全局';
+      return '手动';
     },
     onGenerate() {
       if (!this.episode) return;
@@ -880,6 +959,62 @@ export default {
   color: var(--color-text);
   font-size: 13px;
   outline: none;
+}
+.t-fix-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  opacity: 0.75;
+  cursor: pointer;
+}
+// 词典管理列表
+.t-dict {
+  margin-bottom: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  border-radius: 10px;
+  background: var(--color-secondary-bg-for-transparent);
+  padding: 6px 8px;
+}
+.t-dict-empty {
+  font-size: 12px;
+  opacity: 0.55;
+  padding: 8px 6px;
+}
+.t-dict-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+.t-dict-tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--color-secondary-bg);
+  opacity: 0.9;
+  &.src-author {
+    color: #1db954;
+  }
+  &.src-global {
+    color: #e0a800;
+  }
+}
+.t-dict-body {
+  flex: 1;
+}
+.t-dict-mode {
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.5;
+  margin-left: 2px;
+}
+.t-dict-ro {
+  font-size: 11px;
+  opacity: 0.4;
 }
 .t-error {
   display: flex;

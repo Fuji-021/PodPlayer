@@ -77,14 +77,62 @@ export async function deleteTranscript(episodeId) {
   return { ok: true };
 }
 
-// ---------- 专名替换词典 DAO（节目级 + 全局） ----------
-function dictId(scope, podcastId, from) {
+// ---------- 专名替换词典 DAO（节目级 + 全局；exact 精确 / anchor 拼音锚定） ----------
+
+// 内置全局通用纠错(A3)。铁律=「错词本身几乎不可能合法出现」，故全局零误伤；
+//   有歧义的同音错(如"湿度关系→师徒关系")绝不入此表，留给节目级或后续 LLM 上下文判断。
+const BUILTIN_GLOBAL_EXACT = [
+  { from: '极时通信', to: '即时通信' }, // "极时通信"非法
+  { from: '耳钉面命', to: '耳提面命' }, // 错词非法
+  { from: '鸟枪放换炮', to: '鸟枪换炮' }, // 错词非法
+];
+
+// id 含 mode，避免同词的 exact/anchor 冲突；anchor 用正确词 to 作键，exact 用 from。
+function dictId(scope, podcastId, mode, key) {
   return (
-    scope + ':' + (scope === 'podcast' ? podcastId || '' : '') + ':' + from
+    scope +
+    ':' +
+    (scope === 'podcast' ? podcastId || '' : '') +
+    ':' +
+    (mode === 'anchor' ? 'a' : 'e') +
+    ':' +
+    key
   );
 }
 
-// 列出某节目可见的词条（全局 + 该节目级），带 id/scope，供管理/删除
+// 拆 podcast.author 成人名(A2)：分隔符切分 + 过滤(2–4 纯中文、去停用词、去重)。
+const AUTHOR_STOPWORDS = {
+  主播: 1,
+  嘉宾: 1,
+  主持: 1,
+  主持人: 1,
+  出品: 1,
+  制作: 1,
+  策划: 1,
+  编辑: 1,
+  录制: 1,
+  后期: 1,
+  运营: 1,
+  团队: 1,
+  电台: 1,
+  工作室: 1,
+};
+export function parseAuthorNames(author) {
+  const raw = String(author || '').split(/[\s、&/,，｜|和]+/);
+  const seen = {};
+  const out = [];
+  for (let i = 0; i < raw.length; i++) {
+    const w = raw[i].trim();
+    if (!/^[一-龥]{2,4}$/.test(w)) continue; // 仅 2–4 纯中文
+    if (AUTHOR_STOPWORDS[w]) continue;
+    if (seen[w]) continue;
+    seen[w] = 1;
+    out.push(w);
+  }
+  return out;
+}
+
+// 列出某节目可见的全部词条(全局表 + 该节目级)，带 id/scope/mode/source，供管理/删除
 export async function listDict(podcastId) {
   try {
     const [g, p] = await Promise.all([
@@ -95,7 +143,7 @@ export async function listDict(podcastId) {
     ]);
     const map = {};
     g.concat(p).forEach(r => {
-      if (r && r.from) map[r.id] = r;
+      if (r && (r.from || r.to)) map[r.id] = r;
     });
     return Object.keys(map).map(k => map[k]);
   } catch (e) {
@@ -103,26 +151,52 @@ export async function listDict(podcastId) {
   }
 }
 
-// 取替换器输入：[{from,to}]（供 transcriptPostprocess.buildReplacer）
-export async function getDictFor(podcastId) {
+// 取后处理输入：{ exact:[{from,to}], anchors:[{to}] }
+//   exact = 内置全局 + 表里 mode!=='anchor' 的条；anchors = 表里 mode==='anchor' 的条(去重 to)。
+export async function getDictParts(podcastId) {
   const rows = await listDict(podcastId);
-  return rows.map(r => ({ from: r.from, to: r.to }));
+  const exact = BUILTIN_GLOBAL_EXACT.slice();
+  const anchorSeen = {};
+  const anchors = [];
+  rows.forEach(r => {
+    if (r.mode === 'anchor') {
+      const to = String(r.to || '').trim();
+      if (to && !anchorSeen[to]) {
+        anchorSeen[to] = 1;
+        anchors.push({ to });
+      }
+    } else if (r.from && r.to) {
+      exact.push({ from: r.from, to: r.to });
+    }
+  });
+  return { exact, anchors };
 }
 
-// 新增/更新一条词条。opts: { scope:'podcast'|'global', podcastId, from, to }
+// 新增/更新一条词条。opts: { scope, podcastId, from, to, mode, source }
 export async function addDictEntry(opts) {
   opts = opts || {};
   const scope = opts.scope === 'global' ? 'global' : 'podcast';
-  const from = String(opts.from || '').trim();
+  const mode = opts.mode === 'anchor' ? 'anchor' : 'exact';
+  const source = opts.source || 'manual';
   const to = String(opts.to || '').trim();
-  if (!from || !to || from === to) {
-    return { ok: false, error: '错词/正词为空或相同' };
+  let from = String(opts.from || '').trim();
+  if (!to) return { ok: false, error: '正确词为空' };
+  if (mode === 'exact') {
+    if (!from || from === to) {
+      return { ok: false, error: '错词为空或与正词相同' };
+    }
+  } else {
+    if (Array.from(to).length < 2) {
+      return { ok: false, error: 'anchor 正确词需至少 2 字' };
+    }
+    from = ''; // anchor 不需要错词，锚定正确词、靠拼音命中近音变体
   }
   const podcastId = scope === 'podcast' ? opts.podcastId || '' : '';
   if (scope === 'podcast' && !podcastId) {
     return { ok: false, error: '缺少节目标识' };
   }
-  const id = dictId(scope, podcastId, from);
+  const key = mode === 'anchor' ? to : from;
+  const id = dictId(scope, podcastId, mode, key);
   let existing = null;
   try {
     existing = await db.transcriptDict.get(id);
@@ -135,6 +209,8 @@ export async function addDictEntry(opts) {
     podcastId,
     from,
     to,
+    mode,
+    source,
     createdAt: (existing && existing.createdAt) || Date.now(),
     updatedAt: Date.now(),
   });
@@ -148,6 +224,38 @@ export async function removeDictEntry(id) {
     /* ignore */
   }
   return { ok: true };
+}
+
+// A2：按 podcast.author 同步该节目的 author 来源 anchor 词条
+//   (新增当前人名、删除已不在 author 里的旧 author 条；author 变更即刷新)。
+export async function syncAuthorAnchors(podcastId, author) {
+  if (!podcastId) return;
+  const names = parseAuthorNames(author);
+  try {
+    const rows = await db.transcriptDict
+      .where('podcastId')
+      .equals(podcastId)
+      .toArray();
+    const oldAuthor = rows.filter(r => r && r.source === 'author');
+    const want = {};
+    names.forEach(n => (want[n] = 1));
+    for (let i = 0; i < oldAuthor.length; i++) {
+      if (!want[oldAuthor[i].to]) {
+        await db.transcriptDict.delete(oldAuthor[i].id).catch(() => {});
+      }
+    }
+    for (let i = 0; i < names.length; i++) {
+      await addDictEntry({
+        scope: 'podcast',
+        podcastId,
+        to: names[i],
+        mode: 'anchor',
+        source: 'author',
+      });
+    }
+  } catch (e) {
+    /* ignore */
+  }
 }
 
 // ---------- IPC 命令 ----------
