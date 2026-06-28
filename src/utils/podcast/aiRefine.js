@@ -6,7 +6,8 @@
 import { pinyin } from 'pinyin-pro';
 
 // 改 prompt / 采纳规则务必改此号 → 旧缓存(Dexie transcriptAi.promptVer)自动失效、重算。
-export const AI_PROMPT_VERSION = 'v1-2026-06-28';
+//   v2: 修 UTF-8 跨 chunk 乱码 + 上下文加大(前后各~3段/200字) → 旧乱码缓存自动作废重跑。
+export const AI_PROMPT_VERSION = 'v2-2026-06-29';
 
 const BATCH = 12; // 每批段数(带前后上下文)，省调用开销
 const LONG_SEG_LIMIT = 80; // 超此长度的段视为整句级 → 不送 LLM、不采其改动(LLM 对长段不可靠)
@@ -120,6 +121,7 @@ function chatCompletion(cfg, messages) {
       },
       res => {
         let buf = '';
+        res.setEncoding('utf8'); // [必修] Node 处理跨 chunk 多字节 → 汉字不再被切成 �
         res.on('data', d => (buf += d));
         res.on('end', () => {
           if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -151,10 +153,10 @@ function buildUser(batchSegs, prevText, nextText, anchors) {
     '【专名表】' +
     nouns +
     '\n' +
-    '【上下文】前段：' +
-    (prevText || '').slice(-60) +
-    ' ｜ 后段：' +
-    (nextText || '').slice(0, 60) +
+    '【上下文】前文：' +
+    (prevText || '').slice(-200) +
+    ' ｜ 后文：' +
+    (nextText || '').slice(0, 200) +
     '\n' +
     '【输入·逐段编号】\n' +
     numbered +
@@ -191,8 +193,15 @@ export async function refineEpisode(
   for (let b = 0; b < todo.length; b += BATCH) {
     if (isCanceled && isCanceled()) break;
     const batch = todo.slice(b, b + BATCH);
-    const prevText = b > 0 ? todo[b - 1].text : '';
-    const nextText = b + BATCH < todo.length ? todo[b + BATCH].text : '';
+    // 上下文加大：前后各取 ~3 段(提升清晰节目的跨段一致性)；buildUser 再各截 200 字
+    const prevText = todo
+      .slice(Math.max(0, b - 3), b)
+      .map(s => s.text)
+      .join(' ');
+    const nextText = todo
+      .slice(b + batch.length, b + batch.length + 3)
+      .map(s => s.text)
+      .join(' ');
     const user = buildUser(batch, prevText, nextText, anchors);
     let parsed = null;
     try {

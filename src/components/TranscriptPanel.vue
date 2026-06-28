@@ -1,5 +1,5 @@
 <template>
-  <div class="transcript-section">
+  <div class="transcript-section" :class="{ expanded }">
     <div class="transcript-header">
       <h2>AI 文字稿</h2>
       <div v-if="mode === 'done' || mode === 'paused'" class="t-actions">
@@ -103,6 +103,16 @@
         <button class="t-link" title="删除文字稿" @click="onDelete"
           >删除</button
         >
+        <button
+          class="t-link t-expand"
+          :class="{ on: expanded }"
+          :title="
+            expanded ? '退出展开' : '展开为大窗口（保留导航/播放栏，非真全屏）'
+          "
+          @click="toggleExpand"
+        >
+          <svg-icon :icon-class="expanded ? 'fullscreen-exit' : 'fullscreen'" />
+        </button>
       </div>
     </div>
 
@@ -325,6 +335,7 @@ export default {
       viewMode: 'opt',
       aiMap: {}, // {viewSegments下标: AI采纳后文本}
       aiChangedSet: new Set(), // 被 AI 改过的下标(打标记)
+      expanded: false, // 文稿窗口展开为大窗口(夹在 navbar 与播放 bar 之间，非真全屏)
       sel: { show: false, from: '', to: '', mode: 'anchor' },
     };
   },
@@ -551,8 +562,25 @@ export default {
   },
   mounted() {
     this.init();
+    // 展开态按 Esc 退出
+    this._onEsc = e => {
+      if (e.key === 'Escape' && this.expanded) {
+        this.expanded = false;
+        this.$nextTick(() => this.recalcWindow());
+      }
+    };
+    window.addEventListener('keydown', this._onEsc);
+  },
+  beforeDestroy() {
+    if (this._onEsc) window.removeEventListener('keydown', this._onEsc);
   },
   methods: {
+    // 文稿窗口展开/收起为大窗口(夹在 navbar 与播放 bar 之间，非真全屏)；
+    //   尺寸变 → 虚拟滚动按新 clientHeight 重算窗口。
+    toggleExpand() {
+      this.expanded = !this.expanded;
+      this.$nextTick(() => this.recalcWindow());
+    },
     async init() {
       this.initializing = true;
       this.queuedLocal = false;
@@ -1100,6 +1128,35 @@ export default {
   margin-top: 40px;
   padding-bottom: 24px;
   color: var(--color-text);
+}
+// [展开] 文稿大窗口：夹在 navbar(顶 64) 与播放 bar(底 64) 之间，z-index 99(低于二者 100)→
+//   导航/播放栏仍在仍可用；非真全屏。flex 列让段列表填满高度。
+.transcript-section.expanded {
+  position: fixed;
+  top: 64px;
+  bottom: 64px;
+  left: 0;
+  right: 0;
+  z-index: 99;
+  margin: 0;
+  padding: 14px clamp(24px, 4vw, 64px);
+  background: var(--color-body-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  .seg-list {
+    max-height: none;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
+.t-expand {
+  display: inline-flex;
+  align-items: center;
+  .svg-icon {
+    width: 16px;
+    height: 16px;
+  }
 }
 .transcript-header {
   display: flex;
