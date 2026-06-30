@@ -103,16 +103,6 @@
         <button class="t-link" title="删除文字稿" @click="onDelete"
           >删除</button
         >
-        <button
-          class="t-link t-expand"
-          :class="{ on: expanded }"
-          :title="
-            expanded ? '退出展开' : '展开为大窗口（保留导航/播放栏，非真全屏）'
-          "
-          @click="toggleExpand"
-        >
-          <svg-icon :icon-class="expanded ? 'fullscreen-exit' : 'fullscreen'" />
-        </button>
       </div>
     </div>
 
@@ -221,48 +211,60 @@
       <div v-else-if="!segments.length" class="t-hint"
         >（暂无可显示的段落）</div
       >
-      <div
-        v-else
-        ref="list"
-        class="seg-list"
-        @scroll.passive="onListScroll"
-        @mouseup="onSelectText"
-      >
-        <div class="seg-spacer" :style="{ height: topPad + 'px' }"></div>
-        <template v-for="w in winRows">
-          <!-- 段落块：组内各原始段作 span 连排；点任意句跳该句、当前句 inline 高亮 -->
-          <div
-            v-if="w.row.type === 'para'"
-            :key="'p' + w.row.items[0].vi"
-            :data-ri="w.ri"
-            class="seg-row"
-            :class="{ active: rowHasActive(w.row) }"
-          >
-            <span class="seg-time" @click="onSegClick(w.row.items[0].seg)">{{
-              fmtClock(w.row.items[0].seg.start)
-            }}</span>
-            <span class="seg-text"
-              ><span
-                v-for="it in w.row.items"
-                :key="it.vi"
-                class="seg-sent"
-                :class="{
-                  active: it.vi === curIdx,
-                  'ai-changed': showAi && aiChangedSet.has(it.vi),
-                }"
-                @click="onSegClick(it.seg)"
-                >{{ it.seg.display }}</span
-              ></span
+      <div v-else class="seg-box">
+        <!-- 展开/收起：浮在文稿框右上角的小按钮(批注：缩小 + 放进框里) -->
+        <button
+          class="t-expand-float"
+          :class="{ on: expanded }"
+          :title="
+            expanded ? '退出展开' : '展开为大窗口（保留导航/播放栏，非真全屏）'
+          "
+          @click="toggleExpand"
+        >
+          <svg-icon :icon-class="expanded ? 'fullscreen-exit' : 'fullscreen'" />
+        </button>
+        <div
+          ref="list"
+          class="seg-list"
+          @scroll.passive="onListScroll"
+          @mouseup="onSelectText"
+        >
+          <div class="seg-spacer" :style="{ height: topPad + 'px' }"></div>
+          <template v-for="w in winRows">
+            <!-- 段落块：组内各原始段作 span 连排；点任意句跳该句、当前句 inline 高亮 -->
+            <div
+              v-if="w.row.type === 'para'"
+              :key="'p' + w.row.items[0].vi"
+              :data-ri="w.ri"
+              class="seg-row"
+              :class="{ active: rowHasActive(w.row) }"
             >
-          </div>
-          <div v-else :key="'g' + w.ri" :data-ri="w.ri" class="seg-gap">
-            {{ w.row.music ? '♪ 音乐' : '···' }}
-            <span v-if="w.row.count > 1" class="seg-gap-n"
-              >×{{ w.row.count }}</span
-            >
-          </div>
-        </template>
-        <div class="seg-spacer" :style="{ height: botPad + 'px' }"></div>
+              <span class="seg-time" @click="onSegClick(w.row.items[0].seg)">{{
+                fmtClock(w.row.items[0].seg.start)
+              }}</span>
+              <span class="seg-text"
+                ><span
+                  v-for="it in w.row.items"
+                  :key="it.vi"
+                  class="seg-sent"
+                  :class="{
+                    active: it.vi === curIdx,
+                    'ai-changed': showAi && aiChangedSet.has(it.vi),
+                  }"
+                  @click="onSegClick(it.seg)"
+                  >{{ it.seg.display }}</span
+                ></span
+              >
+            </div>
+            <div v-else :key="'g' + w.ri" :data-ri="w.ri" class="seg-gap">
+              {{ w.row.music ? '♪ 音乐' : '···' }}
+              <span v-if="w.row.count > 1" class="seg-gap-n"
+                >×{{ w.row.count }}</span
+              >
+            </div>
+          </template>
+          <div class="seg-spacer" :style="{ height: botPad + 'px' }"></div>
+        </div>
       </div>
     </template>
 
@@ -1010,11 +1012,18 @@ export default {
         const els = list.querySelectorAll('[data-ri]');
         const updates = {};
         let changed = false;
+        // 当前播放段所在块始终重测(其内 active 句样式变可能改占位高)，其余已测行跳过
+        const activeRi =
+          this.curIdx >= 0 ? this.viToRowIndex[this.curIdx] : undefined;
         for (let i = 0; i < els.length; i++) {
           const el = els[i];
           const ri = parseInt(el.getAttribute('data-ri'), 10);
           if (isNaN(ri) || !this.rows[ri]) continue;
           const k = this.rowKey(this.rows[ri], ri);
+          // [性能·丝滑滚动] 已测过的行跳过——不再读 offsetHeight。读 offsetHeight 强制同步重排,
+          //   原来每个滚动帧对所有可视行都读=layout thrash(滚动不如原生丝滑的主因)。行集变(段落/逐句/
+          //   切集/词典)时 resetWindow 已清缓存,故按 rowKey 测一次即可(当前块除外)。
+          if (this.rowH[k] != null && ri !== activeRi) continue;
           const h = el.offsetHeight;
           if (h && this.rowH[k] !== h) {
             updates[k] = h;
@@ -1139,23 +1148,56 @@ export default {
   right: 0;
   z-index: 99;
   margin: 0;
-  padding: 14px clamp(24px, 4vw, 64px);
+  // [批注①] 标题原来贴着 navbar「撞墙」→ 加大顶距，整块往下移、留呼吸
+  padding: clamp(22px, 3.4vh, 46px) clamp(24px, 4vw, 64px) 16px;
   background: var(--color-body-bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  // [批注②] 展开态文稿框撑满高度：seg-box flex 列 → seg-list 填满
+  .seg-box {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .seg-list {
     max-height: none;
     flex: 1 1 auto;
     min-height: 0;
   }
 }
-.t-expand {
+// [批注②] 文稿框定位上下文，承载右上角浮动展开按钮
+.seg-box {
+  position: relative;
+}
+// [批注②] 展开/收起按钮：缩小 + 浮在文稿框右上角(原在工具栏末尾、太大又撞墙)
+.t-expand-float {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 3;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--color-secondary-bg-for-transparent);
+  color: var(--color-text);
+  opacity: 0.5;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+  &:hover {
+    opacity: 1;
+    background: var(--color-secondary-bg);
+  }
+  &.on {
+    opacity: 0.85;
+  }
   .svg-icon {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
   }
 }
 .transcript-header {
@@ -1298,6 +1340,20 @@ export default {
   border-radius: 12px;
   background: var(--color-secondary-bg-for-transparent);
   padding: 6px 4px;
+  // [批注③] 右侧也要和左侧一样的圆角：默认滚动条轨道不透明、把右上/右下圆角盖成方角 →
+  //   细化滚动条 + 透明轨道 + 圆头滑块(留 2px 内缩) → 露出框体右侧圆角。
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: var(--color-secondary-bg);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
 }
 .seg-row {
   display: flex;

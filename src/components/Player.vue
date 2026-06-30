@@ -479,12 +479,21 @@
              [修冲突] 用 mousedown.self 先记弹窗状态、click.self 再决策：按下时有弹窗开着则这次只关弹窗、不退出。 -->
         <div
           class="imm-stage"
+          :class="{ 'with-transcript': immTranscriptOpen }"
           @mousedown.self="onImmStageMouseDown"
           @click.self="onImmStageClick"
         >
+          <!-- [沉浸页·文稿] 开文稿→封面列(transform 滑左+微缩,纯 GPU)；文稿=绝对定位浮层(不参与flow→
+               开关不 reflow 播放区)、opacity 淡入(纯 GPU)。避免 width/margin 布局动画在模糊背景上每帧重算。 -->
           <div class="imm-col">
-            <!-- 大封面：固定方槽内 scale，播放 1 / 暂停 0.82，下方布局不跳动 -->
-            <div class="imm-cover-slot">
+            <!-- 大封面：固定方槽内 scale，播放 1 / 暂停 0.82，下方布局不跳动。
+                   [批注] 点封面也可开关文稿(无文稿→软提示) -->
+            <div
+              class="imm-cover-slot"
+              :class="{ clickable: isPodcastTrack }"
+              :title="isPodcastTrack ? '点击封面开/关文字稿' : ''"
+              @click="isPodcastTrack && toggleImmTranscript()"
+            >
               <img
                 class="imm-cover"
                 :class="{ paused: !playing }"
@@ -763,7 +772,8 @@
                 /></button-icon>
               </div>
 
-              <!-- 右组：标记 / 收藏 / 音量(以三大金刚为对称中心、与左组对称) -->
+              <!-- 右组：标记 / 收藏 / 音量(以三大金刚为对称中心、与左组对称)。
+                     [批注] 文稿按钮已移除——开/关文稿只点封面(控制行在缩窄列里要对齐进度条、不越界)。 -->
               <div class="imm-side imm-side-right">
                 <!-- 标记此刻：复用 bar 标记逻辑(短按标记/长按3秒清空/封面主色/彩蛋#2) -->
                 <div
@@ -849,6 +859,20 @@
               </div>
             </div>
           </div>
+
+          <!-- [沉浸页·文稿] 背景式文稿(无框)。绝对定位浮层：不参与 flex flow → 开关不 reflow 播放区；
+               进沉浸页即预挂载(后台 load)，点封面只剩 opacity 淡入(纯 GPU、零加载抖动)。 -->
+          <div class="imm-transcript-col">
+            <div class="imm-transcript-inner">
+              <ImmersiveTranscript
+                v-if="immTranscriptMounted"
+                :episode-id="markEpisodeId"
+                :current-sec="player.progress || 0"
+                :active="immTranscriptOpen"
+                @seek="onImmSeek"
+              />
+            </div>
+          </div>
         </div>
       </div>
     </transition>
@@ -861,18 +885,23 @@ import '@/assets/css/slider.css';
 
 import ButtonIcon from '@/components/ButtonIcon.vue';
 import VueSlider from 'vue-slider-component';
+// [沉浸页·文稿] Apple Music 歌词式背景文稿(复用 ASR/AI 文字稿数据层；只入 episodeId/currentSec、只出 seek)
+import ImmersiveTranscript from '@/components/ImmersiveTranscript.vue';
 import { goToListSource, hasListSource } from '@/utils/playList';
 import { formatTrackTime } from '@/utils/common';
 // [B-63] 睡眠定时"本集结束"小蓝标改用当前封面主色调（记忆点 + 与定位本集结束呼应）
 import { getCoverColor } from '@/utils/podcast/coverColor';
 // [沉浸式播放页 P0] 封面 3 色调色板（沉浸页中层三色柔和径向渐变背景用）
 import { getCoverPalette } from '@/utils/podcast/coverPalette';
+// [沉浸页·文稿] 仅做轻量可用性检测(Dexie 索引)，决定文稿按钮/点封面是否能展开
+import { getTranscript } from '@/utils/podcast/transcripts';
 
 export default {
   name: 'Player',
   components: {
     ButtonIcon,
     VueSlider,
+    ImmersiveTranscript,
   },
   data() {
     // [进度条蓝闪修] 重开时从 localStorage 恢复上次封面主色/撞色：让首帧进度条即用封面主色，
@@ -950,6 +979,11 @@ export default {
       // [沉浸式播放页 P0] 全屏沉浸 overlay 开关 + 封面 3 色调色板(切歌取一次、缓存)
       immersiveOpen: false,
       immPalette: null,
+      // [沉浸页·文稿] 文稿是否展开(封面缩左移、右侧背景浮文稿) + 本集是否有可显示文稿
+      immTranscriptOpen: false,
+      immTranscriptAvailable: false,
+      // 文稿组件是否已挂载：首次打开才挂(省去未用时加载)；保持到关闭沉浸页才卸 → 关闭动画期文字仍在、淡出更顺
+      immTranscriptMounted: false,
       // [沉浸式播放页] 音量弹窗(沉浸页专用：点击弹滑条，区别于 bar 的常驻滑条)
       volMenuOpen: false,
       volOutsideListener: null,
@@ -1191,6 +1225,13 @@ export default {
         this.$nextTick(() => {
           this.immProgressBarKey++;
         });
+      }
+    );
+    // [沉浸页·文稿] 换集 → 刷新文稿可用性(沉浸页开着时尤其重要：切到无文稿集自动收起文稿)
+    this.$watch(
+      () => this.markEpisodeId,
+      () => {
+        if (this.immersiveOpen) this.refreshTranscriptAvail();
       }
     );
     // [进度条偶发消失·根治] 切页后(布局稳定时)重挂一次进度条：覆盖"切到别的界面进度条偶发消失"——
@@ -1950,6 +1991,7 @@ export default {
       if (this.immersiveOpen) return;
       this.immersiveOpen = true;
       this.refreshImmPalette(this.coverSrc); // 进入时取一次背景三色
+      this.refreshTranscriptAvail(); // 进入时刷新本集文稿可用性(决定文稿按钮/点封面能否展开)
       // 锁主区滚动(与歌词页一致)，overlay 之下不再误滚
       this.$store.commit('enableScrolling', false);
       // [修] 给 body 打标记 → 全局 Toast 在沉浸页里下移，避开居中的控制区(详见 Toast.vue)
@@ -1963,6 +2005,7 @@ export default {
     closeImmersive() {
       if (!this.immersiveOpen) return;
       this.immersiveOpen = false;
+      this._immTranscriptAvailReq = (this._immTranscriptAvailReq || 0) + 1;
       this.$store.commit('enableScrolling', true);
       if (typeof document !== 'undefined') {
         document.body.classList.remove('immersive-open');
@@ -1973,11 +2016,83 @@ export default {
         this._immKeyHandler = null;
       }
       this.immTooltipVisible = false;
+      // [沉浸页·文稿] 关沉浸页 → 收起文稿并卸载组件(下次重开重新挂)；可用性置假待重开时重测
+      this.immTranscriptOpen = false;
+      this.immTranscriptMounted = false;
+      this.immTranscriptAvailable = false;
       // 顺手收起可能开着的功能面板，避免下次进来残留
       this.closeRateMenu();
       this.closeSleepMenu();
       this.closeQueuePanel();
       this.closeVolMenu();
+    },
+
+    // ===== [沉浸页·文稿] =====
+    // 轻量可用性检测：本集是否有可显示文稿(done/paused 且已转出段)。只读 Dexie 索引，便宜。
+    async refreshTranscriptAvail() {
+      const reqId = (this._immTranscriptAvailReq || 0) + 1;
+      this._immTranscriptAvailReq = reqId;
+      const episodeId = this.markEpisodeId;
+      if (!this.isPodcastTrack || !episodeId) {
+        this.immTranscriptAvailable = false;
+        this.immTranscriptOpen = false;
+        this.immTranscriptMounted = false;
+        return;
+      }
+      let ok = false;
+      try {
+        const row = await getTranscript(episodeId);
+        if (
+          reqId !== this._immTranscriptAvailReq ||
+          episodeId !== this.markEpisodeId ||
+          !this.immersiveOpen
+        ) {
+          return;
+        }
+        ok = !!(
+          row &&
+          (row.status === 'done' || row.status === 'paused') &&
+          (row.segCount || 0) > 0
+        );
+      } catch (e) {
+        ok = false;
+      }
+      if (
+        reqId !== this._immTranscriptAvailReq ||
+        episodeId !== this.markEpisodeId ||
+        !this.immersiveOpen
+      ) {
+        return;
+      }
+      this.immTranscriptAvailable = ok;
+      if (ok) {
+        // [性能·预加载] 有文稿就先挂载组件(隐藏态 active:false 后台 load)→ 点封面只剩淡入、零加载抖动
+        this.immTranscriptMounted = true;
+      } else {
+        // 切到无文稿的集时自动收起文稿、还原居中布局并卸载组件
+        this.immTranscriptOpen = false;
+        this.immTranscriptMounted = false;
+      }
+    },
+    // 点封面切换文稿：有文稿→开关；无文稿→软提示(不展开)。组件已在进沉浸页时预挂载。
+    toggleImmTranscript() {
+      if (!this.immTranscriptAvailable) {
+        this.$store.dispatch(
+          'showToast',
+          this.isPodcastTrack ? '本集暂无文字稿' : '该内容不支持文字稿'
+        );
+        return;
+      }
+      this.immTranscriptMounted = true; // 兜底(预挂载未及时)
+      this.immTranscriptOpen = !this.immTranscriptOpen;
+    },
+    // 文稿点句跳播：沉浸页展示的就是当前播放集 → 直接 seek 当前 howler
+    onImmSeek(sec) {
+      try {
+        this.player.seek(Math.max(0, sec || 0));
+      } catch (e) {
+        /* ignore */
+      }
     },
     // [沉浸式播放页] 音量弹窗：点击切换、点外部关闭(同倍速/睡眠模式)。取消一键静音——
     //   要静音把滑条拖到底即可。滚轮在弹窗内调节(onVolumeWheel 复用 bar 逻辑)。
@@ -3065,14 +3180,47 @@ export default {
   padding: 56px 16px 30px;
   box-sizing: border-box;
 }
+// [沉浸页·文稿] 封面列：默认居中(stage flex)。开文稿 → translateX 滑左 + 微缩 scale(0.84),
+//   **纯 transform(GPU 合成)**——不动 width/margin、不触发 reflow、不在模糊背景上每帧重算 → 流畅。
+//   微缩同时:封面/标题/控制整体变小(控制行天然落进列内、不越界,免窄态特判)、标题字也随之变小。
 .imm-col {
-  // 封面=方形；列宽同时受视口高/宽与上限约束 → 封面、信息、进度、控制天然「与封面同宽」
+  flex-shrink: 0;
   width: min(58vh, 86vw, 620px);
   display: flex;
   flex-direction: column;
-  // [性能·补动画] 窗口最大化/还原时列宽随视口(vh/vw)变化平滑缓动(原硬切瞬跳)；只此收敛容器
-  //   过渡 width、子元素百分比跟随。绝不给 .immersive/.imm-bg 加尺寸过渡(会逼双层滤镜逐帧重算发烫)。
-  transition: width 0.26s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transform-origin: center center;
+  transform: translateX(0) scale(1);
+  transition: transform 0.42s cubic-bezier(0.2, 0.7, 0.2, 1);
+  // [审查·内存] 不挂常驻 will-change(blur 背景上叠持久合成层有显存/发热风险,见 known-bugs)；
+  //   transform 过渡时浏览器会自动临时提层合成,稳态即销毁层 → 既流畅又不常驻占用。
+}
+// 开文稿：封面列滑左 + 微缩(translateX 量随视口宽,clamp 兜底;先 scale 后 translate)
+.imm-stage.with-transcript .imm-col {
+  transform: translateX(calc(clamp(140px, 21vw, 320px) * -1)) scale(0.84);
+}
+// 背景式文稿列(无框)：**绝对定位浮层**——不参与 flex flow → 开关文稿不 reflow 播放区。
+//   [批注] 往右移(贴右缘小留白) + 高度降低(上下各 14vh → 约 72vh 居中,当前句仍居视口中线)。
+//   仅 opacity(+轻微位移)过渡,纯 GPU。关态 pointer-events:none → 右侧空白点击仍可收起沉浸页(同改前)。
+.imm-transcript-col {
+  position: absolute;
+  top: 14vh;
+  bottom: 14vh;
+  right: clamp(40px, 7vw, 170px);
+  width: clamp(320px, 33vw, 600px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(24px);
+  transition: opacity 0.4s ease, transform 0.42s cubic-bezier(0.2, 0.7, 0.2, 1);
+  // [审查·内存] 同上：去常驻 will-change，opacity/transform 过渡时自动提层、稳态销毁。
+}
+.imm-stage.with-transcript .imm-transcript-col {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+.imm-transcript-inner {
+  width: 100%;
+  height: 100%;
 }
 
 // 大封面：方槽内 scale，播放 1 / 暂停 0.82，下方布局不跳动
@@ -3084,7 +3232,11 @@ export default {
   justify-content: center;
   // [批注] 加大封面↔下方块间距 → 「节目名+进度条+控制」整块下移、封面上提，呼吸更足
   margin-bottom: clamp(28px, 5vh, 58px);
-  transition: margin-bottom 0.26s cubic-bezier(0.2, 0.7, 0.2, 1); // [性能·补动画] 最大化时间距平滑
+  // 0.42s 与列宽过渡同步(最大化/还原 + 开关文稿时内部间距与列宽不脱节)
+  transition: margin-bottom 0.42s cubic-bezier(0.2, 0.7, 0.2, 1);
+  &.clickable {
+    cursor: pointer; // 点封面开/关文字稿
+  }
 }
 .imm-cover {
   width: 100%;
@@ -3106,12 +3258,13 @@ export default {
 .imm-meta {
   // [批注] 再加大「节目名↔进度条」间距 → 进度条+控制整块再下移；hover 时间提示也不会撞到节目名
   margin-bottom: clamp(20px, 3.4vh, 40px);
-  transition: margin-bottom 0.26s cubic-bezier(0.2, 0.7, 0.2, 1); // [性能·补动画] 最大化时间距平滑
+  transition: margin-bottom 0.42s cubic-bezier(0.2, 0.7, 0.2, 1); // 与列宽过渡同步
   .imm-text {
     min-width: 0;
   }
   .imm-ep {
-    font-size: clamp(16px, 1.5vw, 22px);
+    // [批注] 单集名字体小一点(开文稿时整列再 ×0.84 更小)
+    font-size: clamp(15px, 1.35vw, 19px);
     font-weight: 700;
     line-height: 1.25;
     color: var(--imm-text);
@@ -3302,7 +3455,8 @@ export default {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
   }
 }
-// 三大金刚：无圆圈、播放键更大、居中、组内稍疏
+// 三大金刚：无圆圈、播放键更大、居中、组内稍疏。
+//   (开文稿时整列 transform:scale(0.84) 统一缩小,控制行随之等比缩、天然落进列内 → 无需窄态单独收缩)
 .imm-king {
   display: flex;
   align-items: center;
