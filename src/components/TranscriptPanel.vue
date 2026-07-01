@@ -4,6 +4,14 @@
       <h2>AI 文字稿</h2>
       <div v-if="mode === 'done' || mode === 'paused'" class="t-actions">
         <button
+          class="t-link t-top-link"
+          title="回到本页顶部"
+          @click="scrollPageTop"
+        >
+          <svg-icon icon-class="arrow-up" />
+          <span>顶部</span>
+        </button>
+        <button
           class="t-link"
           :class="{ on: follow }"
           title="播放时自动高亮并滚动到当前段"
@@ -11,49 +19,13 @@
         >
           {{ follow ? '跟随中' : '跟随' }}
         </button>
-        <span class="t-seg3">
-          <button
-            class="t-link"
-            :class="{ on: viewMode === 'raw' }"
-            title="原始转录"
-            @click="viewMode = 'raw'"
-          >
-            原文
-          </button>
-          <button
-            class="t-link"
-            :class="{ on: viewMode === 'opt' }"
-            title="事件过滤 + 专名词典 + 拼音归一 + 段落重组"
-            @click="viewMode = 'opt'"
-          >
-            已优化
-          </button>
-          <button
-            class="t-link"
-            :class="{ on: viewMode === 'ai' }"
-            :disabled="!aiAvailable"
-            :title="
-              aiAvailable
-                ? 'AI 段内词汇精修(在已优化之上)'
-                : '先点「AI 优化」生成'
-            "
-            @click="aiAvailable && (viewMode = 'ai')"
-          >
-            AI精修
-          </button>
-        </span>
         <button
-          v-if="viewMode !== 'raw'"
-          class="t-link"
-          :class="{ on: paragraph }"
-          :title="
-            paragraph
-              ? '相邻短段聚成段落（点击改逐句）'
-              : '逐句显示（点击聚成段落）'
-          "
-          @click="paragraph = !paragraph"
+          class="t-link t-mode-cycle"
+          :class="{ on: viewMode !== 'raw' }"
+          :title="viewModeTitle"
+          @click="cycleViewMode"
         >
-          {{ paragraph ? '段落' : '逐句' }}
+          {{ viewModeLabel }}
         </button>
         <!-- [B路·AI精修] 触发/进度/取消 -->
         <button
@@ -75,14 +47,6 @@
           @click="onAiRefine"
         >
           {{ aiAvailable ? '重跑 AI' : 'AI 优化' }}
-        </button>
-        <button
-          class="t-link"
-          title="复制全文到剪贴板"
-          :disabled="!segments.length"
-          @click="onCopy"
-        >
-          复制
         </button>
         <button
           class="t-link"
@@ -227,6 +191,9 @@
           ref="list"
           class="seg-list"
           @scroll.passive="onListScroll"
+          @wheel.passive="onUserScrollIntent"
+          @pointerdown="onUserScrollIntent"
+          @touchstart.passive="onUserScrollIntent"
           @mouseup="onSelectText"
         >
           <div class="seg-spacer" :style="{ height: topPad + 'px' }"></div>
@@ -321,7 +288,6 @@ export default {
       loadingSegs: false,
       curIdx: -1,
       follow: true,
-      paragraph: true, // [D·段落重组] 段落聚合(默认开)；逐句模式=关
       queuedLocal: false,
       scrollPauseUntil: 0,
       // [性能·虚拟化] 变高窗口虚拟滚动：只渲染可视区±缓冲，DOM 节点数与文稿长度脱钩
@@ -329,6 +295,7 @@ export default {
       winStart: 0,
       winEnd: 60,
       rowH: {}, // 行 key → 实测高(估高兜底)
+      listWidth: 0,
       // [质量优化] 专名词典(exact 精确 + anchor 拼音锚定) + 原文切换 + 选中加词典 + 词典管理
       dictParts: { exact: [], anchors: [] },
       dictRows: [],
@@ -441,6 +408,21 @@ export default {
     aiAvailable() {
       return this.aiMap && Object.keys(this.aiMap).length > 0;
     },
+    viewModeLabel() {
+      if (this.viewMode === 'raw') return '原文';
+      if (this.viewMode === 'ai') return '已优化·AI';
+      return '已优化';
+    },
+    viewModeTitle() {
+      return this.aiAvailable
+        ? '点击切换：已优化 / AI 精修 / 原文'
+        : '点击切换：已优化 / 原文';
+    },
+    estCharsPerLine() {
+      const w = this.listWidth || 760;
+      const textW = Math.max(240, w - 100);
+      return Math.max(24, Math.floor(textW / 15));
+    },
     aiKey() {
       const s = this.$store.state.settings;
       return !!(s && s.deepseekKey && String(s.deepseekKey).trim());
@@ -470,11 +452,11 @@ export default {
       return vs;
     },
     // [D·段落重组] 段落块(组内多段连排) + noise/music 折叠占位块。
-    //   段落聚合只在"已优化"态生效；原文态/逐句态 → 每段独立(块结构一致，统一渲染)。
+    //   段落聚合只在"已优化/AI"态固定启用；原文态 → 每段独立(块结构一致，统一渲染)。
     //   组内每段保留 {vi,seg}（vi=viewSegments 下标）→ 点读/高亮粒度不降。
     rows() {
       return groupParagraphs(this.viewSegments, {
-        enabled: this.paragraph && !this.showRaw,
+        enabled: !this.showRaw,
         gapSec: 1.0,
         maxLen: 100,
       });
@@ -572,9 +554,15 @@ export default {
       }
     };
     window.addEventListener('keydown', this._onEsc);
+    this.$nextTick(() => this.setupListResizeObserver());
   },
   beforeDestroy() {
     if (this._onEsc) window.removeEventListener('keydown', this._onEsc);
+    if (this._resizeObserver) this._resizeObserver.disconnect();
+    this._resizeObservedEl = null;
+    if (this._scrollRAF) cancelAnimationFrame(this._scrollRAF);
+    if (this._resizeRAF) cancelAnimationFrame(this._resizeRAF);
+    if (this._measureTimer) clearTimeout(this._measureTimer);
   },
   methods: {
     // 文稿窗口展开/收起为大窗口(夹在 navbar 与播放 bar 之间，非真全屏)；
@@ -582,6 +570,39 @@ export default {
     toggleExpand() {
       this.expanded = !this.expanded;
       this.$nextTick(() => this.recalcWindow());
+    },
+    setupListResizeObserver() {
+      const list = this.$refs.list;
+      if (!list || typeof ResizeObserver === 'undefined') return;
+      this.listWidth = list.clientWidth || 0;
+      if (this._resizeObserver) this._resizeObserver.disconnect();
+      this._resizeObservedEl = list;
+      this._resizeObserver = new ResizeObserver(entries => {
+        const entry = entries && entries[0];
+        const rect = entry && entry.contentRect;
+        const w = rect ? rect.width : list.clientWidth;
+        if (!w || Math.abs(w - this.listWidth) < 2) return;
+        this.listWidth = w;
+        if (this._resizeRAF) cancelAnimationFrame(this._resizeRAF);
+        this._resizeRAF = requestAnimationFrame(() => {
+          this._resizeRAF = null;
+          this.rowH = {};
+          this.recalcWindow();
+        });
+      });
+      this._resizeObserver.observe(list);
+    },
+    cycleViewMode() {
+      const modes = this.aiAvailable ? ['opt', 'ai', 'raw'] : ['opt', 'raw'];
+      const idx = modes.indexOf(this.viewMode);
+      this.viewMode = modes[(idx + 1) % modes.length] || 'opt';
+    },
+    scrollPageTop() {
+      const root = this.$el;
+      const scroller = root && root.closest && root.closest('main');
+      if (scroller) {
+        scroller.scrollTop = 0;
+      }
     },
     async init() {
       this.initializing = true;
@@ -841,38 +862,6 @@ export default {
       }
       this.$emit('seek', seg.start || 0);
     },
-    // 复制全文到剪贴板（开发调试：一键拿到纯文本，免逐段复制）
-    onCopy() {
-      if (!this.segments.length) return;
-      // 跟随"原文/已优化"：原文=全段原始文本；已优化=只取 speech 段的替换后文本(跳过噪声/音乐段)
-      let lines;
-      if (this.showRaw) {
-        lines = this.segments.map(s => (s && s.text) || '').filter(Boolean);
-      } else {
-        lines = this.viewSegments
-          .filter(s => s.kind === 'speech')
-          .map(s => s.display || '')
-          .filter(Boolean);
-      }
-      const text = lines.join('\n');
-      let done = false;
-      try {
-        if (window.require) {
-          window.require('electron').clipboard.writeText(text);
-          done = true;
-        }
-      } catch (e) {
-        done = false;
-      }
-      if (!done && navigator.clipboard) {
-        navigator.clipboard.writeText(text).catch(() => {});
-        done = true;
-      }
-      this.$store.dispatch(
-        'showToast',
-        done ? '已复制全文（' + lines.length + ' 段）' : '复制失败'
-      );
-    },
     // 导出文稿为文件（另存为 txt/srt）
     async onExport() {
       if (!this.segments.length) return;
@@ -943,16 +932,31 @@ export default {
       this.follow = !this.follow;
       if (this.follow) this.scrollToCurrent();
     },
+    onUserScrollIntent() {
+      this.scrollPauseUntil = Date.now() + 2500;
+    },
     onListScroll() {
-      // 程序滚动(跟随自动滚)触发的 scroll 不算"用户滚动"，不抢跟随
-      if (Date.now() > (this._progScrollUntil || 0)) {
-        this.scrollPauseUntil = Date.now() + 2500;
-      }
+      this._lastListScrollAt = Date.now();
       if (this._scrollRAF) return;
       this._scrollRAF = requestAnimationFrame(() => {
         this._scrollRAF = null;
         this.recalcWindow();
       });
+    },
+    scheduleMeasureVisible(delay) {
+      if (this._measureTimer) clearTimeout(this._measureTimer);
+      this._measureTimer = setTimeout(
+        () => {
+          this._measureTimer = null;
+          const quietFor = Date.now() - (this._lastListScrollAt || 0);
+          if (quietFor < 140) {
+            this.scheduleMeasureVisible(140 - quietFor);
+            return;
+          }
+          this.measureVisible();
+        },
+        delay == null ? 160 : delay
+      );
     },
     estRowH(row) {
       if (!row || row.type === 'gap') return 30;
@@ -962,7 +966,7 @@ export default {
         const d = items[i].seg && items[i].seg.display;
         if (d) len += Array.from(d).length;
       }
-      const lines = Math.max(1, Math.ceil(len / 34));
+      const lines = Math.max(1, Math.ceil(len / this.estCharsPerLine));
       return 16 + lines * 23; // 估高：padding + 行数 × 行高
     },
     rowKey(row, i) {
@@ -981,6 +985,12 @@ export default {
     recalcWindow() {
       const list = this.$refs.list;
       if (!list) return;
+      if (this._resizeObservedEl !== list) this.setupListResizeObserver();
+      const nextWidth = list.clientWidth || 0;
+      if (Math.abs(nextWidth - this.listWidth) >= 2) {
+        this.listWidth = nextWidth;
+        this.rowH = {};
+      }
       const top = list.scrollTop;
       const viewH = list.clientHeight || 400;
       const off = this.offsets;
@@ -999,10 +1009,13 @@ export default {
       }
       let end = start;
       while (end < n && (off[end] || 0) < top + viewH) end++;
-      const BUF = 8;
-      this.winStart = Math.max(0, start - BUF);
-      this.winEnd = Math.min(n, end + BUF);
-      this.measureVisible();
+      const BUF = 6;
+      const nextStart = Math.max(0, start - BUF);
+      const nextEnd = Math.min(n, end + BUF);
+      const changed = nextStart !== this.winStart || nextEnd !== this.winEnd;
+      this.winStart = nextStart;
+      this.winEnd = nextEnd;
+      if (changed) this.scheduleMeasureVisible(160);
     },
     // 实测当前渲染行真实高度 → 更新 rowH（只测可视区，故只影响下方 offset，视口不跳）
     measureVisible() {
@@ -1012,18 +1025,15 @@ export default {
         const els = list.querySelectorAll('[data-ri]');
         const updates = {};
         let changed = false;
-        // 当前播放段所在块始终重测(其内 active 句样式变可能改占位高)，其余已测行跳过
-        const activeRi =
-          this.curIdx >= 0 ? this.viToRowIndex[this.curIdx] : undefined;
         for (let i = 0; i < els.length; i++) {
           const el = els[i];
           const ri = parseInt(el.getAttribute('data-ri'), 10);
           if (isNaN(ri) || !this.rows[ri]) continue;
           const k = this.rowKey(this.rows[ri], ri);
           // [性能·丝滑滚动] 已测过的行跳过——不再读 offsetHeight。读 offsetHeight 强制同步重排,
-          //   原来每个滚动帧对所有可视行都读=layout thrash(滚动不如原生丝滑的主因)。行集变(段落/逐句/
-          //   切集/词典)时 resetWindow 已清缓存,故按 rowKey 测一次即可(当前块除外)。
-          if (this.rowH[k] != null && ri !== activeRi) continue;
+          //   原来每个滚动帧对所有可视行都读=layout thrash(滚动不如原生丝滑的主因)。行集变
+          //   (原文/优化视图、切集、词典、宽度变化)时 resetWindow 已清缓存,故按 rowKey 测一次即可。
+          if (this.rowH[k] != null) continue;
           const h = el.offsetHeight;
           if (h && this.rowH[k] !== h) {
             updates[k] = h;
@@ -1034,12 +1044,15 @@ export default {
       });
     },
     resetWindow() {
-      // 行集结构变化(段落/逐句切换、原文切换、切集、词典) → 同一 rowKey 的高度可能完全不同
-      //   (段落多句 vs 逐句单句) → 必须清实测缓存，否则残留旧高 → 离屏 spacer 算错、滚动条跳。
+      // 行集结构变化(原文切换、切集、词典、宽度变化) → 同一 rowKey 的高度可能完全不同；
+      //   必须清实测缓存，否则残留旧高 → 离屏 spacer 算错、滚动条跳。
       this.rowH = {};
       this.winStart = 0;
       this.winEnd = 60;
-      this.$nextTick(() => this.recalcWindow());
+      this.$nextTick(() => {
+        this.recalcWindow();
+        this.measureVisible();
+      });
     },
     updateHighlight() {
       if (this.mode !== 'done' && this.mode !== 'paused') return;
@@ -1212,7 +1225,10 @@ export default {
   }
   .t-actions {
     display: flex;
-    gap: 14px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    max-width: min(760px, 70vw);
   }
 }
 .t-link {
@@ -1231,6 +1247,22 @@ export default {
   }
   &.danger:hover {
     color: #e74c3c;
+  }
+  &.t-mode-cycle {
+    min-width: 72px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--color-secondary-bg-for-transparent);
+    opacity: 0.78;
+  }
+  &.t-top-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    .svg-icon {
+      width: 13px;
+      height: 13px;
+    }
   }
 }
 .t-btn {
@@ -1340,19 +1372,13 @@ export default {
   border-radius: 12px;
   background: var(--color-secondary-bg-for-transparent);
   padding: 6px 4px;
-  // [批注③] 右侧也要和左侧一样的圆角：默认滚动条轨道不透明、把右上/右下圆角盖成方角 →
-  //   细化滚动条 + 透明轨道 + 圆头滑块(留 2px 内缩) → 露出框体右侧圆角。
+  contain: layout paint;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  // 内层文稿框只保留滚轮/触控滚动，不显示额外滚动条，避免右侧出现无语义竖线。
   &::-webkit-scrollbar {
-    width: 8px;
-  }
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  &::-webkit-scrollbar-thumb {
-    background: var(--color-secondary-bg);
-    border-radius: 999px;
-    border: 2px solid transparent;
-    background-clip: padding-box;
+    width: 0;
+    height: 0;
   }
 }
 .seg-row {
@@ -1401,17 +1427,12 @@ export default {
   }
   &.active {
     color: var(--color-primary);
-    font-weight: 600;
+    text-shadow: 0 0 0 currentColor;
   }
   // [B路·AI] 被 AI 精修改过的句：轻微虚线下划线，便于核对(不抢眼)
   &.ai-changed {
     border-bottom: 1px dashed var(--color-primary);
   }
-}
-// [三态] 原文/已优化/AI精修 紧凑分组
-.t-seg3 {
-  display: inline-flex;
-  gap: 8px;
 }
 // 折叠的噪声/音乐段占位（不可点读、弱化）
 .seg-gap {

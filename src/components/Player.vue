@@ -491,7 +491,6 @@
             <div
               class="imm-cover-slot"
               :class="{ clickable: isPodcastTrack }"
-              :title="isPodcastTrack ? '点击封面开/关文字稿' : ''"
               @click="isPodcastTrack && toggleImmTranscript()"
             >
               <img
@@ -2156,6 +2155,10 @@ export default {
       const exitKey =
         (this.settings && this.settings.immersiveExitKey) || 'Escape';
       if (ev.code !== exitKey && ev.key !== exitKey) return;
+      if (this.immTranscriptOpen) {
+        this.immTranscriptOpen = false;
+        return;
+      }
       this.closeImmersive();
     },
 
@@ -3179,6 +3182,7 @@ export default {
   justify-content: center;
   padding: 56px 16px 30px;
   box-sizing: border-box;
+  -webkit-app-region: no-drag;
 }
 // [沉浸页·文稿] 封面列：默认居中(stage flex)。开文稿 → translateX 滑左 + 微缩 scale(0.84),
 //   **纯 transform(GPU 合成)**——不动 width/margin、不触发 reflow、不在模糊背景上每帧重算 → 流畅。
@@ -3191,6 +3195,7 @@ export default {
   transform-origin: center center;
   transform: translateX(0) scale(1);
   transition: transform 0.42s cubic-bezier(0.2, 0.7, 0.2, 1);
+  -webkit-app-region: no-drag;
   // [审查·内存] 不挂常驻 will-change(blur 背景上叠持久合成层有显存/发热风险,见 known-bugs)；
   //   transform 过渡时浏览器会自动临时提层合成,稳态即销毁层 → 既流畅又不常驻占用。
 }
@@ -3206,7 +3211,7 @@ export default {
   top: 14vh;
   bottom: 14vh;
   right: clamp(40px, 7vw, 170px);
-  width: clamp(320px, 33vw, 600px);
+  width: clamp(320px, 32vw, 560px);
   opacity: 0;
   pointer-events: none;
   transform: translateX(24px);
@@ -3222,6 +3227,28 @@ export default {
   width: 100%;
   height: 100%;
 }
+@media (max-width: 980px) {
+  .imm-stage {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .imm-stage.with-transcript .imm-col {
+    transform: translateX(-18vw) scale(0.76);
+  }
+  .imm-transcript-col {
+    right: 24px;
+    width: min(42vw, 360px);
+  }
+}
+@media (max-width: 760px) {
+  .imm-stage.with-transcript .imm-col {
+    transform: translateX(-20vw) scale(0.68);
+  }
+  .imm-transcript-col {
+    right: 16px;
+    width: min(44vw, 300px);
+  }
+}
 
 // 大封面：方槽内 scale，播放 1 / 暂停 0.82，下方布局不跳动
 .imm-cover-slot {
@@ -3230,6 +3257,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
+  -webkit-app-region: no-drag;
   // [批注] 加大封面↔下方块间距 → 「节目名+进度条+控制」整块下移、封面上提，呼吸更足
   margin-bottom: clamp(28px, 5vh, 58px);
   // 0.42s 与列宽过渡同步(最大化/还原 + 开关文稿时内部间距与列宽不脱节)
@@ -3337,6 +3365,7 @@ export default {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 8px;
+  -webkit-app-region: no-drag;
 }
 .imm-side {
   display: flex;
