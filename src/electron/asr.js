@@ -13,6 +13,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { getVerifiedModelConfigSync } from './asrModelManager';
 
 // 开发期复用 asr-benchmark 已部署的 int8 模型（不进仓库/不进基础包）。
 // 可经 设置(asrModelDir/asrVadModel) 或环境变量覆盖；正式版「一键部署」后改指 userData 模型目录。
@@ -39,16 +40,44 @@ function getSettings() {
 
 function resolveConfig() {
   var s = getSettings();
+  var verified = getVerifiedModelConfigSync();
+  var base = {
+    numThreads: Number(s.asrThreads) || 4,
+    language: s.asrLanguage || 'auto',
+  };
+  if (verified && verified.ready) {
+    return Object.assign({}, base, {
+      modelDir: verified.modelDir,
+      modelFile: verified.modelFile,
+      tokensFile: verified.tokensFile,
+      vadModel: verified.vadModel,
+      modelSource: verified.source || 'verified',
+      verifiedAt: verified.verifiedAt || '',
+      fallback: false,
+    });
+  }
+  if (!allowDevModelFallback()) {
+    return Object.assign({}, base, {
+      modelDir: '',
+      modelFile: '',
+      tokensFile: '',
+      vadModel: '',
+      modelSource: 'missing',
+      fallback: false,
+    });
+  }
   var modelDir =
     s.asrModelDir || process.env.PODPLAYER_ASR_MODEL_DIR || DEFAULT_MODEL_DIR;
   var vadModel = s.asrVadModel || process.env.PODPLAYER_ASR_VAD || DEFAULT_VAD;
   return {
+    numThreads: base.numThreads,
+    language: base.language,
     modelDir: modelDir,
     modelFile: path.join(modelDir, 'model.int8.onnx'),
     tokensFile: path.join(modelDir, 'tokens.txt'),
     vadModel: vadModel,
-    numThreads: Number(s.asrThreads) || 4,
-    language: s.asrLanguage || 'auto',
+    modelSource: 'dev-fallback',
+    fallback: true,
   };
 }
 
@@ -62,6 +91,15 @@ function modelReady(cfg) {
   } catch (e) {
     return false;
   }
+}
+
+function allowDevModelFallback() {
+  if (process.env.PODPLAYER_ASR_DEV_FALLBACK === '1') return true;
+  if (process.env.PODPLAYER_PROFILE === 'dev') return true;
+  if (!process.env.PODPLAYER_PROFILE && process.env.WEBPACK_DEV_SERVER_URL) {
+    return true;
+  }
+  return false;
 }
 
 function sha1(s) {
@@ -90,6 +128,20 @@ function resolveWorkerPath() {
     }
   }
   return candidates[0];
+}
+
+function workerEnv() {
+  var env = Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' });
+  if (process.resourcesPath) {
+    var paths = [
+      path.join(process.resourcesPath, 'app.asar', 'node_modules'),
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules'),
+    ];
+    env.NODE_PATH = paths
+      .concat(env.NODE_PATH ? String(env.NODE_PATH).split(path.delimiter) : [])
+      .join(path.delimiter);
+  }
+  return env;
 }
 
 function sendEvent(channel, payload) {
@@ -165,7 +217,7 @@ function runJob(job) {
   var child;
   try {
     child = spawn(process.execPath, [workerPath, JSON.stringify(params)], {
-      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+      env: workerEnv(),
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       windowsHide: true,
     });
@@ -279,6 +331,9 @@ export function registerAsrIpc(getWindow, store) {
       modelReady: modelReady(cfg),
       model: MODEL_NAME,
       modelDir: cfg.modelDir,
+      modelSource: cfg.modelSource || '',
+      verifiedAt: cfg.verifiedAt || '',
+      fallback: !!cfg.fallback,
       busy: !!active,
       busyEpisodeId: active ? active.episodeId : '',
       queued: queue.map(function (j) {

@@ -97,6 +97,17 @@ module.exports = {
         copyright: 'Copyright © PodPlayer',
         // compression: "maximum", // 机器好的可以打开，配置压缩，开启后会让 .AppImage 格式的客户端启动缓慢
         asar: true,
+        asarUnpack: [
+          'node_modules/sherpa-onnx-node/**/*',
+          'node_modules/sherpa-onnx-*/**/*',
+          'node_modules/ffmpeg-static/**/*',
+        ],
+        extraResources: [
+          {
+            from: 'src/electron/asrWorker.js',
+            to: 'asrWorker.js',
+          },
+        ],
         publish: [
           {
             provider: 'github',

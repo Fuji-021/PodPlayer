@@ -79,9 +79,10 @@
     <div v-else-if="mode === 'no-model'" class="t-guide">
       <div class="t-guide-title">尚未部署转录模型</div>
       <div class="t-guide-body">
-        本地转文字稿需要语音模型（SenseVoice）。开发期请将模型放到 benchmark
-        目录或在设置中指定路径；正式版将提供「一键部署」。
+        本地转文字稿需要 SenseVoiceSmall
+        模型。请先到设置页完成模型部署或选择本地模型目录。
       </div>
+      <button class="t-btn small" @click="goModelSettings">去设置</button>
     </div>
 
     <!-- 未转录 -->
@@ -831,6 +832,9 @@ export default {
       startTranscribe(this.episode).then(res => {
         if (res && res.ok && res.queued) this.queuedLocal = true;
       });
+    },
+    goModelSettings() {
+      if (this.$router) this.$router.push('/settings').catch(() => {});
     },
     onCancel() {
       cancelTranscribe(this.episodeId);

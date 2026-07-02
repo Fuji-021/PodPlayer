@@ -243,6 +243,56 @@
         </div>
       </div>
 
+      <h3 v-if="isElectron">本地转文字稿</h3>
+      <div v-if="isElectron" class="item asr-model-item">
+        <div class="left">
+          <div class="title">SenseVoiceSmall 模型部署</div>
+          <div class="description">
+            {{ asrModelStatusText }}
+            <template v-if="asrModel.modelDir">
+              <br />{{ asrModel.modelDir }}
+            </template>
+          </div>
+        </div>
+        <div class="right asr-model-actions">
+          <button
+            :disabled="!asrDownloadAvailable || asrModel.installing"
+            :title="asrDownloadTitle"
+            @click="installAsrModel"
+          >
+            一键部署模型
+          </button>
+          <button :disabled="asrModel.installing" @click="selectAsrModelDir">
+            选择本地模型目录
+          </button>
+          <button :disabled="asrModel.installing" @click="verifyAsrModel">
+            重新校验
+          </button>
+          <button
+            class="danger"
+            :disabled="!asrModel.ready || asrModel.installing"
+            @click="removeAsrModel"
+          >
+            删除模型
+          </button>
+        </div>
+      </div>
+      <div v-if="isElectron && asrModel.installing" class="item asr-model-item">
+        <div class="left">
+          <div class="title">模型下载中</div>
+          <div class="description">
+            {{ asrModel.progress.fileName || '准备中' }}
+            · {{ asrModel.progress.percent || 0 }}%
+            <template v-if="asrModel.progress.speed">
+              · {{ formatBytes(asrModel.progress.speed) }}/s
+            </template>
+          </div>
+        </div>
+        <div class="right">
+          <button @click="cancelAsrModelInstall">取消</button>
+        </div>
+      </div>
+
       <!-- [B路·AI精修] DeepSeek 接入(可选·默认关·自带 key)。key 仅本地保存(localStorage/electron-store)。 -->
       <div v-if="isElectron" class="item">
         <div class="left">
@@ -714,6 +764,15 @@ import defaultShortcuts from '@/utils/shortcuts';
 import pkg from '../../package.json';
 import { db } from '@/utils/db';
 import { setDownloadConcurrency } from '@/utils/podcast/downloads';
+import {
+  getModelStatus,
+  installModel,
+  cancelModelInstall,
+  removeModel,
+  selectLocalModelDir,
+  verifyModel,
+  onModelInstallProgress,
+} from '@/utils/podcast/asrModel';
 // [缓存·C1] 统一缓存占用统计 + 清理
 import {
   getCacheBreakdown,
@@ -779,6 +838,18 @@ export default {
         testing: false,
         testMsg: '',
         testOk: false,
+      },
+      asrModel: {
+        status: 'checking',
+        ready: false,
+        installing: false,
+        progress: {},
+        modelDir: '',
+        version: '',
+        verifiedAt: '',
+        remoteDownloadAvailable: false,
+        remoteDownloadBlockedReason: '',
+        error: '',
       },
     };
   },
@@ -878,6 +949,33 @@ export default {
           ? ' · ' + this.$t('settings.pod.connLib') + p.libraryName
           : '')
       );
+    },
+    asrDownloadAvailable() {
+      return !!this.asrModel.remoteDownloadAvailable;
+    },
+    asrDownloadTitle() {
+      if (this.asrDownloadAvailable) return '下载并校验 SenseVoiceSmall 模型';
+      return '下载源、hash 或 license 尚未完全确认，当前请先选择本地模型目录';
+    },
+    asrModelStatusText() {
+      if (this.asrModel.installing) return '正在部署模型';
+      if (this.asrModel.ready) {
+        return (
+          '已安装 · ' +
+          (this.asrModel.version || 'SenseVoiceSmall') +
+          (this.asrModel.verifiedAt
+            ? ' · 校验于 ' + this.asrModel.verifiedAt
+            : '')
+        );
+      }
+      if (this.asrModel.status === 'path-unavailable') {
+        return '路径不可用或文件不完整，请重新校验或选择本地目录';
+      }
+      if (this.asrModel.error) return '校验失败：' + this.asrModel.error;
+      if (!this.asrDownloadAvailable) {
+        return '未安装。远程下载源待确认，可先选择已存在的本地模型目录。';
+      }
+      return '未安装。点击一键部署后才会下载模型，不会自动转写。';
     },
     showUserInfo() {
       return isLooseLoggedIn() && this.data.user.nickname;
@@ -1167,6 +1265,8 @@ export default {
       this.loadNas();
       this.startNasPoll();
       this.refreshCacheStats();
+      this.refreshAsrModelStatus();
+      this.bindAsrModelProgress();
     }
   },
   activated() {
@@ -1175,13 +1275,17 @@ export default {
       this.loadNas();
       this.startNasPoll();
       this.refreshCacheStats();
+      this.refreshAsrModelStatus();
+      this.bindAsrModelProgress();
     }
   },
   deactivated() {
     this.stopNasPoll();
+    this.unbindAsrModelProgress();
   },
   beforeDestroy() {
     this.stopNasPoll();
+    this.unbindAsrModelProgress();
   },
   methods: {
     ...mapActions(['showToast']),
@@ -1192,6 +1296,90 @@ export default {
       if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
       if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
       return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    },
+    bindAsrModelProgress() {
+      if (this._asrModelOff) return;
+      this._asrModelOff = onModelInstallProgress(p => {
+        this.asrModel.installing =
+          p.status === 'downloading' || p.status === 'verifying';
+        this.asrModel.progress = p || {};
+        if (
+          p.status === 'done' ||
+          p.status === 'error' ||
+          p.status === 'canceled'
+        ) {
+          this.asrModel.installing = false;
+          this.refreshAsrModelStatus();
+        }
+      });
+    },
+    unbindAsrModelProgress() {
+      if (this._asrModelOff) {
+        this._asrModelOff();
+        this._asrModelOff = null;
+      }
+    },
+    applyAsrModelStatus(st) {
+      st = st || {};
+      this.asrModel.ready = !!st.ready;
+      this.asrModel.status = st.status || (st.ready ? 'installed' : 'missing');
+      this.asrModel.installing = !!st.installing;
+      this.asrModel.modelDir = st.modelDir || '';
+      this.asrModel.version = st.version || '';
+      this.asrModel.verifiedAt = st.verifiedAt || '';
+      this.asrModel.remoteDownloadAvailable = !!st.remoteDownloadAvailable;
+      this.asrModel.remoteDownloadBlockedReason =
+        st.remoteDownloadBlockedReason || '';
+      this.asrModel.error =
+        st.deepResult && st.deepResult.ok === false
+          ? st.deepResult.error || ''
+          : '';
+    },
+    async refreshAsrModelStatus() {
+      const st = await getModelStatus();
+      this.applyAsrModelStatus(st);
+    },
+    async installAsrModel() {
+      if (!this.asrDownloadAvailable) {
+        this.showToast('下载源待确认，请先选择本地模型目录');
+        return;
+      }
+      this.asrModel.installing = true;
+      const res = await installModel();
+      if (res && res.status) this.applyAsrModelStatus(res.status);
+      if (res && res.ok) this.showToast('模型部署完成');
+      else this.showToast('模型部署失败：' + ((res && res.error) || 'unknown'));
+    },
+    async cancelAsrModelInstall() {
+      await cancelModelInstall();
+      this.asrModel.installing = false;
+      await this.refreshAsrModelStatus();
+    },
+    async selectAsrModelDir() {
+      const res = await selectLocalModelDir();
+      if (res && res.status) this.applyAsrModelStatus(res.status);
+      if (res && res.ok) this.showToast('模型校验通过，已导入共享目录');
+      else if (res && res.canceled) {
+        // ignore
+      } else {
+        this.showToast('模型校验失败：' + ((res && res.error) || 'unknown'));
+      }
+    },
+    async verifyAsrModel() {
+      const res = await verifyModel();
+      if (res && res.status) this.applyAsrModelStatus(res.status);
+      if (res && res.ok) this.showToast('模型校验通过');
+      else this.showToast('模型校验失败：' + ((res && res.error) || 'unknown'));
+    },
+    async removeAsrModel() {
+      const ok =
+        typeof window.confirm !== 'function' ||
+        window.confirm('确定删除本地 ASR 模型？不会删除音频或文稿。');
+      if (!ok) return;
+      const res = await removeModel();
+      if (res && res.status) this.applyAsrModelStatus(res.status);
+      if (res && res.ok) this.showToast('模型已删除');
+      else this.showToast('删除失败：' + ((res && res.error) || 'unknown'));
     },
     async refreshCacheStats() {
       try {
@@ -1717,6 +1905,26 @@ h3 {
 
 // [设置控件统一] 选择框：宽度随最宽选项自适应(短项收成小框)、长名(如音频设备)封顶 max-width 后单行省略号折叠、
 //   :title 悬停看全名、点开下拉看完整；去掉灰填充背景改干净细描边(用户：不要颜色背景)，聚焦/打开不再变蓝底。
+.asr-model-item {
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.asr-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+
+  button {
+    margin: 0;
+  }
+
+  button.danger {
+    color: #e25555;
+  }
+}
+
 select {
   // [随字收窄] 宽度跟随最宽选项自适应(width:auto)、不再统一撑成 160px——"3""10"这类短选项收成小框、
   //   不空旷(用户二轮反馈：1-10 还这么宽)；框本身处于行右端(.item space-between)，故天然右对齐。
