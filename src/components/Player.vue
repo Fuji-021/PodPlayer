@@ -3201,17 +3201,17 @@ export default {
 }
 // 开文稿：封面列滑左 + 微缩(translateX 量随视口宽,clamp 兜底;先 scale 后 translate)
 .imm-stage.with-transcript .imm-col {
-  transform: translateX(calc(clamp(140px, 21vw, 320px) * -1)) scale(0.84);
+  transform: translateX(calc(clamp(260px, 26vw, 520px) * -1)) scale(0.82);
 }
 // 背景式文稿列(无框)：**绝对定位浮层**——不参与 flex flow → 开关文稿不 reflow 播放区。
 //   [批注] 往右移(贴右缘小留白) + 高度降低(上下各 14vh → 约 72vh 居中,当前句仍居视口中线)。
 //   仅 opacity(+轻微位移)过渡,纯 GPU。关态 pointer-events:none → 右侧空白点击仍可收起沉浸页(同改前)。
 .imm-transcript-col {
   position: absolute;
-  top: 14vh;
-  bottom: 14vh;
-  right: clamp(40px, 7vw, 170px);
-  width: clamp(320px, 32vw, 560px);
+  top: clamp(56px, 7vh, 90px);
+  bottom: clamp(56px, 7vh, 90px);
+  right: clamp(56px, 5vw, 120px);
+  width: clamp(420px, 36vw, 760px);
   opacity: 0;
   pointer-events: none;
   transform: translateX(24px);
@@ -3233,11 +3233,13 @@ export default {
     padding-right: 10px;
   }
   .imm-stage.with-transcript .imm-col {
-    transform: translateX(-18vw) scale(0.76);
+    transform: translateX(-24vw) scale(0.74);
   }
   .imm-transcript-col {
+    top: 10vh;
+    bottom: 10vh;
     right: 24px;
-    width: min(42vw, 360px);
+    width: min(44vw, 420px);
   }
 }
 @media (max-width: 760px) {
