@@ -182,7 +182,7 @@
         <div class="right-control-buttons">
           <!-- [B-76] 标记位置键：放在右列**最左**(blank 之前) → 紧贴金刚键"前进30秒"右侧、
              与左侧"收藏"以播放为对称中心；blank 把倍速等推到右边、自然拉开距离(不再贴倍速)。
-             短按=标记此刻(图标轻弹、不变色)；长按 3 秒=清空本集全部标记；标记 >5 变封面主色、>10 彩虹(彩蛋)。 -->
+             短按=标记此刻(图标轻弹、不变色)；长按 3 秒=清空本集全部标记；标记 >3 变封面主色、>5 彩虹(彩蛋)。 -->
           <div
             v-if="isPodcastTrack"
             class="mark-control"
@@ -190,10 +190,10 @@
               charging: markCharging,
               pulse: markPulse,
               cleared: markCleared,
-              rainbow: markCount > 10,
+              rainbow: markCount > 5,
             }"
             :style="
-              markCount > 5 && markCount <= 10 ? { color: markColor } : null
+              markCount > 3 && markCount <= 5 ? { color: markColor } : null
             "
             @click.stop
             @mouseenter="markHovering = true"
@@ -782,10 +782,10 @@
                     charging: markCharging,
                     pulse: markPulse,
                     cleared: markCleared,
-                    rainbow: markCount > 10,
+                    rainbow: markCount > 5,
                   }"
                   :style="
-                    markCount > 5 && markCount <= 10
+                    markCount > 3 && markCount <= 5
                       ? { color: markColor }
                       : null
                   "
@@ -1346,7 +1346,7 @@ export default {
         .then(hsl => {
           if (hsl && this._markColorSrc === src) {
             const c = `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
-            this.markColor = c; // 标记按钮 >5 变封面主色(彩蛋#2) + 沉浸页标记点
+            this.markColor = c; // 标记按钮 >3 变封面主色(彩蛋#2) + 沉浸页标记点
             this.coverFillColor = c; // 播放 bar 已播段 = 封面主色
             // 播放 bar 标记点 = 封面主色的撞色(互补色 hue+180)，高饱和高对比 → 任何封面(含蓝)都看得清
             this.markContrastColor = `hsl(${(hsl[0] + 180) % 360}, 85%, 55%)`;
@@ -2546,7 +2546,7 @@ export default {
 
 // [B-75] 标记位置键：与左侧"收藏"对称、紧贴金刚键右侧。
 //   短按=标记(图标 pulse、不变色)；长按 5 秒=充能圈填满→清空本集标记。
-//   彩蛋#2：本集标记 >5 → 图标变封面主色(inline color)；>10 → 彩虹流转。
+//   彩蛋#2：本集标记 >3 → 图标变封面主色(inline color)；>5 → 彩虹流转。
 .mark-control {
   position: relative;
   display: flex;
@@ -2559,7 +2559,7 @@ export default {
   cursor: pointer;
   user-select: none;
   // [B-76] 跟其他控制图标一样用 --color-text → 深色模式自适应(不再黑)。
-  //   放父级：彩蛋的 inline color(6~10) / 彩虹动画(>10) 仍能覆盖。
+  //   放父级：彩蛋的 inline color(4~5) / 彩虹动画(>5) 仍能覆盖。
   color: var(--color-text);
   // 长按充能圈：从中心放大，5 秒线性填满=即将清空；松手 0.2s 缩回（视觉区分长/短按）
   .mark-charge {
@@ -2597,7 +2597,7 @@ export default {
     transform: scale(1);
     transition: transform 3s linear;
   }
-  // 彩蛋#2：>10 标记 → 图标彩虹流转（animation 的 color 覆盖 inline color）
+  // 彩蛋#2：>5 标记 → 图标彩虹流转（animation 的 color 覆盖 inline color）
   &.rainbow .mark-icon {
     animation: markRainbow 2.4s linear infinite;
   }
