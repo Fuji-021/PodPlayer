@@ -13,7 +13,10 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { getVerifiedModelConfigSync } from './asrModelManager';
+import {
+  getVerifiedModelConfigSync,
+  getVerifiedModelConfigForUse,
+} from './asrModelManager';
 
 // 开发期复用 asr-benchmark 已部署的 int8 模型（不进仓库/不进基础包）。
 // 可经 设置(asrModelDir/asrVadModel) 或环境变量覆盖；正式版「一键部署」后改指 userData 模型目录。
@@ -79,6 +82,33 @@ function resolveConfig() {
     modelSource: 'dev-fallback',
     fallback: true,
   };
+}
+
+async function resolveConfigForUse() {
+  var s = getSettings();
+  var verified = await getVerifiedModelConfigForUse();
+  var base = {
+    numThreads: Number(s.asrThreads) || 4,
+    language: s.asrLanguage || 'auto',
+  };
+  if (verified && verified.ok && verified.config) {
+    return Object.assign({}, base, verified.config, {
+      modelSource: verified.config.source || 'verified',
+      fallback: false,
+    });
+  }
+  if (!allowDevModelFallback()) {
+    return Object.assign({}, base, {
+      modelDir: '',
+      modelFile: '',
+      tokensFile: '',
+      vadModel: '',
+      modelSource: 'missing',
+      verifyError: (verified && verified.error) || 'model-missing',
+      fallback: false,
+    });
+  }
+  return resolveConfig();
 }
 
 function modelReady(cfg) {
@@ -179,12 +209,22 @@ function startNext() {
   runJob(job);
 }
 
-function runJob(job) {
-  var cfg = resolveConfig();
+async function runJob(job) {
+  var cfg;
+  try {
+    cfg = await resolveConfigForUse();
+  } catch (e) {
+    sendEvent('asr:error', {
+      episodeId: job.episodeId,
+      error: String((e && e.message) || e),
+    });
+    startNext();
+    return;
+  }
   if (!modelReady(cfg)) {
     sendEvent('asr:error', {
       episodeId: job.episodeId,
-      error: 'model-missing',
+      error: cfg.verifyError || 'model-missing',
     });
     startNext();
     return;
@@ -354,8 +394,10 @@ export function registerAsrIpc(getWindow, store) {
     if (!episodeId || !audioPath) {
       return { ok: false, error: '缺少参数' };
     }
-    var cfg = resolveConfig();
-    if (!modelReady(cfg)) return { ok: false, error: 'model-missing' };
+    var cfg = await resolveConfigForUse();
+    if (!modelReady(cfg)) {
+      return { ok: false, error: cfg.verifyError || 'model-missing' };
+    }
     if (!fs.existsSync(audioPath)) {
       return { ok: false, error: '本地音频文件不存在' };
     }

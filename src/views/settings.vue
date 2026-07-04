@@ -955,6 +955,11 @@ export default {
     },
     asrDownloadTitle() {
       if (this.asrDownloadAvailable) return '下载并校验 SenseVoiceSmall 模型';
+      if (
+        this.asrModel.remoteDownloadBlockedReason === 'download-smoke-failed'
+      ) {
+        return '模型来源已确认，但远程下载链路尚未通过 sandbox 验证';
+      }
       return '下载源、hash 或 license 尚未完全确认，当前请先选择本地模型目录';
     },
     asrModelStatusText() {
@@ -972,6 +977,11 @@ export default {
         return '路径不可用或文件不完整，请重新校验或选择本地目录';
       }
       if (this.asrModel.error) return '校验失败：' + this.asrModel.error;
+      if (
+        this.asrModel.remoteDownloadBlockedReason === 'download-smoke-failed'
+      ) {
+        return '未安装。远程下载链路待验证，可先选择已存在的本地模型目录。';
+      }
       if (!this.asrDownloadAvailable) {
         return '未安装。远程下载源待确认，可先选择已存在的本地模型目录。';
       }
@@ -1341,7 +1351,7 @@ export default {
     },
     async installAsrModel() {
       if (!this.asrDownloadAvailable) {
-        this.showToast('下载源待确认，请先选择本地模型目录');
+        this.showToast('远程下载暂未开放，请先选择本地模型目录');
         return;
       }
       this.asrModel.installing = true;

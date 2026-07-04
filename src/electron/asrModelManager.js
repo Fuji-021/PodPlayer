@@ -9,7 +9,9 @@ var MODEL_ID = 'sensevoice-small';
 var MODEL_VERSION = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17';
 var MIN_SUPPORTED_VERSION = MODEL_VERSION;
 var REMOTE_DOWNLOAD_ENABLED = false;
+var REMOTE_DOWNLOAD_BLOCKED_REASON = 'download-smoke-failed';
 var LOCK_STALE_MS = 30 * 60 * 1000;
+var LOCK_HEARTBEAT_MS = 15 * 1000;
 
 var REQUIRED_FILES = [
   {
@@ -30,8 +32,8 @@ var REQUIRED_FILES = [
     name: 'silero_vad.onnx',
     size: 643854,
     sha256: '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6',
-    url: '',
-    license: 'Silero VAD license source pending for this exact file',
+    url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+    license: 'Silero VAD MIT License',
   },
 ];
 
@@ -40,8 +42,10 @@ var installState = {
   cancel: false,
   req: null,
   startedAt: 0,
+  lockHeartbeat: null,
 };
 var _getWindow = null;
+var verifiedUseCache = null;
 
 function dataRoot() {
   return path.dirname(app.getPath('userData'));
@@ -143,30 +147,45 @@ function writeNotices(dir) {
     'SenseVoiceSmall ONNX files are converted from FunAudioLLM/SenseVoiceSmall.\n' +
     'License: FunASR Model Open Source License Agreement 1.1.\n' +
     'License URL: https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE\n\n' +
-    'Silero VAD is MIT licensed by Silero Team, but the exact 643854-byte ONNX source URL remains pending.\n' +
-    'Do not redistribute this model bundle until all upstream notices are rechecked.\n';
+    'silero_vad.onnx is downloaded from the official sherpa-onnx asr-models release.\n' +
+    'Silero VAD license: MIT License, Copyright (c) 2020-present Silero Team.\n' +
+    'VAD URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx\n';
   var notice =
     'Model files are stored outside the application package.\n' +
-    'Remote download is disabled until model.int8.onnx, tokens.txt, and the exact silero_vad.onnx source/hash/license are fully confirmed.\n' +
-    'Current verified path is produced by local import plus sha256 validation.\n';
+    'Remote download is disabled until the full sandbox download smoke passes.\n' +
+    'When enabled, model.int8.onnx, tokens.txt, and silero_vad.onnx must pass pinned sha256 checks before use.\n' +
+    'ASR runtime uses only deep-verified model paths.\n';
   fs.writeFileSync(path.join(dir, 'LICENSE.txt'), license, 'utf8');
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), notice, 'utf8');
 }
 
 function replaceManagedFilesFromStaging(staging) {
   var managed = getManagedModelDir();
+  var stamp = Date.now();
+  var names = REQUIRED_FILES.map(function (f) {
+    return f.name;
+  });
+  ['LICENSE.txt', 'NOTICE.txt'].forEach(function (name) {
+    if (fs.existsSync(path.join(staging, name))) names.push(name);
+  });
   var backups = [];
+  var movedTargets = [];
   try {
-    REQUIRED_FILES.forEach(function (f) {
-      var target = path.join(managed, f.name);
-      var backup = path.join(managed, f.name + '.old-' + Date.now());
+    names.forEach(function (name) {
+      var target = path.join(managed, name);
+      var backup = path.join(managed, name + '.old-' + stamp);
       if (fs.existsSync(target)) {
         fs.renameSync(target, backup);
         backups.push({ target: target, backup: backup });
       }
     });
-    REQUIRED_FILES.forEach(function (f) {
-      fs.renameSync(path.join(staging, f.name), path.join(managed, f.name));
+    names.forEach(function (name) {
+      var src = path.join(staging, name);
+      var target = path.join(managed, name);
+      if (fs.existsSync(src)) {
+        fs.renameSync(src, target);
+        movedTargets.push(target);
+      }
     });
     backups.forEach(function (b) {
       try {
@@ -176,9 +195,17 @@ function replaceManagedFilesFromStaging(staging) {
       }
     });
   } catch (e) {
+    movedTargets.forEach(function (target) {
+      try {
+        if (fs.existsSync(target)) fs.unlinkSync(target);
+      } catch (err) {
+        /* ignore */
+      }
+    });
     backups.forEach(function (b) {
       try {
-        if (!fs.existsSync(b.target) && fs.existsSync(b.backup)) {
+        if (fs.existsSync(b.backup)) {
+          if (fs.existsSync(b.target)) fs.unlinkSync(b.target);
           fs.renameSync(b.backup, b.target);
         }
       } catch (err) {
@@ -202,11 +229,12 @@ function buildManifest(dir, source, verifiedAt) {
     remoteDownloadAvailable: REMOTE_DOWNLOAD_ENABLED,
     remoteDownloadBlockedReason: REMOTE_DOWNLOAD_ENABLED
       ? ''
-      : 'download-source-unverified',
+      : REMOTE_DOWNLOAD_BLOCKED_REASON,
     files: expectedFilesForManifest(),
     license: {
       senseVoice: 'FunASR Model Open Source License Agreement 1.1',
-      sileroVad: 'MIT license upstream, exact bundled ONNX source pending',
+      sileroVad: 'MIT License, Silero Team',
+      sherpaOnnxRelease: 'Apache License 2.0',
     },
   };
 }
@@ -238,6 +266,34 @@ function releaseLock() {
     fs.unlinkSync(lockPath());
   } catch (e) {
     /* ignore */
+  }
+}
+
+function touchLock() {
+  try {
+    var now = new Date();
+    fs.utimesSync(lockPath(), now, now);
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+function startLockHeartbeat() {
+  stopLockHeartbeat();
+  touchLock();
+  installState.lockHeartbeat = setInterval(touchLock, LOCK_HEARTBEAT_MS);
+  if (
+    installState.lockHeartbeat &&
+    typeof installState.lockHeartbeat.unref === 'function'
+  ) {
+    installState.lockHeartbeat.unref();
+  }
+}
+
+function stopLockHeartbeat() {
+  if (installState.lockHeartbeat) {
+    clearInterval(installState.lockHeartbeat);
+    installState.lockHeartbeat = null;
   }
 }
 
@@ -294,6 +350,46 @@ export async function verifyModelDir(dir) {
   return { ok: true, dir: dir, files: files };
 }
 
+function fileFingerprint(file) {
+  var st = fs.statSync(file);
+  return {
+    path: file,
+    size: st.size,
+    mtimeMs: st.mtimeMs,
+  };
+}
+
+function buildFingerprints(dir) {
+  var files = {};
+  for (var i = 0; i < REQUIRED_FILES.length; i++) {
+    var spec = REQUIRED_FILES[i];
+    files[spec.name] = fileFingerprint(path.join(dir, spec.name));
+  }
+  return files;
+}
+
+function cacheMatches(dir) {
+  if (!verifiedUseCache || verifiedUseCache.dir !== dir) return false;
+  try {
+    for (var i = 0; i < REQUIRED_FILES.length; i++) {
+      var spec = REQUIRED_FILES[i];
+      var cached = verifiedUseCache.files && verifiedUseCache.files[spec.name];
+      if (!cached || cached.sha256 !== spec.sha256) return false;
+      var current = fileFingerprint(path.join(dir, spec.name));
+      if (
+        current.path !== cached.path ||
+        current.size !== cached.size ||
+        current.mtimeMs !== cached.mtimeMs
+      ) {
+        return false;
+      }
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function quickReadyFromManifest(dir, manifest) {
   if (!manifest || !manifest.ready) return false;
   if (manifest.modelId !== MODEL_ID) return false;
@@ -331,7 +427,7 @@ function statusFromManifest(deepResult) {
     remoteDownloadAvailable: REMOTE_DOWNLOAD_ENABLED,
     remoteDownloadBlockedReason: REMOTE_DOWNLOAD_ENABLED
       ? ''
-      : 'download-source-unverified',
+      : REMOTE_DOWNLOAD_BLOCKED_REASON,
     expectedFiles: expectedFilesForManifest(),
     verifiedAt: manifest && manifest.verifiedAt,
     deepResult: deepResult || null,
@@ -351,6 +447,64 @@ export function getVerifiedModelConfigSync() {
     vadModel: path.join(dir, 'silero_vad.onnx'),
     version: manifest.version,
     verifiedAt: manifest.verifiedAt,
+  };
+}
+
+function verifiedConfigFromManifest(dir, manifest, deepResult) {
+  return {
+    ready: true,
+    source: manifest.source || 'managed',
+    modelDir: dir,
+    modelFile: path.join(dir, 'model.int8.onnx'),
+    tokensFile: path.join(dir, 'tokens.txt'),
+    vadModel: path.join(dir, 'silero_vad.onnx'),
+    version: manifest.version,
+    verifiedAt:
+      (deepResult && deepResult.verifiedAt) || manifest.verifiedAt || '',
+  };
+}
+
+export async function getVerifiedModelConfigForUse() {
+  var dir = getManagedModelDir();
+  var manifest = readManifest(dir);
+  if (!quickReadyFromManifest(dir, manifest)) {
+    verifiedUseCache = null;
+    return {
+      ok: false,
+      error: manifest ? 'path-unavailable' : 'missing-manifest',
+      status: statusFromManifest(),
+    };
+  }
+  if (cacheMatches(dir)) {
+    return {
+      ok: true,
+      config: verifiedConfigFromManifest(dir, manifest, {
+        verifiedAt: verifiedUseCache.verifiedAt,
+      }),
+      cached: true,
+    };
+  }
+  var res = await verifyModelDir(dir);
+  if (!res.ok) {
+    verifiedUseCache = null;
+    return Object.assign({}, res, { status: statusFromManifest(res) });
+  }
+  var fingerprints = buildFingerprints(dir);
+  REQUIRED_FILES.forEach(function (f) {
+    fingerprints[f.name].sha256 = f.sha256;
+  });
+  var verifiedAt = new Date().toISOString();
+  verifiedUseCache = {
+    dir: dir,
+    files: fingerprints,
+    verifiedAt: verifiedAt,
+  };
+  return {
+    ok: true,
+    config: verifiedConfigFromManifest(dir, manifest, {
+      verifiedAt: verifiedAt,
+    }),
+    cached: false,
   };
 }
 
@@ -377,6 +531,7 @@ export async function importLocalModelDir(srcDir) {
       new Date().toISOString()
     );
     writeManifest(managed, manifest);
+    verifiedUseCache = null;
     return { ok: true, status: statusFromManifest({ ok: true }) };
   } finally {
     rmDir(staging);
@@ -386,7 +541,7 @@ export async function importLocalModelDir(srcDir) {
 function isDownloadPlanComplete() {
   if (!REMOTE_DOWNLOAD_ENABLED) return false;
   return REQUIRED_FILES.every(function (f) {
-    return !!(f.url && f.sha256 && f.size);
+    return !!(f.url && f.sha256 && f.size && f.license);
   });
 }
 
@@ -422,7 +577,11 @@ function downloadOne(spec, target, progressBase, progressSpan) {
         reject(new Error('download-http-' + res.statusCode));
         return;
       }
-      var stream = fs.createWriteStream(part, { flags: received ? 'a' : 'w' });
+      var append = received > 0 && res.statusCode === 206;
+      if (received > 0 && res.statusCode === 200) {
+        received = 0;
+      }
+      var stream = fs.createWriteStream(part, { flags: append ? 'a' : 'w' });
       installState.req = req;
       res.on('data', function (chunk) {
         if (installState.cancel) {
@@ -465,18 +624,19 @@ function downloadOne(spec, target, progressBase, progressSpan) {
   });
 }
 
-async function installModel() {
+export async function installModel() {
   if (!isDownloadPlanComplete()) {
     return {
       ok: false,
-      error: 'download-source-unverified',
+      error: REMOTE_DOWNLOAD_BLOCKED_REASON,
       message:
-        'Remote download is disabled until the exact model URLs, hashes, and licenses are confirmed.',
+        'Remote download is disabled until the full download smoke passes in sandbox.',
       status: statusFromManifest(),
     };
   }
   if (installState.running) return { ok: false, error: 'install-running' };
   if (!acquireLock()) return { ok: false, error: 'install-locked' };
+  startLockHeartbeat();
   installState.running = true;
   installState.cancel = false;
   installState.startedAt = Date.now();
@@ -500,10 +660,8 @@ async function installModel() {
     var verified = await verifyModelDir(staging);
     if (!verified.ok) return verified;
     replaceManagedFilesFromStaging(staging);
-    ['LICENSE.txt', 'NOTICE.txt'].forEach(function (name) {
-      fs.copyFileSync(path.join(staging, name), path.join(dir, name));
-    });
     writeManifest(dir, buildManifest(dir, 'remote-download'));
+    verifiedUseCache = null;
     sendProgress({ status: 'done', percent: 100 });
     return { ok: true, status: statusFromManifest({ ok: true }) };
   } catch (e) {
@@ -519,69 +677,117 @@ async function installModel() {
   } finally {
     installState.running = false;
     installState.req = null;
+    stopLockHeartbeat();
     if (staging) rmDir(staging);
     releaseLock();
   }
+}
+
+function statusSafe() {
+  try {
+    return statusFromManifest();
+  } catch (e) {
+    return {
+      ok: false,
+      ready: false,
+      status: 'error',
+      error: String((e && e.message) || e),
+    };
+  }
+}
+
+function errorResult(e) {
+  return {
+    ok: false,
+    error: String((e && e.message) || e),
+    status: statusSafe(),
+  };
 }
 
 export function registerAsrModelIpc(getWindow) {
   _getWindow = getWindow;
 
   ipcMain.handle('asr:modelStatus', async function () {
-    return statusFromManifest();
+    try {
+      return statusFromManifest();
+    } catch (e) {
+      return errorResult(e);
+    }
   });
 
   ipcMain.handle('asr:modelInstall', async function () {
-    return installModel();
+    try {
+      return installModel();
+    } catch (e) {
+      return errorResult(e);
+    }
   });
 
   ipcMain.handle('asr:modelCancelInstall', async function () {
-    installState.cancel = true;
     try {
-      if (installState.req) installState.req.destroy(new Error('canceled'));
+      installState.cancel = true;
+      try {
+        if (installState.req) installState.req.destroy(new Error('canceled'));
+      } catch (e) {
+        /* ignore */
+      }
+      return { ok: true, status: statusFromManifest() };
     } catch (e) {
-      /* ignore */
+      return errorResult(e);
     }
-    return { ok: true, status: statusFromManifest() };
   });
 
   ipcMain.handle('asr:modelVerify', async function (_e, payload) {
-    var dir = (payload && payload.dir) || getManagedModelDir();
-    var res = await verifyModelDir(dir);
-    if (res.ok && dir === getManagedModelDir()) {
-      writeNotices(dir);
-      writeManifest(dir, buildManifest(dir, 'manual-verify'));
+    try {
+      var dir = (payload && payload.dir) || getManagedModelDir();
+      var res = await verifyModelDir(dir);
+      if (res.ok && dir === getManagedModelDir()) {
+        writeNotices(dir);
+        writeManifest(dir, buildManifest(dir, 'manual-verify'));
+        verifiedUseCache = null;
+      }
+      return Object.assign({}, res, { status: statusFromManifest(res) });
+    } catch (e) {
+      return errorResult(e);
     }
-    return Object.assign({}, res, { status: statusFromManifest(res) });
   });
 
   ipcMain.handle('asr:modelSelectLocalDir', async function () {
-    var win = _getWindow && _getWindow();
-    var res = await dialog.showOpenDialog(win || undefined, {
-      title: 'Select SenseVoiceSmall model directory',
-      properties: ['openDirectory'],
-    });
-    if (!res || res.canceled || !res.filePaths || !res.filePaths[0]) {
-      return { ok: false, canceled: true, status: statusFromManifest() };
-    }
-    if (!acquireLock()) return { ok: false, error: 'install-locked' };
     try {
-      var verify = await verifyModelDir(res.filePaths[0]);
-      if (!verify.ok)
-        return Object.assign({}, verify, { status: statusFromManifest() });
-      return await importLocalModelDir(res.filePaths[0]);
-    } finally {
-      releaseLock();
+      var win = _getWindow && _getWindow();
+      var res = await dialog.showOpenDialog(win || undefined, {
+        title: 'Select SenseVoiceSmall model directory',
+        properties: ['openDirectory'],
+      });
+      if (!res || res.canceled || !res.filePaths || !res.filePaths[0]) {
+        return { ok: false, canceled: true, status: statusFromManifest() };
+      }
+      if (!acquireLock()) return { ok: false, error: 'install-locked' };
+      try {
+        var verify = await verifyModelDir(res.filePaths[0]);
+        if (!verify.ok)
+          return Object.assign({}, verify, { status: statusFromManifest() });
+        return await importLocalModelDir(res.filePaths[0]);
+      } finally {
+        releaseLock();
+      }
+    } catch (e) {
+      return errorResult(e);
     }
   });
 
   ipcMain.handle('asr:modelRemove', async function () {
-    if (!acquireLock()) return { ok: false, error: 'install-locked' };
     try {
-      rmDir(getManagedModelDir());
-      return { ok: true, status: statusFromManifest() };
-    } finally {
-      releaseLock();
+      if (!acquireLock()) return { ok: false, error: 'install-locked' };
+      try {
+        rmDir(getManagedModelDir());
+        verifiedUseCache = null;
+        return { ok: true, status: statusFromManifest() };
+      } finally {
+        releaseLock();
+      }
+    } catch (e) {
+      return errorResult(e);
     }
   });
 }
