@@ -107,6 +107,18 @@ module.exports = {
             from: 'src/electron/asrWorker.js',
             to: 'asrWorker.js',
           },
+          {
+            from: 'node_modules/sherpa-onnx-node',
+            to: 'node_modules/sherpa-onnx-node',
+          },
+          {
+            from: 'node_modules/sherpa-onnx-win-x64',
+            to: 'node_modules/sherpa-onnx-win-x64',
+          },
+          {
+            from: 'node_modules/ffmpeg-static',
+            to: 'node_modules/ffmpeg-static',
+          },
         ],
         publish: [
           {

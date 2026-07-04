@@ -164,6 +164,7 @@ function workerEnv() {
   var env = Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' });
   if (process.resourcesPath) {
     var paths = [
+      path.join(process.resourcesPath, 'node_modules'),
       path.join(process.resourcesPath, 'app.asar', 'node_modules'),
       path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules'),
     ];
