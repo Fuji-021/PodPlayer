@@ -258,16 +258,24 @@
         </div>
         <div class="right asr-model-actions">
           <button
-            :disabled="!asrDownloadAvailable || asrModel.installing"
+            :disabled="
+              !asrDownloadAvailable || asrModel.installing || asrModel.ready
+            "
             :title="asrDownloadTitle"
             @click="installAsrModel"
           >
             一键部署模型
           </button>
-          <button :disabled="asrModel.installing" @click="selectAsrModelDir">
+          <button
+            :disabled="asrModel.installing || !asrModel.platformSupported"
+            @click="selectAsrModelDir"
+          >
             选择本地模型目录
           </button>
-          <button :disabled="asrModel.installing" @click="verifyAsrModel">
+          <button
+            :disabled="asrModel.installing || !asrModel.platformSupported"
+            @click="verifyAsrModel"
+          >
             重新校验
           </button>
           <button
@@ -285,9 +293,27 @@
           <div class="description">
             {{ asrModel.progress.fileName || '准备中' }}
             · {{ asrModel.progress.percent || 0 }}%
-            <template v-if="asrModel.progress.totalBytes">
-              · {{ formatBytes(asrModel.progress.receivedBytes || 0) }} /
-              {{ formatBytes(asrModel.progress.totalBytes) }}
+            <template
+              v-if="
+                asrModel.progress.overallTotalBytes ||
+                asrModel.progress.totalBytes
+              "
+            >
+              ·
+              {{
+                formatBytes(
+                  asrModel.progress.overallReceivedBytes ||
+                    asrModel.progress.receivedBytes ||
+                    0
+                )
+              }}
+              /
+              {{
+                formatBytes(
+                  asrModel.progress.overallTotalBytes ||
+                    asrModel.progress.totalBytes
+                )
+              }}
             </template>
             <template v-if="asrModel.progress.speed">
               · {{ formatBytes(asrModel.progress.speed) }}/s
@@ -858,6 +884,8 @@ export default {
         verifiedAt: '',
         remoteDownloadAvailable: false,
         remoteDownloadBlockedReason: '',
+        platformSupported: true,
+        platformUnsupportedReason: '',
         error: '',
       },
     };
@@ -963,12 +991,19 @@ export default {
       return !!this.asrModel.remoteDownloadAvailable;
     },
     asrDownloadTitle() {
+      if (this.asrModel.ready) return '模型已经安装并通过校验';
       if (this.asrDownloadAvailable)
         return '联网下载约 240 MB 并校验 SenseVoiceSmall 模型';
+      if (!this.asrModel.platformSupported)
+        return 'PodPlayer 0.5.0 的本地转文字稿仅验证 Windows x64';
       return '下载源、hash 或 license 尚未完全确认，当前请先选择本地模型目录';
     },
     asrModelStatusText() {
       if (this.asrModel.installing) return '正在部署模型';
+      if (!this.asrModel.platformSupported) {
+        return '当前平台暂不支持。本地转文字稿在 0.5.0 仅验证 Windows x64。';
+      }
+      if (this.asrModel.error) return '校验失败：' + this.asrModel.error;
       if (this.asrModel.ready) {
         return (
           '已安装 · ' +
@@ -981,7 +1016,6 @@ export default {
       if (this.asrModel.status === 'path-unavailable') {
         return '路径不可用或文件不完整，请重新校验或选择本地目录';
       }
-      if (this.asrModel.error) return '校验失败：' + this.asrModel.error;
       if (!this.asrDownloadAvailable) {
         return '未安装。远程下载源待确认，可先选择已存在的本地模型目录。';
       }
@@ -1351,6 +1385,9 @@ export default {
       this.asrModel.remoteDownloadAvailable = !!st.remoteDownloadAvailable;
       this.asrModel.remoteDownloadBlockedReason =
         st.remoteDownloadBlockedReason || '';
+      this.asrModel.platformSupported = st.platformSupported !== false;
+      this.asrModel.platformUnsupportedReason =
+        st.platformUnsupportedReason || '';
       this.asrModel.error =
         st.deepResult && st.deepResult.ok === false
           ? st.deepResult.error || ''
@@ -1361,6 +1398,10 @@ export default {
       this.applyAsrModelStatus(st);
     },
     async installAsrModel() {
+      if (this.asrModel.ready) {
+        this.showToast('模型已安装，无需重复部署');
+        return;
+      }
       if (!this.asrDownloadAvailable) {
         this.showToast('远程下载暂未开放，请先选择本地模型目录');
         return;
@@ -1369,6 +1410,8 @@ export default {
       const res = await installModel();
       if (res && res.status) this.applyAsrModelStatus(res.status);
       if (res && res.ok) this.showToast('模型部署完成');
+      else if (res && res.error === 'canceled')
+        this.showToast('已取消模型部署');
       else this.showToast('模型部署失败：' + ((res && res.error) || 'unknown'));
     },
     async cancelAsrModelInstall() {

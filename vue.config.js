@@ -1,7 +1,51 @@
 const webpack = require('webpack');
 const path = require('path');
+const fs = require('fs');
 function resolve(dir) {
   return path.join(__dirname, dir);
+}
+
+const sherpaPlatform = {
+  win32: 'win',
+  darwin: 'darwin',
+  linux: 'linux',
+}[process.platform];
+const sherpaArch = ['x64', 'arm64', 'ia32'].includes(process.arch)
+  ? process.arch
+  : '';
+const sherpaNativePackage =
+  sherpaPlatform && sherpaArch
+    ? `sherpa-onnx-${sherpaPlatform}-${sherpaArch}`
+    : '';
+const sherpaNativePackagePath = sherpaNativePackage
+  ? path.join(__dirname, 'node_modules', sherpaNativePackage)
+  : '';
+const asrExtraResources = [
+  {
+    from: 'src/electron/asrWorker.js',
+    to: 'asrWorker.js',
+  },
+  {
+    from: 'node_modules/sherpa-onnx-node',
+    to: 'node_modules/sherpa-onnx-node',
+  },
+  {
+    from: 'node_modules/ffmpeg-static',
+    to: 'node_modules/ffmpeg-static',
+  },
+];
+if (sherpaNativePackage && fs.existsSync(sherpaNativePackagePath)) {
+  asrExtraResources.splice(2, 0, {
+    from: path.join('node_modules', sherpaNativePackage),
+    to: path.join('node_modules', sherpaNativePackage),
+  });
+}
+if (
+  process.platform === 'win32' &&
+  process.arch === 'x64' &&
+  !fs.existsSync(sherpaNativePackagePath)
+) {
+  throw new Error('Missing required ASR native package: sherpa-onnx-win-x64');
 }
 
 module.exports = {
@@ -102,24 +146,7 @@ module.exports = {
           'node_modules/sherpa-onnx-*/**/*',
           'node_modules/ffmpeg-static/**/*',
         ],
-        extraResources: [
-          {
-            from: 'src/electron/asrWorker.js',
-            to: 'asrWorker.js',
-          },
-          {
-            from: 'node_modules/sherpa-onnx-node',
-            to: 'node_modules/sherpa-onnx-node',
-          },
-          {
-            from: 'node_modules/sherpa-onnx-win-x64',
-            to: 'node_modules/sherpa-onnx-win-x64',
-          },
-          {
-            from: 'node_modules/ffmpeg-static',
-            to: 'node_modules/ffmpeg-static',
-          },
-        ],
+        extraResources: asrExtraResources,
         publish: [
           {
             provider: 'github',

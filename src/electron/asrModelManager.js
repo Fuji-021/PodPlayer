@@ -49,6 +49,10 @@ var REQUIRED_FILES = [
     license: 'Silero VAD MIT License',
   },
 ];
+var TOTAL_MODEL_BYTES = REQUIRED_FILES.reduce(function (sum, file) {
+  return sum + file.size;
+}, 0);
+var PLATFORM_UNSUPPORTED_REASON = 'local-asr-supported-on-windows-x64-only';
 
 var installState = {
   running: false,
@@ -62,6 +66,19 @@ var installState = {
 var _getWindow = null;
 var verifiedUseCache = null;
 var exitCleanupRegistered = false;
+
+export function isAsrPlatformSupported() {
+  return process.platform === 'win32' && process.arch === 'x64';
+}
+
+function remoteDownloadAvailable() {
+  return REMOTE_DOWNLOAD_ENABLED && isAsrPlatformSupported();
+}
+
+function remoteDownloadBlockedReason() {
+  if (!isAsrPlatformSupported()) return PLATFORM_UNSUPPORTED_REASON;
+  return REMOTE_DOWNLOAD_ENABLED ? '' : REMOTE_DOWNLOAD_BLOCKED_REASON;
+}
 
 function dataRoot() {
   return path.dirname(app.getPath('userData'));
@@ -261,10 +278,8 @@ function buildManifest(dir, source, verifiedAt) {
     ready: true,
     installedAt: new Date().toISOString(),
     verifiedAt: verifiedAt || new Date().toISOString(),
-    remoteDownloadAvailable: REMOTE_DOWNLOAD_ENABLED,
-    remoteDownloadBlockedReason: REMOTE_DOWNLOAD_ENABLED
-      ? ''
-      : REMOTE_DOWNLOAD_BLOCKED_REASON,
+    remoteDownloadAvailable: remoteDownloadAvailable(),
+    remoteDownloadBlockedReason: remoteDownloadBlockedReason(),
     files: expectedFilesForManifest(),
     license: {
       senseVoice: 'FunASR Model Open Source License Agreement 1.1',
@@ -512,10 +527,25 @@ function quickReadyFromManifest(dir, manifest) {
   return true;
 }
 
+function markManifestVerificationFailure(dir, result) {
+  var manifest = readManifest(dir);
+  if (!manifest) return;
+  manifest.ready = false;
+  manifest.verificationFailedAt = new Date().toISOString();
+  manifest.verificationError = {
+    error: (result && result.error) || 'model-verification-failed',
+    fileName: (result && result.fileName) || '',
+    expected: (result && result.expected) || '',
+    actual: (result && result.actual) || '',
+  };
+  writeManifest(dir, manifest);
+}
+
 function statusFromManifest(deepResult) {
   var dir = getManagedModelDir();
   var manifest = readManifest(dir);
-  var ready = quickReadyFromManifest(dir, manifest);
+  var platformSupported = isAsrPlatformSupported();
+  var ready = platformSupported && quickReadyFromManifest(dir, manifest);
   var missing = [];
   REQUIRED_FILES.forEach(function (f) {
     if (!quickFileOk(dir, f)) missing.push(f.name);
@@ -525,23 +555,34 @@ function statusFromManifest(deepResult) {
     modelId: MODEL_ID,
     version: MODEL_VERSION,
     minSupportedVersion: MIN_SUPPORTED_VERSION,
+    platformSupported: platformSupported,
+    platformUnsupportedReason: platformSupported
+      ? ''
+      : PLATFORM_UNSUPPORTED_REASON,
     ready: ready,
-    status: ready ? 'installed' : manifest ? 'path-unavailable' : 'missing',
+    status: !platformSupported
+      ? 'unsupported'
+      : ready
+      ? 'installed'
+      : manifest && manifest.verificationError
+      ? 'verification-failed'
+      : manifest
+      ? 'path-unavailable'
+      : 'missing',
     modelDir: dir,
     manifest: manifest,
     missingFiles: missing,
     installing: installState.running,
-    remoteDownloadAvailable: REMOTE_DOWNLOAD_ENABLED,
-    remoteDownloadBlockedReason: REMOTE_DOWNLOAD_ENABLED
-      ? ''
-      : REMOTE_DOWNLOAD_BLOCKED_REASON,
+    remoteDownloadAvailable: remoteDownloadAvailable(),
+    remoteDownloadBlockedReason: remoteDownloadBlockedReason(),
     expectedFiles: expectedFilesForManifest(),
     verifiedAt: manifest && manifest.verifiedAt,
-    deepResult: deepResult || null,
+    deepResult: deepResult || (manifest && manifest.verificationError) || null,
   };
 }
 
 export function getVerifiedModelConfigSync() {
+  if (!isAsrPlatformSupported()) return null;
   var dir = getManagedModelDir();
   var manifest = readManifest(dir);
   if (!quickReadyFromManifest(dir, manifest)) return null;
@@ -572,6 +613,13 @@ function verifiedConfigFromManifest(dir, manifest, deepResult) {
 }
 
 export async function getVerifiedModelConfigForUse() {
+  if (!isAsrPlatformSupported()) {
+    return {
+      ok: false,
+      error: PLATFORM_UNSUPPORTED_REASON,
+      status: statusFromManifest(),
+    };
+  }
   var dir = getManagedModelDir();
   var manifest = readManifest(dir);
   if (!quickReadyFromManifest(dir, manifest)) {
@@ -594,6 +642,7 @@ export async function getVerifiedModelConfigForUse() {
   var res = await verifyModelDir(dir);
   if (!res.ok) {
     verifiedUseCache = null;
+    markManifestVerificationFailure(dir, res);
     return Object.assign({}, res, { status: statusFromManifest(res) });
   }
   var fingerprints = buildFingerprints(dir);
@@ -616,6 +665,9 @@ export async function getVerifiedModelConfigForUse() {
 }
 
 export async function importLocalModelDir(srcDir) {
+  if (!isAsrPlatformSupported()) {
+    return { ok: false, error: PLATFORM_UNSUPPORTED_REASON };
+  }
   var managed = getManagedModelDir();
   var staging = path.join(managed, '.staging-local-' + Date.now());
   safeMkdir(staging);
@@ -646,7 +698,7 @@ export async function importLocalModelDir(srcDir) {
 }
 
 function isDownloadPlanComplete() {
-  if (!REMOTE_DOWNLOAD_ENABLED) return false;
+  if (!remoteDownloadAvailable()) return false;
   return REQUIRED_FILES.every(function (f) {
     return !!(downloadSources(f).length && f.sha256 && f.size && f.license);
   });
@@ -748,6 +800,32 @@ function removePartMeta(part) {
   } catch (e) {
     /* ignore */
   }
+}
+
+function preserveVerifiedStagingFiles(staging, selectedSources) {
+  if (!staging || !fs.existsSync(staging)) return;
+  safeMkdir(downloadsDir());
+  REQUIRED_FILES.forEach(function (spec) {
+    var source = path.join(staging, spec.name);
+    if (!fs.existsSync(source)) return;
+    var part = path.join(downloadsDir(), spec.name + '.part');
+    try {
+      if (fs.existsSync(part)) fs.unlinkSync(part);
+      try {
+        fs.renameSync(source, part);
+      } catch (e) {
+        fs.copyFileSync(source, part);
+        fs.unlinkSync(source);
+      }
+      writePartMeta(part, {
+        sourceUrl: (selectedSources && selectedSources[spec.name]) || spec.url,
+        fileName: spec.name,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      /* best effort; staging cleanup still runs */
+    }
+  });
 }
 
 function wait(ms) {
@@ -1005,6 +1083,7 @@ function downloadFromSource(
     var headers = { 'User-Agent': 'PodPlayer-ASR-Model-Installer' };
     if (received > 0) headers.Range = 'bytes=' + received + '-';
     var started = Date.now();
+    var startedReceived = received;
     var state = {
       protocol: urlObj.protocol,
       lookupDone: false,
@@ -1091,6 +1170,7 @@ function downloadFromSource(
       var append = received > 0 && res.statusCode === 206;
       if (received > 0 && res.statusCode === 200) {
         received = 0;
+        startedReceived = 0;
         removePartMeta(part);
       }
       writePartMeta(part, {
@@ -1123,10 +1203,16 @@ function downloadFromSource(
           sourceUrl: publicSourceUrl,
           receivedBytes: received,
           totalBytes: spec.size,
+          overallReceivedBytes: Math.round(
+            progressBase * TOTAL_MODEL_BYTES + received
+          ),
+          overallTotalBytes: TOTAL_MODEL_BYTES,
           percent: Math.round(
             (progressBase + progressSpan * filePercent) * 100
           ),
-          speed: Math.round((received * 1000) / elapsed),
+          speed: Math.round(
+            (Math.max(0, received - startedReceived) * 1000) / elapsed
+          ),
         });
       });
       res.on('aborted', function () {
@@ -1262,22 +1348,24 @@ async function downloadOne(spec, target, progressBase, progressSpan, runId) {
       partSize: partSize(path.join(downloadsDir(), spec.name + '.part')),
     });
     try {
+      var existingBytes = partSize(
+        path.join(downloadsDir(), spec.name + '.part')
+      );
       sendProgress({
         status: 'source-start',
         fileName: spec.name,
         sourceIndex: i + 1,
         sourceCount: sources.length,
         sourceUrl: sources[i],
-        receivedBytes: partSize(path.join(downloadsDir(), spec.name + '.part')),
+        receivedBytes: existingBytes,
         totalBytes: spec.size,
+        overallReceivedBytes: Math.round(
+          progressBase * TOTAL_MODEL_BYTES + Math.min(existingBytes, spec.size)
+        ),
+        overallTotalBytes: TOTAL_MODEL_BYTES,
         percent: Math.round(
           (progressBase +
-            progressSpan *
-              Math.min(
-                1,
-                partSize(path.join(downloadsDir(), spec.name + '.part')) /
-                  spec.size
-              )) *
+            progressSpan * Math.min(1, existingBytes / spec.size)) *
             100
         ),
         speed: 0,
@@ -1340,6 +1428,13 @@ async function downloadOne(spec, target, progressBase, progressSpan, runId) {
 }
 
 export async function installModel() {
+  if (!isAsrPlatformSupported()) {
+    return {
+      ok: false,
+      error: PLATFORM_UNSUPPORTED_REASON,
+      status: statusFromManifest(),
+    };
+  }
   if (!isDownloadPlanComplete()) {
     return {
       ok: false,
@@ -1353,6 +1448,14 @@ export async function installModel() {
       ok: false,
       error: 'install-running',
       status: statusFromManifest(),
+    };
+  }
+  var currentStatus = statusFromManifest();
+  if (currentStatus.ready) {
+    return {
+      ok: false,
+      error: 'model-already-ready',
+      status: currentStatus,
     };
   }
   if (!acquireLock()) {
@@ -1373,6 +1476,7 @@ export async function installModel() {
   var staging = '';
   var result;
   var terminalProgress;
+  var selectedSources = {};
   try {
     throwIfCanceled(runId);
     var dir = getManagedModelDir();
@@ -1380,18 +1484,19 @@ export async function installModel() {
     safeMkdir(downloadsDir());
     staging = path.join(dir, '.staging-download-' + Date.now());
     safeMkdir(staging);
-    var selectedSources = {};
+    var completedBytes = 0;
     for (var i = 0; i < REQUIRED_FILES.length; i++) {
       throwIfCanceled(runId);
       var spec = REQUIRED_FILES[i];
       var downloaded = await downloadOne(
         spec,
         path.join(staging, spec.name),
-        i / REQUIRED_FILES.length,
-        1 / REQUIRED_FILES.length,
+        completedBytes / TOTAL_MODEL_BYTES,
+        spec.size / TOTAL_MODEL_BYTES,
         runId
       );
       selectedSources[spec.name] = downloaded.sourceUrl;
+      completedBytes += spec.size;
       throwIfCanceled(runId, {
         fileName: spec.name,
         sourceUrl: downloaded.sourceUrl,
@@ -1424,6 +1529,7 @@ export async function installModel() {
     result = { ok: true };
     terminalProgress = { status: 'done', percent: 100 };
   } catch (e) {
+    preserveVerifiedStagingFiles(staging, selectedSources);
     terminalProgress = {
       status: installState.cancel ? 'canceled' : 'error',
       error: String((e && e.message) || e),
@@ -1543,14 +1649,34 @@ export function registerAsrModelIpc(getWindow) {
 
   ipcMain.handle('asr:modelVerify', async function (_e, payload) {
     try {
-      var dir = (payload && payload.dir) || getManagedModelDir();
-      var res = await verifyModelDir(dir);
-      if (res.ok && dir === getManagedModelDir()) {
-        writeNotices(dir);
-        writeManifest(dir, buildManifest(dir, 'manual-verify'));
-        verifiedUseCache = null;
+      if (!isAsrPlatformSupported()) {
+        return {
+          ok: false,
+          error: PLATFORM_UNSUPPORTED_REASON,
+          status: statusFromManifest(),
+        };
       }
-      return Object.assign({}, res, { status: statusFromManifest(res) });
+      if (!acquireLock()) {
+        return {
+          ok: false,
+          error: 'install-locked',
+          status: statusFromManifest(),
+        };
+      }
+      var dir = (payload && payload.dir) || getManagedModelDir();
+      try {
+        var res = await verifyModelDir(dir);
+        if (res.ok && dir === getManagedModelDir()) {
+          writeNotices(dir);
+          writeManifest(dir, buildManifest(dir, 'manual-verify'));
+          verifiedUseCache = null;
+        } else if (!res.ok && dir === getManagedModelDir()) {
+          markManifestVerificationFailure(dir, res);
+        }
+        return Object.assign({}, res, { status: statusFromManifest(res) });
+      } finally {
+        releaseLock();
+      }
     } catch (e) {
       return errorResult(e);
     }
@@ -1558,6 +1684,13 @@ export function registerAsrModelIpc(getWindow) {
 
   ipcMain.handle('asr:modelSelectLocalDir', async function () {
     try {
+      if (!isAsrPlatformSupported()) {
+        return {
+          ok: false,
+          error: PLATFORM_UNSUPPORTED_REASON,
+          status: statusFromManifest(),
+        };
+      }
       var win = _getWindow && _getWindow();
       var res = await dialog.showOpenDialog(win || undefined, {
         title: 'Select SenseVoiceSmall model directory',

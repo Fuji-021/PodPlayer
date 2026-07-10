@@ -5,7 +5,7 @@
 // 拉起 —— 即用 app 自带的 Electron 二进制当纯 Node 跑，dev/打包都无需外部 Node。
 //
 // ⚠️ 本文件**不被 webpack 打包**（asr.js 只把它当一个磁盘路径 spawn，从不 import），
-//    因此必须是纯 CommonJS、Node 14 语法（禁可选链 ?. / 空值合并 ?? / AbortController）。
+//    因此必须是纯 CommonJS，并保持 Electron 13 内置 Node 14 兼容语法。
 //    sherpa-onnx-node / ffmpeg-static 在运行时从项目 node_modules 解析（require 即可）。
 //
 // 流程（faithful port of asr-benchmark/sherpa_run_vad.py，本轮已实测跑通）：

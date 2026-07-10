@@ -4,7 +4,7 @@
 //   src/electron/asrWorker.js（spawn 的 Electron-as-Node），本模块只用 child_process/fs/path，
 //   不碰原生模块（绕开 webpack 打包原生 .node 的坑）。
 //
-// ⚠️ 本文件被 webpack 打入 background bundle → 禁可选链 ?. / 空值合并 ?? / AbortController（Node 14）。
+// ⚠️ 本文件被 webpack 打入 background bundle → 保持 Node 16 兼容语法。
 //
 // IPC：asr:transcribe / asr:cancel / asr:status / asr:read / asr:delete / asr:export
 //   事件（主→渲染）：asr:progress / asr:segment / asr:done / asr:error / asr:canceled
@@ -16,14 +16,9 @@ import crypto from 'crypto';
 import {
   getVerifiedModelConfigSync,
   getVerifiedModelConfigForUse,
+  isAsrPlatformSupported,
 } from './asrModelManager';
 
-// 开发期复用 asr-benchmark 已部署的 int8 模型（不进仓库/不进基础包）。
-// 可经 设置(asrModelDir/asrVadModel) 或环境变量覆盖；正式版「一键部署」后改指 userData 模型目录。
-var DEFAULT_MODEL_DIR =
-  'D:\\MyYesPlayerMusic\\chat_to_word\\asr-benchmark\\sherpa\\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17';
-var DEFAULT_VAD =
-  'D:\\MyYesPlayerMusic\\chat_to_word\\asr-benchmark\\sherpa\\silero_vad.onnx';
 var MODEL_NAME = 'SenseVoiceSmall-int8';
 
 var _getWindow = null;
@@ -48,6 +43,17 @@ function resolveConfig() {
     numThreads: Number(s.asrThreads) || 4,
     language: s.asrLanguage || 'auto',
   };
+  if (!isAsrPlatformSupported()) {
+    return Object.assign({}, base, {
+      modelDir: '',
+      modelFile: '',
+      tokensFile: '',
+      vadModel: '',
+      modelSource: 'unsupported',
+      verifyError: 'local-asr-supported-on-windows-x64-only',
+      fallback: false,
+    });
+  }
   if (verified && verified.ready) {
     return Object.assign({}, base, {
       modelDir: verified.modelDir,
@@ -59,7 +65,7 @@ function resolveConfig() {
       fallback: false,
     });
   }
-  if (!allowDevModelFallback()) {
+  if (!allowDevModelFallback(s)) {
     return Object.assign({}, base, {
       modelDir: '',
       modelFile: '',
@@ -69,15 +75,14 @@ function resolveConfig() {
       fallback: false,
     });
   }
-  var modelDir =
-    s.asrModelDir || process.env.PODPLAYER_ASR_MODEL_DIR || DEFAULT_MODEL_DIR;
-  var vadModel = s.asrVadModel || process.env.PODPLAYER_ASR_VAD || DEFAULT_VAD;
+  var modelDir = s.asrModelDir || process.env.PODPLAYER_ASR_MODEL_DIR || '';
+  var vadModel = s.asrVadModel || process.env.PODPLAYER_ASR_VAD || '';
   return {
     numThreads: base.numThreads,
     language: base.language,
     modelDir: modelDir,
-    modelFile: path.join(modelDir, 'model.int8.onnx'),
-    tokensFile: path.join(modelDir, 'tokens.txt'),
+    modelFile: modelDir ? path.join(modelDir, 'model.int8.onnx') : '',
+    tokensFile: modelDir ? path.join(modelDir, 'tokens.txt') : '',
     vadModel: vadModel,
     modelSource: 'dev-fallback',
     fallback: true,
@@ -97,7 +102,7 @@ async function resolveConfigForUse() {
       fallback: false,
     });
   }
-  if (!allowDevModelFallback()) {
+  if (!allowDevModelFallback(s)) {
     return Object.assign({}, base, {
       modelDir: '',
       modelFile: '',
@@ -123,13 +128,18 @@ function modelReady(cfg) {
   }
 }
 
-function allowDevModelFallback() {
-  if (process.env.PODPLAYER_ASR_DEV_FALLBACK === '1') return true;
-  if (process.env.PODPLAYER_PROFILE === 'dev') return true;
-  if (!process.env.PODPLAYER_PROFILE && process.env.WEBPACK_DEV_SERVER_URL) {
-    return true;
-  }
-  return false;
+function allowDevModelFallback(settings) {
+  if (app.isPackaged || !isAsrPlatformSupported()) return false;
+  var profile = process.env.PODPLAYER_PROFILE || '';
+  var devRuntime =
+    profile === 'dev' || (!profile && !!process.env.WEBPACK_DEV_SERVER_URL);
+  if (!devRuntime) return false;
+  var hasExplicitSettings = !!(
+    settings &&
+    settings.asrModelDir &&
+    settings.asrVadModel
+  );
+  return process.env.PODPLAYER_ASR_DEV_FALLBACK === '1' || hasExplicitSettings;
 }
 
 function sha1(s) {
@@ -404,6 +414,10 @@ export function registerAsrIpc(getWindow, store) {
     var episodeId = (payload && payload.episodeId) || '';
     return {
       ok: true,
+      platformSupported: isAsrPlatformSupported(),
+      platformUnsupportedReason: isAsrPlatformSupported()
+        ? ''
+        : 'local-asr-supported-on-windows-x64-only',
       modelReady: modelReady(cfg),
       model: MODEL_NAME,
       modelDir: cfg.modelDir,

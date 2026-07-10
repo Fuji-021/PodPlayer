@@ -77,12 +77,25 @@
 
     <!-- 模型未部署：优雅引导，不报错不崩 -->
     <div v-else-if="mode === 'no-model'" class="t-guide">
-      <div class="t-guide-title">尚未部署转录模型</div>
-      <div class="t-guide-body">
+      <div class="t-guide-title">
+        {{
+          platformSupported ? '尚未部署转录模型' : '当前平台暂不支持本地转录'
+        }}
+      </div>
+      <div v-if="platformSupported" class="t-guide-body">
         本地转文字稿需要 SenseVoiceSmall
         模型。请先到设置页完成模型部署或选择本地模型目录。
       </div>
-      <button class="t-btn small" @click="goModelSettings">去设置</button>
+      <div v-else class="t-guide-body">
+        PodPlayer 0.5.0 的本地转文字稿仅验证 Windows x64。
+      </div>
+      <button
+        v-if="platformSupported"
+        class="t-btn small"
+        @click="goModelSettings"
+      >
+        去设置
+      </button>
     </div>
 
     <!-- 未转录 -->
@@ -282,6 +295,7 @@ export default {
   data() {
     return {
       initializing: true,
+      platformSupported: true,
       modelReady: false,
       hasLocalFile: false,
       dbRow: null,
@@ -636,6 +650,7 @@ export default {
       }
       if (reqId !== this._initReq || episodeId !== this.episodeId) return;
       this.modelReady = !!(st && st.modelReady);
+      this.platformSupported = !st || st.platformSupported !== false;
       if (st && st.isThisQueued) this.queuedLocal = true;
       // 本地音频是否存在（已下载/已缓存）→ 决定能否生成
       const hasLocalFile = await this.checkLocalFile(episodeId);
