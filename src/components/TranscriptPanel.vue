@@ -558,6 +558,9 @@ export default {
     this.$nextTick(() => this.setupListResizeObserver());
   },
   beforeDestroy() {
+    this._initReq = (this._initReq || 0) + 1;
+    this._segmentsReq = (this._segmentsReq || 0) + 1;
+    this._rowReq = (this._rowReq || 0) + 1;
     if (this._onEsc) window.removeEventListener('keydown', this._onEsc);
     if (this._resizeObserver) this._resizeObserver.disconnect();
     this._resizeObservedEl = null;
@@ -606,31 +609,49 @@ export default {
       }
     },
     async init() {
+      const reqId = (this._initReq || 0) + 1;
+      this._initReq = reqId;
+      this._segmentsReq = (this._segmentsReq || 0) + 1;
+      const episodeId = this.episodeId;
       this.initializing = true;
       this.queuedLocal = false;
       this.segments = [];
+      this.loadingSegs = false;
       this.curIdx = -1;
       this.viewMode = 'opt'; // [三态] 切集回到"已优化"
       this.aiMap = {};
       this.aiChangedSet = new Set();
-      try {
-        const st = await getAsrStatus(this.episodeId);
-        this.modelReady = !!(st && st.modelReady);
-        if (st && st.isThisQueued) this.queuedLocal = true;
-      } catch (e) {
+      if (!episodeId) {
         this.modelReady = false;
+        this.hasLocalFile = false;
+        this.dbRow = null;
+        this.initializing = false;
+        return;
       }
+      let st = null;
+      try {
+        st = await getAsrStatus(episodeId);
+      } catch (e) {
+        st = null;
+      }
+      if (reqId !== this._initReq || episodeId !== this.episodeId) return;
+      this.modelReady = !!(st && st.modelReady);
+      if (st && st.isThisQueued) this.queuedLocal = true;
       // 本地音频是否存在（已下载/已缓存）→ 决定能否生成
-      this.hasLocalFile = await this.checkLocalFile();
-      this.dbRow = await getTranscript(this.episodeId).catch(() => null);
+      const hasLocalFile = await this.checkLocalFile(episodeId);
+      if (reqId !== this._initReq || episodeId !== this.episodeId) return;
+      const dbRow = await getTranscript(episodeId).catch(() => null);
+      if (reqId !== this._initReq || episodeId !== this.episodeId) return;
+      this.hasLocalFile = hasLocalFile;
+      this.dbRow = dbRow;
       this.initializing = false;
       if (this.mode === 'done' || this.mode === 'paused') {
         await this.maybeLoadSegments();
       }
     },
-    async checkLocalFile() {
+    async checkLocalFile(episodeId) {
       try {
-        const row = await getDownload(this.episodeId);
+        const row = await getDownload(episodeId);
         if (row && row.filePath) return true;
       } catch (e) {
         /* ignore */
@@ -639,10 +660,16 @@ export default {
         (this.$store.state.podcastDownloads &&
           this.$store.state.podcastDownloads.pathMap) ||
         {};
-      return !!pm[this.episodeId];
+      return !!pm[episodeId];
     },
     async reloadRow() {
-      this.dbRow = await getTranscript(this.episodeId).catch(() => null);
+      const reqId = (this._rowReq || 0) + 1;
+      this._rowReq = reqId;
+      const episodeId = this.episodeId;
+      const row = await getTranscript(episodeId).catch(() => null);
+      if (reqId !== this._rowReq || episodeId !== this.episodeId) return null;
+      this.dbRow = row;
+      return row;
     },
     async afterFinish() {
       await this.reloadRow();
@@ -654,35 +681,49 @@ export default {
       await this.loadSegments();
     },
     async loadSegments() {
+      const reqId = (this._segmentsReq || 0) + 1;
+      this._segmentsReq = reqId;
+      const episodeId = this.episodeId;
       this.loadingSegs = true;
+      let segments = [];
       try {
-        const res = await readSegments(this.episodeId);
+        const res = await readSegments(episodeId);
         if (res && res.ok && Array.isArray(res.segments)) {
           // 只展示有文本的段（VAD 偶有空段）；兜底按 start 升序（worker 已升序写）
-          this.segments = res.segments
+          segments = res.segments
             .filter(s => s && s.text && String(s.text).trim().length)
             .sort((a, b) => (a.start || 0) - (b.start || 0));
-        } else {
-          this.segments = [];
         }
       } catch (e) {
-        this.segments = [];
+        segments = [];
       }
+      if (reqId !== this._segmentsReq || episodeId !== this.episodeId) return;
+      this.segments = segments;
       this.loadingSegs = false;
-      await this.loadDict();
-      await this.loadAiRefine(); // [B路·AI] 载入已缓存的 AI 精修层(若有)
+      await this.loadDict(reqId, episodeId);
+      if (reqId !== this._segmentsReq || episodeId !== this.episodeId) return;
+      await this.loadAiRefine(reqId, episodeId, segments.length); // [B路·AI] 载入已缓存的 AI 精修层(若有)
+      if (reqId !== this._segmentsReq || episodeId !== this.episodeId) return;
       this.$nextTick(() => this.updateHighlight());
     },
     // [B路·AI] 载入该集已缓存的 AI 精修(同 promptVer 才用，否则视为无)
-    async loadAiRefine() {
+    async loadAiRefine(reqId, episodeId, segmentCount) {
+      episodeId = episodeId || this.episodeId;
+      segmentCount =
+        typeof segmentCount === 'number' ? segmentCount : this.segments.length;
       try {
-        const row = await getAiRefine(this.episodeId);
+        const row = await getAiRefine(episodeId);
+        if (
+          episodeId !== this.episodeId ||
+          (reqId && reqId !== this._segmentsReq)
+        )
+          return;
         // 同 promptVer 且段数未变(续转会追加段→下标平移)才用缓存，否则视为陈旧丢弃
         if (
           row &&
           row.promptVer === aiPromptVersion &&
           row.segs &&
-          (!row.segCount || row.segCount === this.segments.length)
+          (!row.segCount || row.segCount === segmentCount)
         ) {
           this.aiMap = row.segs;
           this.aiChangedSet = new Set(row.changedIdx || []);
@@ -691,11 +732,19 @@ export default {
       } catch (e) {
         /* ignore */
       }
+      if (
+        episodeId !== this.episodeId ||
+        (reqId && reqId !== this._segmentsReq)
+      )
+        return;
       this.aiMap = {};
       this.aiChangedSet = new Set();
     },
     // [B路·AI] 触发 AI 段内词汇精修：取"已优化"态的 speech 段送 DeepSeek，完成后切 AI 态
     async onAiRefine() {
+      const episodeId = this.episodeId;
+      const podcastId = this.podcastId;
+      const segmentCount = this.segments.length;
       if (!this.aiKey) {
         this.$store.dispatch(
           'showToast',
@@ -723,17 +772,19 @@ export default {
       const complete =
         this.aiAvailable && Object.keys(this.aiMap).length >= speech.length;
       if (complete) {
-        await deleteAiRefine(this.episodeId);
+        await deleteAiRefine(episodeId);
+        if (episodeId !== this.episodeId) return;
         this.aiMap = {};
         this.aiChangedSet = new Set();
       }
       const res = await startAiRefine(
-        this.episodeId,
-        this.podcastId,
+        episodeId,
+        podcastId,
         speech,
         anchors,
-        this.segments.length
+        segmentCount
       );
+      if (episodeId !== this.episodeId) return;
       if (res && res.ok) {
         await this.loadAiRefine();
         this.viewMode = 'ai';
@@ -743,22 +794,56 @@ export default {
     onAiCancel() {
       cancelAiRefine(this.episodeId);
     },
-    async loadDict() {
+    async loadDict(reqId, episodeId) {
+      episodeId = episodeId || this.episodeId;
+      const podcastId = String(episodeId || '').split('::')[0];
       // A2: 先按 podcast.author 同步该节目的 author 来源 anchor（自动种主播名）
       try {
-        const pod = await getPodcast(this.podcastId);
-        await syncAuthorAnchors(this.podcastId, (pod && pod.author) || '');
+        const pod = await getPodcast(podcastId);
+        if (
+          episodeId !== this.episodeId ||
+          (reqId && reqId !== this._segmentsReq)
+        )
+          return;
+        await syncAuthorAnchors(podcastId, (pod && pod.author) || '');
       } catch (e) {
         /* ignore */
       }
+      if (
+        episodeId !== this.episodeId ||
+        (reqId && reqId !== this._segmentsReq)
+      )
+        return;
       try {
-        this.dictParts = await getDictParts(this.podcastId);
+        const dictParts = await getDictParts(podcastId);
+        if (
+          episodeId !== this.episodeId ||
+          (reqId && reqId !== this._segmentsReq)
+        )
+          return;
+        this.dictParts = dictParts;
       } catch (e) {
+        if (
+          episodeId !== this.episodeId ||
+          (reqId && reqId !== this._segmentsReq)
+        )
+          return;
         this.dictParts = { exact: [], anchors: [] };
       }
       try {
-        this.dictRows = await listDict(this.podcastId);
+        const dictRows = await listDict(podcastId);
+        if (
+          episodeId !== this.episodeId ||
+          (reqId && reqId !== this._segmentsReq)
+        )
+          return;
+        this.dictRows = dictRows;
       } catch (e) {
+        if (
+          episodeId !== this.episodeId ||
+          (reqId && reqId !== this._segmentsReq)
+        )
+          return;
         this.dictRows = [];
       }
     },
@@ -845,10 +930,13 @@ export default {
         typeof window.confirm !== 'function' ||
         window.confirm('确定删除本集文字稿？（可重新生成）');
       if (!ok) return;
-      try {
-        await deleteTranscript(this.episodeId);
-      } catch (e) {
-        /* ignore */
+      const res = await deleteTranscript(this.episodeId);
+      if (!res || !res.ok) {
+        this.$store.dispatch(
+          'showToast',
+          '删除失败：' + ((res && res.error) || 'unknown')
+        );
+        return;
       }
       this.dbRow = null;
       this.segments = [];

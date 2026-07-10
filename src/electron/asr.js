@@ -28,7 +28,7 @@ var MODEL_NAME = 'SenseVoiceSmall-int8';
 
 var _getWindow = null;
 var _store = null;
-var active = null; // { episodeId, child, canceled, settled }
+var active = null; // { episodeId, child, canceled, deleting, settled, exitPromise }
 var queue = []; // [{ episodeId, audioPath, title, durationSec }]
 
 function getSettings() {
@@ -190,7 +190,7 @@ function rmDir(dir) {
   try {
     if (fs.rmSync) {
       fs.rmSync(dir, { recursive: true, force: true });
-      return;
+      return true;
     }
   } catch (e) {
     /* fall through */
@@ -198,9 +198,28 @@ function rmDir(dir) {
   try {
     // Node 12/14 兜底
     fs.rmdirSync(dir, { recursive: true });
+    return true;
   } catch (e) {
-    /* ignore */
+    return !!(e && e.code === 'ENOENT');
   }
+}
+
+function waitForTaskExit(task, timeoutMs) {
+  if (!task || !task.exitPromise) return Promise.resolve(true);
+  return new Promise(function (resolve) {
+    var settled = false;
+    var timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    task.exitPromise.then(function () {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 function startNext() {
@@ -270,11 +289,18 @@ async function runJob(job) {
     startNext();
     return;
   }
+  var resolveExit;
+  var exitPromise = new Promise(function (resolve) {
+    resolveExit = resolve;
+  });
   active = {
     episodeId: job.episodeId,
     child: child,
     canceled: false,
+    deleting: false,
     settled: false,
+    exitPromise: exitPromise,
+    resolveExit: resolveExit,
   };
   sendEvent('asr:progress', {
     episodeId: job.episodeId,
@@ -285,7 +311,8 @@ async function runJob(job) {
   });
 
   child.on('message', function (ev) {
-    if (!ev || !active || active.episodeId !== job.episodeId) return;
+    if (!ev || !active || active.episodeId !== job.episodeId || active.deleting)
+      return;
     if (ev.type === 'progress') {
       sendEvent('asr:progress', {
         episodeId: job.episodeId,
@@ -329,7 +356,12 @@ async function runJob(job) {
   }
 
   child.on('error', function (err) {
-    if (active && active.episodeId === job.episodeId && !active.settled) {
+    if (
+      active &&
+      active.episodeId === job.episodeId &&
+      !active.settled &&
+      !active.deleting
+    ) {
       active.settled = true;
       sendEvent('asr:error', {
         episodeId: job.episodeId,
@@ -341,8 +373,11 @@ async function runJob(job) {
   child.on('exit', function (code, signal) {
     var was = active;
     active = null;
+    if (was && was.resolveExit) was.resolveExit();
     if (was && was.episodeId === job.episodeId && !was.settled) {
-      if (was.canceled) {
+      if (was.deleting) {
+        // 删除请求等待 exit 后自行清理；不能发 canceled 让渲染端重建 paused 索引。
+      } else if (was.canceled) {
         sendEvent('asr:canceled', { episodeId: job.episodeId });
       } else {
         sendEvent('asr:error', {
@@ -490,17 +525,34 @@ export function registerAsrIpc(getWindow, store) {
 
   ipcMain.handle('asr:delete', async function (_e, payload) {
     var episodeId = payload && payload.episodeId;
-    if (!episodeId) return { ok: false };
-    // 正在转这一集 → 先取消
-    if (active && active.episodeId === episodeId) {
-      active.canceled = true;
+    if (!episodeId) return { ok: false, error: '缺少 episodeId' };
+    queue = queue.filter(function (job) {
+      return job.episodeId !== episodeId;
+    });
+    var task = active && active.episodeId === episodeId ? active : null;
+    if (task) {
+      task.canceled = true;
+      task.deleting = true;
       try {
-        active.child.kill();
+        task.child.kill();
       } catch (e) {
         /* ignore */
       }
+      var exited = await waitForTaskExit(task, 5000);
+      if (!exited) {
+        try {
+          task.child.kill('SIGKILL');
+        } catch (e) {
+          /* ignore */
+        }
+        exited = await waitForTaskExit(task, 2000);
+      }
+      if (!exited)
+        return { ok: false, error: 'transcript-worker-still-running' };
     }
-    rmDir(workDirFor(episodeId));
+    if (!rmDir(workDirFor(episodeId))) {
+      return { ok: false, error: 'transcript-files-delete-failed' };
+    }
     return { ok: true };
   });
 

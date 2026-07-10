@@ -24,6 +24,22 @@ export const transcribeState = Vue.observable({
   lastText: '', // 最近一段文本（转录中 ticker）
   error: '',
 });
+const transcriptDeleteGuards = new Map();
+
+function guardTranscriptDelete(episodeId) {
+  const oldTimer = transcriptDeleteGuards.get(episodeId);
+  if (oldTimer) clearTimeout(oldTimer);
+  const timer = setTimeout(() => {
+    transcriptDeleteGuards.delete(episodeId);
+  }, 30000);
+  transcriptDeleteGuards.set(episodeId, timer);
+}
+
+function clearTranscriptDeleteGuard(episodeId) {
+  const timer = transcriptDeleteGuards.get(episodeId);
+  if (timer) clearTimeout(timer);
+  transcriptDeleteGuards.delete(episodeId);
+}
 
 function resetLive(episodeId, totalSec) {
   transcribeState.episodeId = episodeId;
@@ -82,15 +98,32 @@ export function updateTranscript(episodeId, patch) {
 }
 
 export async function deleteTranscript(episodeId) {
+  guardTranscriptDelete(episodeId);
+  let ipcResult = { ok: true };
   try {
-    if (ipcRenderer) await ipcRenderer.invoke('asr:delete', { episodeId });
+    if (ipcRenderer) {
+      ipcResult = await ipcRenderer.invoke('asr:delete', { episodeId });
+    }
   } catch (e) {
-    /* ignore */
+    ipcResult = { ok: false, error: String((e && e.message) || e) };
+  }
+  if (!ipcResult || !ipcResult.ok) {
+    clearTranscriptDeleteGuard(episodeId);
+    return ipcResult || { ok: false, error: 'transcript-delete-failed' };
   }
   try {
-    await db.transcripts.delete(episodeId);
+    await db.transaction('rw', db.transcripts, db.transcriptAi, async () => {
+      await db.transcripts.delete(episodeId);
+      await db.transcriptAi.delete(episodeId);
+    });
   } catch (e) {
-    /* ignore */
+    clearTranscriptDeleteGuard(episodeId);
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+  if (transcribeState.episodeId === episodeId) {
+    transcribeState.status = 'idle';
+    transcribeState.phase = '';
+    transcribeState.error = '';
   }
   return { ok: true };
 }
@@ -337,6 +370,7 @@ export async function startTranscribe(episode) {
     store.dispatch('showToast', '请先下载本集，再生成文字稿');
     return { ok: false, reason: 'not-downloaded' };
   }
+  clearTranscriptDeleteGuard(episode.id);
   // [批量入队·不抢占] 仅当当前无其它正在跑的任务、或就是本集时，才接管实时态显示；
   //   否则(已有别集在转，如批量逐集转录)只入队，不把进度显示从正在转的那条抢过来。
   if (
@@ -411,6 +445,7 @@ export function registerTranscriptListeners() {
 
   ipcRenderer.on('asr:progress', (_e, p) => {
     if (!p || !p.episodeId) return;
+    if (transcriptDeleteGuards.has(p.episodeId)) return;
     if (transcribeState.episodeId !== p.episodeId) {
       transcribeState.episodeId = p.episodeId;
       transcribeState.lastText = '';
@@ -428,6 +463,7 @@ export function registerTranscriptListeners() {
 
   ipcRenderer.on('asr:segment', (_e, p) => {
     if (!p || !p.episodeId || !p.seg) return;
+    if (transcriptDeleteGuards.has(p.episodeId)) return;
     if (transcribeState.episodeId === p.episodeId) {
       transcribeState.lastText = p.seg.text || '';
     }
@@ -435,6 +471,7 @@ export function registerTranscriptListeners() {
 
   ipcRenderer.on('asr:done', async (_e, p) => {
     if (!p || !p.episodeId) return;
+    if (transcriptDeleteGuards.has(p.episodeId)) return;
     if (transcribeState.episodeId === p.episodeId) {
       transcribeState.status = 'done';
       transcribeState.phase = '';
@@ -452,11 +489,16 @@ export function registerTranscriptListeners() {
     } catch (e) {
       /* ignore */
     }
+    if (transcriptDeleteGuards.has(p.episodeId)) {
+      await db.transcripts.delete(p.episodeId).catch(() => {});
+      return;
+    }
     store.dispatch('showToast', '文字稿生成完成');
   });
 
   ipcRenderer.on('asr:error', async (_e, p) => {
     if (!p || !p.episodeId) return;
+    if (transcriptDeleteGuards.has(p.episodeId)) return;
     const err = (p && p.error) || '';
     if (transcribeState.episodeId === p.episodeId) {
       transcribeState.status = err === 'model-missing' ? 'idle' : 'error';
@@ -475,17 +517,23 @@ export function registerTranscriptListeners() {
     } catch (e) {
       /* ignore */
     }
+    if (transcriptDeleteGuards.has(p.episodeId)) {
+      await db.transcripts.delete(p.episodeId).catch(() => {});
+      return;
+    }
     store.dispatch('showToast', '生成文字稿失败：' + err);
   });
 
   ipcRenderer.on('asr:canceled', async (_e, p) => {
     if (!p || !p.episodeId) return;
+    if (transcriptDeleteGuards.has(p.episodeId)) return;
     if (transcribeState.episodeId === p.episodeId) {
       transcribeState.status = 'canceled';
     }
     // 标记为可续（paused）：保留已转段，下次「继续转录」从断点续。
     try {
       const existing = await getTranscript(p.episodeId);
+      if (transcriptDeleteGuards.has(p.episodeId)) return;
       await saveTranscript(p.episodeId, {
         status: 'paused',
         model: (existing && existing.model) || '',
@@ -496,6 +544,9 @@ export function registerTranscriptListeners() {
         durationMs: (existing && existing.durationMs) || 0,
         error: '',
       });
+      if (transcriptDeleteGuards.has(p.episodeId)) {
+        await db.transcripts.delete(p.episodeId).catch(() => {});
+      }
     } catch (e) {
       /* ignore */
     }
