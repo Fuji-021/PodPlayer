@@ -57,9 +57,11 @@ var installState = {
   runId: 0,
   startedAt: 0,
   lockHeartbeat: null,
+  lockOwnerToken: '',
 };
 var _getWindow = null;
 var verifiedUseCache = null;
+var exitCleanupRegistered = false;
 
 function dataRoot() {
   return path.dirname(app.getPath('userData'));
@@ -272,22 +274,76 @@ function buildManifest(dir, source, verifiedAt) {
   };
 }
 
+function readLockRecord(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function lockIdentity(record) {
+  if (!record) return '';
+  if (record.ownerToken) return 'token:' + String(record.ownerToken);
+  return (
+    'legacy:' + String(record.pid || '') + ':' + String(record.createdAt || '')
+  );
+}
+
+function pidLiveness(pid) {
+  pid = Number(pid);
+  if (!Number.isFinite(pid) || pid <= 0) return 'unknown';
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (e) {
+    if (e && e.code === 'ESRCH') return 'dead';
+    return 'unknown';
+  }
+}
+
+function reclaimAbandonedLock(file) {
+  var record;
+  var st;
+  try {
+    record = readLockRecord(file);
+    st = fs.statSync(file);
+  } catch (e) {
+    return true;
+  }
+  var liveness = record ? pidLiveness(record.pid) : 'unknown';
+  var stale = Date.now() - st.mtimeMs > LOCK_STALE_MS;
+  if (liveness === 'alive' || (liveness === 'unknown' && !stale)) {
+    return false;
+  }
+  var expectedIdentity = lockIdentity(record);
+  var current = readLockRecord(file);
+  if (lockIdentity(current) !== expectedIdentity) return false;
+  try {
+    fs.unlinkSync(file);
+    return true;
+  } catch (e) {
+    return e && e.code === 'ENOENT';
+  }
+}
+
 function acquireLock() {
   var dir = getManagedModelDir();
   safeMkdir(dir);
   var lp = lockPath();
-  try {
-    var st = fs.statSync(lp);
-    if (Date.now() - st.mtimeMs > LOCK_STALE_MS) fs.unlinkSync(lp);
-  } catch (e) {
-    /* no lock */
-  }
+  if (fs.existsSync(lp) && !reclaimAbandonedLock(lp)) return false;
+  var ownerToken = crypto.randomBytes(16).toString('hex');
   try {
     fs.writeFileSync(
       lp,
-      JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
+      JSON.stringify({
+        pid: process.pid,
+        ownerToken: ownerToken,
+        createdAt: Date.now(),
+      }),
       { flag: 'wx' }
     );
+    installState.lockOwnerToken = ownerToken;
     return true;
   } catch (e) {
     return false;
@@ -295,19 +351,34 @@ function acquireLock() {
 }
 
 function releaseLock() {
+  var ownerToken = installState.lockOwnerToken;
+  if (!ownerToken) return false;
+  var lp = lockPath();
   try {
-    fs.unlinkSync(lockPath());
+    var record = readLockRecord(lp);
+    if (!record || record.ownerToken !== ownerToken) return false;
+    fs.unlinkSync(lp);
+    return true;
   } catch (e) {
-    /* ignore */
+    return e && e.code === 'ENOENT';
+  } finally {
+    if (installState.lockOwnerToken === ownerToken) {
+      installState.lockOwnerToken = '';
+    }
   }
 }
 
 function touchLock() {
+  var ownerToken = installState.lockOwnerToken;
+  if (!ownerToken) return false;
   try {
+    var record = readLockRecord(lockPath());
+    if (!record || record.ownerToken !== ownerToken) return false;
     var now = new Date();
     fs.utimesSync(lockPath(), now, now);
+    return true;
   } catch (e) {
-    /* ignore */
+    return false;
   }
 }
 
@@ -1400,6 +1471,24 @@ export function cancelModelInstall() {
   return { ok: true, status: statusFromManifest() };
 }
 
+export function shutdownAsrModelManager() {
+  installState.cancel = true;
+  var req = installState.req;
+  if (req) {
+    try {
+      req.destroy(
+        downloadFailure('canceled', 'app-quit', {
+          code: 'APP_QUIT',
+        })
+      );
+    } catch (e) {
+      /* request is already closing */
+    }
+  }
+  stopLockHeartbeat();
+  releaseLock();
+}
+
 function statusSafe() {
   try {
     return statusFromManifest();
@@ -1423,6 +1512,10 @@ function errorResult(e) {
 
 export function registerAsrModelIpc(getWindow) {
   _getWindow = getWindow;
+  if (!exitCleanupRegistered) {
+    exitCleanupRegistered = true;
+    process.once('exit', shutdownAsrModelManager);
+  }
 
   ipcMain.handle('asr:modelStatus', async function () {
     try {

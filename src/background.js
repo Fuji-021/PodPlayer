@@ -29,7 +29,10 @@ import { registerPodcastDownloadIpc } from './electron/podcastDownload';
 import { registerPodcastDiscoverIpc } from './electron/podcastDiscover';
 // [转文字稿] 主进程 ASR IPC（单任务队列 + 子进程编排；模型缺失时优雅降级，不崩）
 import { registerAsrIpc } from './electron/asr';
-import { registerAsrModelIpc } from './electron/asrModelManager';
+import {
+  registerAsrModelIpc,
+  shutdownAsrModelManager,
+} from './electron/asrModelManager';
 // [T3] 桌面通知：新单集发现 / 下载完成 → Electron Notification
 import { initNotifications } from './electron/notifications';
 import { createMenu } from './electron/menu';
@@ -611,6 +614,7 @@ class Background {
 
     app.on('before-quit', () => {
       this.willQuitApp = true;
+      shutdownAsrModelManager();
     });
 
     app.on('quit', () => {
