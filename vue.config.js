@@ -226,7 +226,11 @@ module.exports = {
         dmg: {
           icon: 'build/icons/icon.icns',
         },
+        portable: {
+          artifactName: '${productName}-Portable-${version}-${arch}.${ext}',
+        },
         nsis: {
+          artifactName: '${productName}-Setup-${version}-${arch}.${ext}',
           // [安装体验] 引导式(向导)安装而非一键安装：让用户能看到/选择安装位置，但不繁琐
           //   （perMachine 跳过"为谁安装"选择页 → 向导仅「选位置→安装→完成」三步）。
           oneClick: false,
