@@ -8,10 +8,12 @@ import https from 'https';
 var MODEL_ID = 'sensevoice-small';
 var MODEL_VERSION = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17';
 var MIN_SUPPORTED_VERSION = MODEL_VERSION;
-var REMOTE_DOWNLOAD_ENABLED = false;
-var REMOTE_DOWNLOAD_BLOCKED_REASON = 'download-smoke-failed';
+var REMOTE_DOWNLOAD_ENABLED = true;
+var REMOTE_DOWNLOAD_BLOCKED_REASON = '';
 var LOCK_STALE_MS = 30 * 60 * 1000;
 var LOCK_HEARTBEAT_MS = 15 * 1000;
+var CONNECT_TIMEOUT_MS = 20 * 1000;
+var STREAM_IDLE_TIMEOUT_MS = 60 * 1000;
 
 var REQUIRED_FILES = [
   {
@@ -52,6 +54,7 @@ var installState = {
   running: false,
   cancel: false,
   req: null,
+  runId: 0,
   startedAt: 0,
   lockHeartbeat: null,
 };
@@ -98,15 +101,32 @@ function rmDir(dir) {
   }
 }
 
-function fileSha256(file) {
+function fileSha256(file, checkCanceled) {
   return new Promise(function (resolve, reject) {
     var h = crypto.createHash('sha256');
     var s = fs.createReadStream(file);
+    var settled = false;
+    function fail(err) {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    }
     s.on('data', function (d) {
+      if (checkCanceled) {
+        try {
+          checkCanceled();
+        } catch (e) {
+          s.destroy();
+          fail(e);
+          return;
+        }
+      }
       h.update(d);
     });
-    s.on('error', reject);
+    s.on('error', fail);
     s.on('end', function () {
+      if (settled) return;
+      settled = true;
       resolve(h.digest('hex'));
     });
   });
@@ -164,8 +184,9 @@ function writeNotices(dir) {
     'VAD URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx\n';
   var notice =
     'Model files are stored outside the application package.\n' +
-    'Remote download is disabled until the full sandbox download smoke passes.\n' +
-    'When enabled, model.int8.onnx, tokens.txt, and silero_vad.onnx must pass pinned sha256 checks before use.\n' +
+    'Remote deployment tries the official HuggingFace source first and may use hf-mirror.com only as a fallback.\n' +
+    'model.int8.onnx, tokens.txt, and silero_vad.onnx must pass pinned sha256 checks before use.\n' +
+    'Deploying the model does not start transcription or call DeepSeek.\n' +
     'ASR runtime uses only deep-verified model paths.\n';
   fs.writeFileSync(path.join(dir, 'LICENSE.txt'), license, 'utf8');
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), notice, 'utf8');
@@ -320,10 +341,12 @@ function sendProgress(payload) {
   }
 }
 
-export async function verifyModelDir(dir) {
+export async function verifyModelDir(dir, options) {
   if (!dir) return { ok: false, error: 'missing-dir' };
+  var checkCanceled = options && options.checkCanceled;
   var files = {};
   for (var i = 0; i < REQUIRED_FILES.length; i++) {
+    if (checkCanceled) checkCanceled();
     var spec = REQUIRED_FILES[i];
     var file = path.join(dir, spec.name);
     var st;
@@ -344,7 +367,8 @@ export async function verifyModelDir(dir) {
         actual: st.size,
       };
     }
-    var hash = await fileSha256(file);
+    var hash = await fileSha256(file, checkCanceled);
+    if (checkCanceled) checkCanceled();
     if (hash.toLowerCase() !== spec.sha256) {
       return {
         ok: false,
@@ -580,14 +604,40 @@ function downloadFailure(stage, message, extra) {
   return err;
 }
 
+function throwIfCanceled(runId, extra) {
+  if (
+    installState.cancel ||
+    (runId && installState.runId && runId !== installState.runId)
+  ) {
+    throw downloadFailure(
+      'canceled',
+      'canceled',
+      Object.assign({ code: 'CANCELED' }, extra || {})
+    );
+  }
+}
+
+function setActiveRequest(req, runId) {
+  if (!req || runId !== installState.runId || !installState.running) {
+    return false;
+  }
+  installState.req = req;
+  return true;
+}
+
+function clearActiveRequest(req) {
+  if (installState.req === req) installState.req = null;
+}
+
 function classifyRequestError(err, state) {
+  if (err && err.stage) return err.stage;
   var code = err && err.code;
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'DNS';
   if (!state || !state.lookupDone) return 'DNS';
   if (!state.connectDone) return 'connect';
   if (state.protocol === 'https:' && !state.secureDone) return 'TLS';
   if (state.responseDone) return 'stream';
-  return 'connect';
+  return 'HTTP';
 }
 
 function partSize(file) {
@@ -635,9 +685,10 @@ function wait(ms) {
   });
 }
 
-async function renameWithRetry(src, target) {
+async function renameWithRetry(src, target, runId) {
   var lastErr = null;
   for (var i = 0; i < 8; i++) {
+    throwIfCanceled(runId);
     try {
       fs.renameSync(src, target);
       return;
@@ -653,11 +704,42 @@ async function renameWithRetry(src, target) {
   throw lastErr;
 }
 
-async function finalizePart(spec, part, target, sourceUrl) {
+async function finalizePart(
+  spec,
+  part,
+  target,
+  sourceUrl,
+  runId,
+  progressPercent
+) {
   var size = partSize(part);
   var meta = readPartMeta(part);
   var selectedSourceUrl = meta.sourceUrl || sourceUrl;
-  var hash = await fileSha256(part);
+  throwIfCanceled(runId, {
+    fileName: spec.name,
+    sourceUrl: selectedSourceUrl,
+    partSize: size,
+  });
+  sendProgress({
+    status: 'verifying',
+    fileName: spec.name,
+    sourceUrl: selectedSourceUrl,
+    receivedBytes: size,
+    totalBytes: spec.size,
+    percent: progressPercent,
+  });
+  var hash = await fileSha256(part, function () {
+    throwIfCanceled(runId, {
+      fileName: spec.name,
+      sourceUrl: selectedSourceUrl,
+      partSize: size,
+    });
+  });
+  throwIfCanceled(runId, {
+    fileName: spec.name,
+    sourceUrl: selectedSourceUrl,
+    partSize: size,
+  });
   if (hash.toLowerCase() !== spec.sha256) {
     try {
       fs.unlinkSync(part);
@@ -673,7 +755,7 @@ async function finalizePart(spec, part, target, sourceUrl) {
     });
   }
   try {
-    await renameWithRetry(part, target);
+    await renameWithRetry(part, target, runId);
   } catch (e) {
     throw downloadFailure(
       'rename',
@@ -698,11 +780,114 @@ function downloadFromSource(
   sourceIndex,
   sourceCount,
   redirectDepth,
-  displaySourceUrl
+  displaySourceUrl,
+  runId
 ) {
   return new Promise(function (resolve, reject) {
     var publicSourceUrl = displaySourceUrl || sourceUrl;
     var part = path.join(downloadsDir(), spec.name + '.part');
+    var req = null;
+    var response = null;
+    var stream = null;
+    var settled = false;
+    var connectTimer = null;
+    var idleTimer = null;
+    var progressPercent = Math.round((progressBase + progressSpan) * 100);
+
+    function clearTimers() {
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    }
+
+    function cleanupRequest() {
+      clearTimers();
+      if (req) clearActiveRequest(req);
+    }
+
+    function rejectDownload(err, drainResponse) {
+      if (settled) return;
+      settled = true;
+      cleanupRequest();
+      if (response) {
+        try {
+          if (drainResponse) response.resume();
+          else response.destroy();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      if (stream && !stream.closed) {
+        try {
+          if (response) response.unpipe(stream);
+        } catch (e) {
+          /* ignore */
+        }
+        stream.once('close', function () {
+          reject(err);
+        });
+        stream.destroy();
+        return;
+      }
+      reject(err);
+    }
+
+    function continueWith(factory) {
+      if (settled) return;
+      settled = true;
+      cleanupRequest();
+      if (response) {
+        try {
+          response.resume();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      Promise.resolve()
+        .then(function () {
+          throwIfCanceled(runId, {
+            fileName: spec.name,
+            sourceUrl: publicSourceUrl,
+            partSize: partSize(part),
+          });
+          return factory();
+        })
+        .then(resolve, reject);
+    }
+
+    function resetIdleTimer() {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(function () {
+        if (!req || settled) return;
+        req.destroy(
+          downloadFailure('stream', 'stream-idle-timeout:' + spec.name, {
+            code: 'ETIMEDOUT',
+            sourceUrl: publicSourceUrl,
+            partSize: partSize(part),
+          })
+        );
+      }, STREAM_IDLE_TIMEOUT_MS);
+      if (idleTimer && typeof idleTimer.unref === 'function') {
+        idleTimer.unref();
+      }
+    }
+
+    try {
+      throwIfCanceled(runId, {
+        fileName: spec.name,
+        sourceUrl: publicSourceUrl,
+        partSize: partSize(part),
+      });
+    } catch (e) {
+      reject(e);
+      return;
+    }
+
     var received = 0;
     try {
       if (fs.existsSync(part)) received = fs.statSync(part).size;
@@ -710,12 +895,18 @@ function downloadFromSource(
       received = 0;
     }
     if (received === spec.size) {
-      finalizePart(spec, part, target, publicSourceUrl).then(function (
-        selectedSourceUrl
-      ) {
-        resolve({ sourceUrl: selectedSourceUrl });
-      },
-      reject);
+      continueWith(function () {
+        return finalizePart(
+          spec,
+          part,
+          target,
+          publicSourceUrl,
+          runId,
+          progressPercent
+        ).then(function (selectedSourceUrl) {
+          return { sourceUrl: selectedSourceUrl };
+        });
+      });
       return;
     }
     if (received > spec.size) {
@@ -727,7 +918,18 @@ function downloadFromSource(
       removePartMeta(part);
       received = 0;
     }
-    var urlObj = new URL(sourceUrl);
+    var urlObj;
+    try {
+      urlObj = new URL(sourceUrl);
+    } catch (e) {
+      reject(
+        downloadFailure('HTTP', 'invalid-download-url:' + spec.name, {
+          sourceUrl: publicSourceUrl,
+          partSize: partSize(part),
+        })
+      );
+      return;
+    }
     var mod = urlObj.protocol === 'http:' ? http : https;
     var headers = { 'User-Agent': 'PodPlayer-ASR-Model-Installer' };
     if (received > 0) headers.Range = 'bytes=' + received + '-';
@@ -739,53 +941,79 @@ function downloadFromSource(
       secureDone: false,
       responseDone: false,
     };
-    var req = mod.get(sourceUrl, { headers: headers }, function (res) {
+    req = mod.get(sourceUrl, { headers: headers }, function (res) {
+      response = res;
       state.responseDone = true;
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+      try {
+        throwIfCanceled(runId, {
+          fileName: spec.name,
+          sourceUrl: publicSourceUrl,
+          partSize: partSize(part),
+        });
+      } catch (e) {
+        rejectDownload(e, false);
+        return;
+      }
       if (
         res.statusCode >= 300 &&
         res.statusCode < 400 &&
         res.headers.location
       ) {
         if (redirectDepth > 5) {
-          reject(
+          rejectDownload(
             downloadFailure('HTTP', 'download-redirect-loop:' + spec.name, {
               statusCode: res.statusCode,
               sourceUrl: publicSourceUrl,
               partSize: partSize(part),
-            })
+            }),
+            true
           );
           return;
         }
         var nextUrl = new URL(res.headers.location, sourceUrl).href;
-        downloadFromSource(
-          spec,
-          nextUrl,
-          target,
-          progressBase,
-          progressSpan,
-          sourceIndex,
-          sourceCount,
-          redirectDepth + 1,
-          publicSourceUrl
-        ).then(resolve, reject);
+        continueWith(function () {
+          return downloadFromSource(
+            spec,
+            nextUrl,
+            target,
+            progressBase,
+            progressSpan,
+            sourceIndex,
+            sourceCount,
+            redirectDepth + 1,
+            publicSourceUrl,
+            runId
+          );
+        });
         return;
       }
       if (res.statusCode === 416 && partSize(part) === spec.size) {
-        finalizePart(spec, part, target, publicSourceUrl).then(function (
-          selectedSourceUrl
-        ) {
-          resolve({ sourceUrl: selectedSourceUrl });
-        },
-        reject);
+        continueWith(function () {
+          return finalizePart(
+            spec,
+            part,
+            target,
+            publicSourceUrl,
+            runId,
+            progressPercent
+          ).then(function (selectedSourceUrl) {
+            return { sourceUrl: selectedSourceUrl };
+          });
+        });
         return;
       }
       if (res.statusCode !== 200 && res.statusCode !== 206) {
-        reject(
+        rejectDownload(
           downloadFailure('HTTP', 'download-http-' + res.statusCode, {
             statusCode: res.statusCode,
             sourceUrl: publicSourceUrl,
             partSize: partSize(part),
-          })
+          }),
+          true
         );
         return;
       }
@@ -799,13 +1027,20 @@ function downloadFromSource(
         fileName: spec.name,
         updatedAt: new Date().toISOString(),
       });
-      var stream = fs.createWriteStream(part, { flags: append ? 'a' : 'w' });
-      installState.req = req;
+      stream = fs.createWriteStream(part, { flags: append ? 'a' : 'w' });
+      resetIdleTimer();
       res.on('data', function (chunk) {
-        if (installState.cancel) {
-          req.destroy(new Error('canceled'));
+        try {
+          throwIfCanceled(runId, {
+            fileName: spec.name,
+            sourceUrl: publicSourceUrl,
+            partSize: partSize(part),
+          });
+        } catch (e) {
+          req.destroy(e);
           return;
         }
+        resetIdleTimer();
         received += chunk.length;
         var elapsed = Math.max(1, Date.now() - started);
         var filePercent = Math.min(1, received / spec.size);
@@ -823,15 +1058,43 @@ function downloadFromSource(
           speed: Math.round((received * 1000) / elapsed),
         });
       });
+      res.on('aborted', function () {
+        rejectDownload(
+          downloadFailure('stream', 'response-aborted:' + spec.name, {
+            sourceUrl: publicSourceUrl,
+            partSize: partSize(part),
+          }),
+          false
+        );
+      });
+      res.on('error', function (err) {
+        rejectDownload(
+          downloadFailure(
+            'stream',
+            String((err && err.message) || err || 'response-error'),
+            {
+              code: err && err.code,
+              sourceUrl: publicSourceUrl,
+              partSize: partSize(part),
+            }
+          ),
+          false
+        );
+      });
       res.pipe(stream);
       stream.on('finish', function () {
-        stream.close(async function () {
+        if (settled) return;
+        settled = true;
+        cleanupRequest();
+        stream.once('close', async function () {
           try {
             var selectedSourceUrl = await finalizePart(
               spec,
               part,
               target,
-              publicSourceUrl
+              publicSourceUrl,
+              runId,
+              progressPercent
             );
             resolve({ sourceUrl: selectedSourceUrl });
           } catch (e) {
@@ -840,7 +1103,7 @@ function downloadFromSource(
         });
       });
       stream.on('error', function (err) {
-        reject(
+        rejectDownload(
           downloadFailure(
             'stream',
             String((err && err.message) || err || 'stream-error'),
@@ -848,7 +1111,8 @@ function downloadFromSource(
               sourceUrl: publicSourceUrl,
               partSize: partSize(part),
             }
-          )
+          ),
+          false
         );
       });
     });
@@ -870,7 +1134,7 @@ function downloadFromSource(
     });
     req.on('error', function (err) {
       var stage = classifyRequestError(err, state);
-      reject(
+      rejectDownload(
         downloadFailure(
           stage,
           String((err && err.message) || err || 'request-error'),
@@ -883,16 +1147,49 @@ function downloadFromSource(
             remotePort: state.remotePort || '',
             partSize: partSize(part),
           }
-        )
+        ),
+        false
       );
     });
+    if (!setActiveRequest(req, runId)) {
+      req.destroy(
+        downloadFailure('canceled', 'canceled', {
+          code: 'CANCELED',
+          sourceUrl: publicSourceUrl,
+          partSize: partSize(part),
+        })
+      );
+    }
+    connectTimer = setTimeout(function () {
+      if (!req || settled || state.responseDone) return;
+      var stage = classifyRequestError({ code: 'ETIMEDOUT' }, state);
+      req.destroy(
+        downloadFailure(stage, 'request-timeout:' + spec.name, {
+          code: 'ETIMEDOUT',
+          sourceUrl: publicSourceUrl,
+          host: state.host || urlObj.host,
+          address: state.address || '',
+          remoteAddress: state.remoteAddress || '',
+          remotePort: state.remotePort || '',
+          partSize: partSize(part),
+        })
+      );
+    }, CONNECT_TIMEOUT_MS);
+    if (connectTimer && typeof connectTimer.unref === 'function') {
+      connectTimer.unref();
+    }
   });
 }
 
-async function downloadOne(spec, target, progressBase, progressSpan) {
+async function downloadOne(spec, target, progressBase, progressSpan, runId) {
   var sources = downloadSources(spec);
   var failures = [];
   for (var i = 0; i < sources.length; i++) {
+    throwIfCanceled(runId, {
+      fileName: spec.name,
+      sourceUrl: sources[i],
+      partSize: partSize(path.join(downloadsDir(), spec.name + '.part')),
+    });
     try {
       sendProgress({
         status: 'source-start',
@@ -900,6 +1197,19 @@ async function downloadOne(spec, target, progressBase, progressSpan) {
         sourceIndex: i + 1,
         sourceCount: sources.length,
         sourceUrl: sources[i],
+        receivedBytes: partSize(path.join(downloadsDir(), spec.name + '.part')),
+        totalBytes: spec.size,
+        percent: Math.round(
+          (progressBase +
+            progressSpan *
+              Math.min(
+                1,
+                partSize(path.join(downloadsDir(), spec.name + '.part')) /
+                  spec.size
+              )) *
+            100
+        ),
+        speed: 0,
       });
       var selected = await downloadFromSource(
         spec,
@@ -909,14 +1219,21 @@ async function downloadOne(spec, target, progressBase, progressSpan) {
         progressSpan,
         i + 1,
         sources.length,
-        0
+        0,
+        undefined,
+        runId
       );
+      throwIfCanceled(runId, {
+        fileName: spec.name,
+        sourceUrl: (selected && selected.sourceUrl) || sources[i],
+      });
       return {
         ok: true,
         sourceUrl: (selected && selected.sourceUrl) || sources[i],
         sourceIndex: i + 1,
       };
     } catch (e) {
+      if (installState.cancel || e.stage === 'canceled') throw e;
       var failure = {
         fileName: spec.name,
         sourceUrl: sources[i],
@@ -932,7 +1249,15 @@ async function downloadOne(spec, target, progressBase, progressSpan) {
         partSize: e.partSize || 0,
       };
       failures.push(failure);
-      sendProgress(Object.assign({ status: 'source-error' }, failure));
+      sendProgress(
+        Object.assign({ status: 'source-error', speed: 0 }, failure)
+      );
+      await wait(0);
+      throwIfCanceled(runId, {
+        fileName: spec.name,
+        sourceUrl: sources[i],
+        partSize: failure.partSize,
+      });
     }
   }
   var err = downloadFailure(
@@ -948,19 +1273,37 @@ export async function installModel() {
     return {
       ok: false,
       error: REMOTE_DOWNLOAD_BLOCKED_REASON,
-      message:
-        'Remote download is disabled until the full download smoke passes in sandbox.',
+      message: 'Remote download plan is incomplete or disabled.',
       status: statusFromManifest(),
     };
   }
-  if (installState.running) return { ok: false, error: 'install-running' };
-  if (!acquireLock()) return { ok: false, error: 'install-locked' };
-  startLockHeartbeat();
+  if (installState.running) {
+    return {
+      ok: false,
+      error: 'install-running',
+      status: statusFromManifest(),
+    };
+  }
+  if (!acquireLock()) {
+    return {
+      ok: false,
+      error: 'install-locked',
+      status: statusFromManifest(),
+    };
+  }
   installState.running = true;
   installState.cancel = false;
+  installState.req = null;
+  installState.runId += 1;
+  var runId = installState.runId;
   installState.startedAt = Date.now();
+  startLockHeartbeat();
+  sendProgress({ status: 'preparing', percent: 0 });
   var staging = '';
+  var result;
+  var terminalProgress;
   try {
+    throwIfCanceled(runId);
     var dir = getManagedModelDir();
     safeMkdir(dir);
     safeMkdir(downloadsDir());
@@ -968,44 +1311,93 @@ export async function installModel() {
     safeMkdir(staging);
     var selectedSources = {};
     for (var i = 0; i < REQUIRED_FILES.length; i++) {
+      throwIfCanceled(runId);
       var spec = REQUIRED_FILES[i];
       var downloaded = await downloadOne(
         spec,
         path.join(staging, spec.name),
         i / REQUIRED_FILES.length,
-        1 / REQUIRED_FILES.length
+        1 / REQUIRED_FILES.length,
+        runId
       );
       selectedSources[spec.name] = downloaded.sourceUrl;
+      throwIfCanceled(runId, {
+        fileName: spec.name,
+        sourceUrl: downloaded.sourceUrl,
+      });
     }
+    throwIfCanceled(runId);
     writeNotices(staging);
-    var verified = await verifyModelDir(staging);
-    if (!verified.ok) return verified;
+    throwIfCanceled(runId);
+    sendProgress({ status: 'verifying', percent: 99 });
+    var verified = await verifyModelDir(staging, {
+      checkCanceled: function () {
+        throwIfCanceled(runId);
+      },
+    });
+    if (!verified.ok) {
+      throw downloadFailure(
+        'hash',
+        'model-verify-failed:' + (verified.fileName || verified.error),
+        verified
+      );
+    }
+    throwIfCanceled(runId);
     replaceManagedFilesFromStaging(staging);
+    throwIfCanceled(runId);
     var manifest = buildManifest(dir, 'remote-download');
     manifest.selectedSources = selectedSources;
+    throwIfCanceled(runId);
     writeManifest(dir, manifest);
     verifiedUseCache = null;
-    sendProgress({ status: 'done', percent: 100 });
-    return { ok: true, status: statusFromManifest({ ok: true }) };
+    result = { ok: true };
+    terminalProgress = { status: 'done', percent: 100 };
   } catch (e) {
-    sendProgress({
+    terminalProgress = {
       status: installState.cancel ? 'canceled' : 'error',
       error: String((e && e.message) || e),
       failures: e.failures || [],
-    });
-    return {
+    };
+    result = {
       ok: false,
       error: installState.cancel ? 'canceled' : String((e && e.message) || e),
       downloadFailures: e.failures || [],
-      status: statusFromManifest(),
     };
   } finally {
     installState.running = false;
-    installState.req = null;
+    if (installState.runId === runId) installState.req = null;
     stopLockHeartbeat();
     if (staging) rmDir(staging);
     releaseLock();
   }
+  try {
+    result.status = statusFromManifest(result.ok ? { ok: true } : undefined);
+  } catch (e) {
+    result.status = statusSafe();
+  }
+  sendProgress(terminalProgress);
+  return result;
+}
+
+export function cancelModelInstall() {
+  if (!installState.running) {
+    return { ok: true, status: statusFromManifest() };
+  }
+  installState.cancel = true;
+  sendProgress({ status: 'canceling' });
+  var req = installState.req;
+  if (req) {
+    try {
+      req.destroy(
+        downloadFailure('canceled', 'canceled', {
+          code: 'CANCELED',
+        })
+      );
+    } catch (e) {
+      /* request is already closing */
+    }
+  }
+  return { ok: true, status: statusFromManifest() };
 }
 
 function statusSafe() {
@@ -1050,13 +1442,7 @@ export function registerAsrModelIpc(getWindow) {
 
   ipcMain.handle('asr:modelCancelInstall', async function () {
     try {
-      installState.cancel = true;
-      try {
-        if (installState.req) installState.req.destroy(new Error('canceled'));
-      } catch (e) {
-        /* ignore */
-      }
-      return { ok: true, status: statusFromManifest() };
+      return cancelModelInstall();
     } catch (e) {
       return errorResult(e);
     }

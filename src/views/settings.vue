@@ -252,6 +252,8 @@
             <template v-if="asrModel.modelDir">
               <br />{{ asrModel.modelDir }}
             </template>
+            <br />联网下载约 240 MB；官方 HuggingFace 不可达时可能使用
+            hf-mirror.com。只部署模型，不会自动生成文稿，也不会调用 DeepSeek。
           </div>
         </div>
         <div class="right asr-model-actions">
@@ -279,12 +281,19 @@
       </div>
       <div v-if="isElectron && asrModel.installing" class="item asr-model-item">
         <div class="left">
-          <div class="title">模型下载中</div>
+          <div class="title">{{ asrInstallStatusText }}</div>
           <div class="description">
             {{ asrModel.progress.fileName || '准备中' }}
             · {{ asrModel.progress.percent || 0 }}%
+            <template v-if="asrModel.progress.totalBytes">
+              · {{ formatBytes(asrModel.progress.receivedBytes || 0) }} /
+              {{ formatBytes(asrModel.progress.totalBytes) }}
+            </template>
             <template v-if="asrModel.progress.speed">
               · {{ formatBytes(asrModel.progress.speed) }}/s
+            </template>
+            <template v-if="asrModel.progress.sourceUrl">
+              <br />当前来源：{{ formatAsrSource(asrModel.progress.sourceUrl) }}
             </template>
           </div>
         </div>
@@ -954,12 +963,8 @@ export default {
       return !!this.asrModel.remoteDownloadAvailable;
     },
     asrDownloadTitle() {
-      if (this.asrDownloadAvailable) return '下载并校验 SenseVoiceSmall 模型';
-      if (
-        this.asrModel.remoteDownloadBlockedReason === 'download-smoke-failed'
-      ) {
-        return '模型来源已确认，但远程下载链路尚未通过 sandbox 验证';
-      }
+      if (this.asrDownloadAvailable)
+        return '联网下载约 240 MB 并校验 SenseVoiceSmall 模型';
       return '下载源、hash 或 license 尚未完全确认，当前请先选择本地模型目录';
     },
     asrModelStatusText() {
@@ -977,15 +982,19 @@ export default {
         return '路径不可用或文件不完整，请重新校验或选择本地目录';
       }
       if (this.asrModel.error) return '校验失败：' + this.asrModel.error;
-      if (
-        this.asrModel.remoteDownloadBlockedReason === 'download-smoke-failed'
-      ) {
-        return '未安装。远程下载链路待验证，可先选择已存在的本地模型目录。';
-      }
       if (!this.asrDownloadAvailable) {
         return '未安装。远程下载源待确认，可先选择已存在的本地模型目录。';
       }
       return '未安装。点击一键部署后才会下载模型，不会自动转写。';
+    },
+    asrInstallStatusText() {
+      const status = this.asrModel.progress.status;
+      if (status === 'verifying') return '模型校验中';
+      if (status === 'source-start') return '正在连接模型源';
+      if (status === 'source-error') return '正在切换备用源';
+      if (status === 'canceling') return '正在取消';
+      if (status === 'preparing') return '正在准备模型部署';
+      return '模型下载中';
     },
     showUserInfo() {
       return isLooseLoggedIn() && this.data.user.nickname;
@@ -1307,18 +1316,20 @@ export default {
       if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
       return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
     },
+    formatAsrSource(sourceUrl) {
+      try {
+        return new URL(sourceUrl).host;
+      } catch (e) {
+        return '';
+      }
+    },
     bindAsrModelProgress() {
       if (this._asrModelOff) return;
       this._asrModelOff = onModelInstallProgress(p => {
-        this.asrModel.installing =
-          p.status === 'downloading' || p.status === 'verifying';
-        this.asrModel.progress = p || {};
-        if (
-          p.status === 'done' ||
-          p.status === 'error' ||
-          p.status === 'canceled'
-        ) {
-          this.asrModel.installing = false;
+        const terminal = ['done', 'error', 'canceled'].includes(p.status);
+        this.asrModel.installing = !terminal;
+        this.asrModel.progress = Object.assign({}, this.asrModel.progress, p);
+        if (terminal) {
           this.refreshAsrModelStatus();
         }
       });
@@ -1361,9 +1372,8 @@ export default {
       else this.showToast('模型部署失败：' + ((res && res.error) || 'unknown'));
     },
     async cancelAsrModelInstall() {
-      await cancelModelInstall();
-      this.asrModel.installing = false;
-      await this.refreshAsrModelStatus();
+      const res = await cancelModelInstall();
+      if (res && res.status) this.applyAsrModelStatus(res.status);
     },
     async selectAsrModelDir() {
       const res = await selectLocalModelDir();
