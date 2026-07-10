@@ -1,7 +1,59 @@
 const webpack = require('webpack');
 const path = require('path');
+const fs = require('fs');
 function resolve(dir) {
   return path.join(__dirname, dir);
+}
+
+const sherpaPlatform = {
+  win32: 'win',
+  darwin: 'darwin',
+  linux: 'linux',
+}[process.platform];
+const sherpaArch = ['x64', 'arm64', 'ia32'].includes(process.arch)
+  ? process.arch
+  : '';
+const sherpaNativePackage =
+  sherpaPlatform && sherpaArch
+    ? `sherpa-onnx-${sherpaPlatform}-${sherpaArch}`
+    : '';
+const sherpaNativePackagePath = sherpaNativePackage
+  ? path.join(__dirname, 'node_modules', sherpaNativePackage)
+  : '';
+const asrExtraResources = [
+  {
+    from: 'src/electron/asrWorker.js',
+    to: 'asrWorker.js',
+  },
+  {
+    from: 'node_modules/sherpa-onnx-node',
+    to: 'node_modules/sherpa-onnx-node',
+  },
+  {
+    from: 'node_modules/ffmpeg-static',
+    to: 'node_modules/ffmpeg-static',
+  },
+  {
+    from: 'THIRD_PARTY_NOTICES.md',
+    to: 'THIRD_PARTY_NOTICES.md',
+  },
+  {
+    from: 'third_party/licenses',
+    to: 'third-party-licenses',
+  },
+];
+if (sherpaNativePackage && fs.existsSync(sherpaNativePackagePath)) {
+  asrExtraResources.splice(2, 0, {
+    from: path.join('node_modules', sherpaNativePackage),
+    to: path.join('node_modules', sherpaNativePackage),
+  });
+}
+if (
+  process.platform === 'win32' &&
+  process.arch === 'x64' &&
+  !fs.existsSync(sherpaNativePackagePath)
+) {
+  throw new Error('Missing required ASR native package: sherpa-onnx-win-x64');
 }
 
 module.exports = {
@@ -97,6 +149,12 @@ module.exports = {
         copyright: 'Copyright © PodPlayer',
         // compression: "maximum", // 机器好的可以打开，配置压缩，开启后会让 .AppImage 格式的客户端启动缓慢
         asar: true,
+        asarUnpack: [
+          'node_modules/sherpa-onnx-node/**/*',
+          'node_modules/sherpa-onnx-*/**/*',
+          'node_modules/ffmpeg-static/**/*',
+        ],
+        extraResources: asrExtraResources,
         publish: [
           {
             provider: 'github',
@@ -168,7 +226,11 @@ module.exports = {
         dmg: {
           icon: 'build/icons/icon.icns',
         },
+        portable: {
+          artifactName: '${productName}-Portable-${version}-${arch}.${ext}',
+        },
         nsis: {
+          artifactName: '${productName}-Setup-${version}-${arch}.${ext}',
           // [安装体验] 引导式(向导)安装而非一键安装：让用户能看到/选择安装位置，但不繁琐
           //   （perMachine 跳过"为谁安装"选择页 → 向导仅「选位置→安装→完成」三步）。
           oneClick: false,

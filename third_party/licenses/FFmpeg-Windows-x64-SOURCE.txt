@@ -1,0 +1,11 @@
+PodPlayer 0.5.0 FFmpeg source and license record
+
+npm package: ffmpeg-static@5.3.0
+Packaged binary: ffmpeg.exe
+Binary build: FFmpeg 6.1.1-essentials_build-www.gyan.dev
+Binary license: GNU General Public License version 3
+Corresponding source commit: https://github.com/FFmpeg/FFmpeg/commit/e38092ef93
+
+The complete GPLv3 text is in FFmpeg-GPL-3.0.txt. The packaged
+node_modules/ffmpeg-static directory also retains ffmpeg.exe.LICENSE and
+ffmpeg.exe.README from the fixed dependency installation.

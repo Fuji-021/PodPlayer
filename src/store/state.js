@@ -51,7 +51,7 @@ export default {
     names: JSON.parse(localStorage.getItem('podcastBroken') || '[]'),
   },
   // [B-75] 单集"标记位置"：用户听到喜欢处打点，进度条上显示细蓝标(封面主色)。
-  //   结构 { [episodeId]: [秒,...] }，持久化 localStorage。本集标记 >5 按钮变封面色、>10 变彩虹(彩蛋#2)。
+  //   结构 { [episodeId]: [秒,...] }，持久化 localStorage。本集标记 >3 按钮变封面色、>5 变彩虹(彩蛋#2)。
   podcastMarks: {
     map: JSON.parse(localStorage.getItem('podcastMarks') || '{}'),
   },

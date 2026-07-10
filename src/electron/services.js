@@ -1,5 +1,4 @@
 import clc from 'cli-color';
-import checkAuthToken from '../utils/checkAuthToken';
 import server from '@neteaseapireborn/api/server';
 
 // [事故根治·实例隔离] 端口改为入参（由 background.js 按 PODPLAYER_PROFILE 传入），

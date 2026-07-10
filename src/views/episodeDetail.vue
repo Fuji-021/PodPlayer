@@ -50,7 +50,12 @@
             :class="{ queued: isQueued }"
             @click="onQueue"
           >
-            <svg-icon :icon-class="isQueued ? 'check-circle' : 'layer-plus'" />
+            <span class="queue-icon-wrap">
+              <svg-icon icon-class="layer-plus" class="queue-main-icon" />
+              <span v-if="isQueued" class="queue-done-mark">
+                <svg-icon icon-class="check" />
+              </span>
+            </span>
           </button>
           <!-- [B-31] 下载按钮：未下载 → download；下载中 → 进度%；已下载 → check-circle（点击删除） -->
           <button
@@ -63,6 +68,15 @@
             <span v-if="isDownloading" class="dl-pct">{{
               downloadPercentText
             }}</span>
+          </button>
+          <button
+            v-tip="'跳到文字稿'"
+            type="button"
+            class="mini-btn transcript-jump"
+            @click="scrollToTranscript"
+            @mouseup.stop.prevent="scrollToTranscript"
+          >
+            <svg-icon icon-class="notebook" />
           </button>
           <a
             v-if="episode.link"
@@ -112,6 +126,16 @@
       <div v-else-if="processedNotes" v-html="processedNotes"></div>
       <div v-else class="empty">这一集没有提供 show notes / 节目简介。</div>
     </div>
+
+    <!-- [转文字稿] 单集文字稿面板：状态机（未转录/转录中/已完成/已暂停/失败/缺模型）+
+         虚拟滚动 + 跟随高亮 + 点段跳播（@seek 复用本页 seekToTimestamp 的播放/seek 逻辑）。 -->
+    <TranscriptPanel
+      v-if="episode"
+      ref="transcriptPanel"
+      :episode="episode"
+      :episode-id="episodeId"
+      @seek="seekToTimestamp"
+    />
   </div>
 </template>
 
@@ -134,10 +158,11 @@ import {
 import { sanitizeHtml } from '@/utils/podcast/sanitizeHtml';
 import { getCoverColor } from '@/utils/podcast/coverColor';
 import SvgIcon from '@/components/SvgIcon.vue';
+import TranscriptPanel from '@/components/TranscriptPanel.vue';
 
 export default {
   name: 'EpisodeDetail',
-  components: { SvgIcon },
+  components: { SvgIcon, TranscriptPanel },
   data() {
     return {
       podcast: null,
@@ -542,6 +567,25 @@ export default {
       await removeDownload(this.episode.id);
       this.$store.dispatch('showToast', '已删除下载');
     },
+    scrollToTranscript() {
+      const now = Date.now();
+      if (now - (this._lastTranscriptJumpAt || 0) < 120) return;
+      this._lastTranscriptJumpAt = now;
+      const panel = this.$refs.transcriptPanel;
+      const el = panel && panel.$el;
+      if (!el) return;
+      const scroller = el.closest && el.closest('main');
+      if (scroller && scroller.scrollTo) {
+        const top =
+          el.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top +
+          scroller.scrollTop -
+          12;
+        scroller.scrollTop = Math.max(0, top);
+        return;
+      }
+      if (el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth' });
+    },
     goPodcast() {
       this.$router.push({
         name: 'podcastDetail',
@@ -732,6 +776,36 @@ export default {
     width: 18px;
     height: 18px;
   }
+  .queue-icon-wrap {
+    position: relative;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .queue-main-icon {
+    width: 18px;
+    height: 18px;
+  }
+  .queue-done-mark {
+    position: absolute;
+    right: -2px;
+    bottom: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #27ae60;
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 0 2px var(--color-body-bg);
+    .svg-icon {
+      width: 8px;
+      height: 8px;
+    }
+  }
   &:hover {
     opacity: 1;
     background: var(--color-secondary-bg-for-transparent);
@@ -765,6 +839,9 @@ export default {
       font-weight: 700;
       letter-spacing: 0.2px;
     }
+  }
+  &.transcript-jump {
+    color: var(--color-primary);
   }
 }
 
