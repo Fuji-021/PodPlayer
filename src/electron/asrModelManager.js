@@ -192,17 +192,49 @@ function expectedFilesForManifest() {
   return out;
 }
 
+function readLegalSnapshot(name) {
+  var candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(
+      path.join(process.resourcesPath, 'third-party-licenses', name)
+    );
+  }
+  candidates.push(path.join(process.cwd(), 'third_party', 'licenses', name));
+  candidates.push(
+    path.join(__dirname, '..', '..', 'third_party', 'licenses', name)
+  );
+  for (var i = 0; i < candidates.length; i++) {
+    try {
+      if (fs.existsSync(candidates[i])) {
+        return fs.readFileSync(candidates[i], 'utf8').trim();
+      }
+    } catch (e) {
+      /* try next packaged/development location */
+    }
+  }
+  throw new Error('missing-legal-resource:' + name);
+}
+
 function writeNotices(dir) {
+  var funAsrLicense = readLegalSnapshot('FunASR-MODEL-LICENSE-1.1.txt');
+  var sileroLicense = readLegalSnapshot('Silero-VAD-MIT.txt');
   var license =
     'PodPlayer ASR model notice\n\n' +
-    'SenseVoiceSmall ONNX files are converted from FunAudioLLM/SenseVoiceSmall.\n' +
-    'License: FunASR Model Open Source License Agreement 1.1.\n' +
-    'License URL: https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE\n\n' +
-    'silero_vad.onnx is downloaded from the official sherpa-onnx asr-models release.\n' +
-    'Silero VAD license: MIT License, Copyright (c) 2020-present Silero Team.\n' +
-    'VAD URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx\n';
+    'model.int8.onnx and tokens.txt: FunAudioLLM/SenseVoiceSmall, Alibaba Group; ' +
+    'sherpa-onnx conversion package maintained by Fangjun Kuang and the next-gen Kaldi project.\n' +
+    'Model package: ' +
+    MODEL_VERSION +
+    '\n\n===== FunASR Model Open Source License Agreement 1.1 =====\n\n' +
+    funAsrLicense +
+    '\n\n===== Silero VAD MIT License =====\n\n' +
+    sileroLicense +
+    '\n';
   var notice =
     'Model files are stored outside the application package.\n' +
+    'SenseVoiceSmall attribution: FunAudioLLM / Alibaba Group; conversion package: sherpa-onnx / Fangjun Kuang / next-gen Kaldi.\n' +
+    'FunASR license snapshot: modelscope/FunASR commit 701cef42e91c02048d402b8bcda0d4d973edb270.\n' +
+    'Silero VAD attribution: Copyright (c) 2020-present Silero Team; MIT snapshot from tag v6.0.\n' +
+    'silero_vad.onnx source: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx\n' +
     'Remote deployment tries the official HuggingFace source first and may use hf-mirror.com only as a fallback.\n' +
     'model.int8.onnx, tokens.txt, and silero_vad.onnx must pass pinned sha256 checks before use.\n' +
     'Deploying the model does not start transcription or call DeepSeek.\n' +

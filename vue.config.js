@@ -33,6 +33,14 @@ const asrExtraResources = [
     from: 'node_modules/ffmpeg-static',
     to: 'node_modules/ffmpeg-static',
   },
+  {
+    from: 'THIRD_PARTY_NOTICES.md',
+    to: 'THIRD_PARTY_NOTICES.md',
+  },
+  {
+    from: 'third_party/licenses',
+    to: 'third-party-licenses',
+  },
 ];
 if (sherpaNativePackage && fs.existsSync(sherpaNativePackagePath)) {
   asrExtraResources.splice(2, 0, {
