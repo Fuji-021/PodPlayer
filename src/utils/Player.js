@@ -33,6 +33,10 @@ import { isCreateMpris, isCreateTray } from '@/utils/platform';
 import { Howl, Howler } from 'howler';
 import shuffle from 'lodash/shuffle';
 import { decode as base642Buffer } from '@/utils/base64';
+import {
+  createPlaybackSuspendSnapshot,
+  planPlaybackResume,
+} from '@/utils/powerResumePolicy';
 
 // [D163后续·gap①] 已对某集触发过"本地文件缺失→relink 自愈"的集合：每集每会话只试一次，
 //   避免文件真被删时每次播放都重扫磁盘。
@@ -148,6 +152,14 @@ export default class {
     // howler (https://github.com/goldfire/howler.js)
     this._howler = null;
     Object.defineProperty(this, '_howler', {
+      enumerable: false,
+    });
+    this._currentAudioSource = '';
+    this._powerSuspendSnapshot = null;
+    this._handledPowerResumeToken = 0;
+    Object.defineProperty(this, '_currentAudioSource', { enumerable: false });
+    Object.defineProperty(this, '_powerSuspendSnapshot', { enumerable: false });
+    Object.defineProperty(this, '_handledPowerResumeToken', {
       enumerable: false,
     });
 
@@ -422,6 +434,86 @@ export default class {
       /* ignore */
     }
     return Promise.all(tasks).catch(() => {});
+  }
+  handleSystemSuspend(event) {
+    const payload = event || {};
+    const track = this._currentTrack || {};
+    let progress = Math.max(0, Number(this._progress) || 0);
+    try {
+      const current = this._howler && this._howler.seek();
+      if (typeof current === 'number' && Number.isFinite(current)) {
+        progress = Math.max(progress, current);
+      }
+    } catch (e) {
+      /* keep the last stable progress */
+    }
+    let source = 'unknown';
+    if (String(this._currentAudioSource || '').indexOf('file:') === 0) {
+      source = 'local';
+    } else if (this._nasSourceActive) {
+      source = 'nas';
+    } else if (this._proxyDirectFallback) {
+      source = 'proxy';
+    } else if (this._currentAudioSource) {
+      source = 'remote';
+    }
+    this._powerSuspendSnapshot = createPlaybackSuspendSnapshot({
+      token: payload.token,
+      suspendedAt: payload.at,
+      trackId: track.podcastEpisodeId || track.id,
+      episodeId: track.podcastEpisodeId || '',
+      wasPlaying: this._playing,
+      progress,
+      source,
+      sourceToken: this._playSourceToken,
+    });
+    return this._powerSuspendSnapshot;
+  }
+  handleSystemResume(event) {
+    const snapshot = this._powerSuspendSnapshot;
+    const track = this._currentTrack || {};
+    const currentTrackId = track.podcastEpisodeId || track.id;
+    const node =
+      this._howler && this._howler._sounds[0]
+        ? this._howler._sounds[0]._node
+        : null;
+    const loaded = this._howler && this._howler.state() === 'loaded';
+    const nodeUsable = !!(
+      node &&
+      !node.error &&
+      (!loaded || typeof node.readyState !== 'number' || node.readyState >= 2)
+    );
+    const plan = planPlaybackResume({
+      snapshot,
+      event,
+      handledToken: this._handledPowerResumeToken,
+      currentTrackId,
+      currentPlaying: this._playing,
+      nodeUsable,
+    });
+    if (plan.consume && snapshot) {
+      this._handledPowerResumeToken = snapshot.token;
+    }
+    if (plan.action !== 'recover') {
+      return Promise.resolve({ ok: true, skipped: plan.reason });
+    }
+    if (!snapshot.episodeId) {
+      return Promise.resolve({ ok: true, skipped: 'non-podcast' });
+    }
+
+    return this._recoverCurrentSource(plan.progress, true, {
+      force: true,
+      resolveFresh: true,
+      autoplay: plan.autoplay,
+    }).then(recovered => {
+      if (recovered) return { ok: true, recovered: true };
+      if (snapshot.wasPlaying) {
+        this._setPlaying(false);
+        store.commit('setAudioBuffering', false);
+        store.dispatch('showToast', '系统唤醒后播放恢复失败，请点击播放重试');
+      }
+      return { ok: false, error: 'resume-recovery-failed' };
+    });
   }
   // [睡眠到点关机] 先 flush(收听缓冲+当前进度)落盘，再请求主进程关机。
   //   主进程仅 Windows、且仅 prod 真关机(dev/sandbox 干跑)。返回 {ok,dryRun?} 供 UI 提示。
@@ -701,6 +793,7 @@ export default class {
     }
     Howler.unload();
     if (myToken !== this._playSourceToken) return;
+    this._currentAudioSource = source || '';
     // [播客改造] 播客音频常见格式为 m4a/aac/mp4，加入 format 嗅探列表。
     this._howler = new Howl({
       src: [source],
@@ -869,16 +962,20 @@ export default class {
   // exact=true：调用方给的是“用户明确要去的目标位置”(拖动/快进快退)，必须精确到该点(含向后拖)，
   //   不能与 _progress 取 max(否则向后拖会被旧位置吃掉)；exact=false(故障自愈)：seek() 可能回 0，
   //   取 max(pos, seek, _progress) 防归零。
-  _recoverCurrentSource(pos, exact = false) {
-    if (this._nasSourceActive) return this._failoverNasToCdn();
-    if (this._proxyDirectFallback) return this._fallbackProxyToDirect();
+  _recoverCurrentSource(pos, exact = false, options = null) {
+    const opts = options || {};
+    if (!opts.resolveFresh && this._nasSourceActive)
+      return this._failoverNasToCdn();
+    if (!opts.resolveFresh && this._proxyDirectFallback)
+      return this._fallbackProxyToDirect();
     const track = this._currentTrack;
     const epId = track?.podcastEpisodeId;
-    if (!track || !track.podcastAudioUrl) return;
+    if (!track || !track.podcastAudioUrl) return Promise.resolve(false);
     // 防重入(解析期) + 防回退循环节流(坏文件每次重建都失败时，至少 4s 才再试一次，不打死循环)。
     const now = Date.now();
-    if (this._mediaRecovering) return;
-    if (this._lastRecoverAt && now - this._lastRecoverAt < 4000) return;
+    if (this._mediaRecovering) return Promise.resolve(true);
+    if (!opts.force && this._lastRecoverAt && now - this._lastRecoverAt < 4000)
+      return Promise.resolve(false);
     this._lastRecoverAt = now;
     this._mediaRecovering = true;
     // 立即停掉卡死的缓冲流光(重建成功后 once('play') 还会再清一次)。
@@ -887,7 +984,8 @@ export default class {
     } catch (e) {
       /* ignore */
     }
-    const wasPlaying = this._playing; // 保留播放/暂停态：暂停时拖动恢复不应强行起播
+    const wasPlaying =
+      typeof opts.autoplay === 'boolean' ? opts.autoplay : this._playing;
     let p = 0;
     try {
       const s = this._howler && this._howler.seek();
@@ -901,19 +999,22 @@ export default class {
         ? Math.max(0, Math.floor(Number(pos) || 0))
         : Math.floor(Math.max(Number(pos) || 0, this._progress || 0));
     }
-    this._getAudioSource(track)
-      .then(source => {
+    return this._getAudioSource(track)
+      .then(async source => {
         // 重建前再校验当前集未变(迟到的 error/stalled 事件若集已切走，绝不把新集打回旧集)。
         if (!source || this._currentTrack?.podcastEpisodeId !== epId) {
-          this._mediaRecovering = false;
-          return;
+          return false;
         }
         // 经 _playAudioSource：受并发令牌(++_playSourceToken)保护，load 后由 seekToOnLoad 补 seek 到 p。
-        this._playAudioSource(source, wasPlaying, p);
-        this._mediaRecovering = false;
+        await this._playAudioSource(source, wasPlaying, p);
+        return true;
       })
       .catch(() => {
+        return false;
+      })
+      .then(result => {
         this._mediaRecovering = false;
+        return result;
       });
   }
   _getAudioSourceBlobURL(data) {
@@ -1659,11 +1760,20 @@ export default class {
       this.volume = 0;
     }
   }
-  setOutputDevice() {
+  async setOutputDevice(deviceId = store.state.settings.outputDevice) {
     if (this._howler?._sounds.length <= 0 || !this._howler?._sounds[0]._node) {
-      return;
+      return { ok: true, pending: true };
     }
-    this._howler?._sounds[0]._node.setSinkId(store.state.settings.outputDevice);
+    const node = this._howler._sounds[0]._node;
+    if (typeof node.setSinkId !== 'function') {
+      return { ok: true, unsupported: true };
+    }
+    try {
+      await node.setSinkId(deviceId || 'default');
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   }
 
   replacePlaylist(

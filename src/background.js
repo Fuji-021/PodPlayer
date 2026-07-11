@@ -7,6 +7,7 @@ import {
   dialog,
   globalShortcut,
   nativeTheme,
+  powerMonitor,
   screen,
 } from 'electron';
 import {
@@ -25,7 +26,12 @@ import { initIpcMain } from './electron/ipcMain.js';
 import { registerPodcastIpc } from './electron/podcastFetch';
 // [NAS] 主进程 NAS 音源桥 IPC（未配置时各 handler 直接返回未就绪，不激活任何网络）
 import { registerNasIpc } from './electron/nasBridge';
-import { registerPodcastDownloadIpc } from './electron/podcastDownload';
+import {
+  registerPodcastDownloadIpc,
+  handlePodcastDownloadsSuspend,
+  handlePodcastDownloadsResume,
+  shutdownPodcastDownloadPowerRecovery,
+} from './electron/podcastDownload';
 import { registerPodcastDiscoverIpc } from './electron/podcastDiscover';
 // [转文字稿] 主进程 ASR IPC（单任务队列 + 子进程编排；模型缺失时优雅降级，不崩）
 import { registerAsrIpc } from './electron/asr';
@@ -161,6 +167,11 @@ class Background {
     this.neteaseMusicAPI = null;
     this.expressApp = null;
     this.willQuitApp = !isMac;
+    this._powerEventsBound = false;
+    this._powerEventSeq = 0;
+    this._activePowerToken = 0;
+    this._onPowerSuspend = null;
+    this._onPowerResume = null;
 
     this.init();
   }
@@ -243,6 +254,51 @@ class Background {
         app.quit();
       });
     }
+  }
+
+  bindPowerEvents() {
+    if (this._powerEventsBound) return;
+    this._powerEventsBound = true;
+    this._onPowerSuspend = () => {
+      const payload = {
+        token: ++this._powerEventSeq,
+        at: Date.now(),
+      };
+      this._activePowerToken = payload.token;
+      handlePodcastDownloadsSuspend(payload);
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.webContents.send('app:power-suspend', payload);
+      }
+      log('power suspend token=' + payload.token);
+    };
+    this._onPowerResume = () => {
+      const token = this._activePowerToken;
+      if (!token) return;
+      this._activePowerToken = 0;
+      const payload = { token: token, at: Date.now() };
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.webContents.send('app:power-resume', payload);
+      }
+      handlePodcastDownloadsResume(payload, () => this.window);
+      log('power resume token=' + token);
+    };
+    powerMonitor.on('suspend', this._onPowerSuspend);
+    powerMonitor.on('resume', this._onPowerResume);
+  }
+
+  unbindPowerEvents() {
+    if (!this._powerEventsBound) return;
+    this._powerEventsBound = false;
+    if (this._onPowerSuspend) {
+      powerMonitor.removeListener('suspend', this._onPowerSuspend);
+    }
+    if (this._onPowerResume) {
+      powerMonitor.removeListener('resume', this._onPowerResume);
+    }
+    this._onPowerSuspend = null;
+    this._onPowerResume = null;
+    this._activePowerToken = 0;
+    shutdownPodcastDownloadPowerRecovery();
   }
 
   createExpressApp() {
@@ -541,6 +597,7 @@ class Background {
       initNotifications(() => this.window);
       // [B-31] 注册 podcast 下载相关 IPC（流式下载 + 进度推送 + 删除）
       registerPodcastDownloadIpc(() => this.window);
+      this.bindPowerEvents();
       // [B-39] 注册首页发现 IPC（热门榜单 + Apple id→feedUrl）
       registerPodcastDiscoverIpc();
       // [转文字稿] 注册 ASR IPC（传 store 以读模型路径设置；与播放/下载解耦）
@@ -614,6 +671,7 @@ class Background {
 
     app.on('before-quit', () => {
       this.willQuitApp = true;
+      this.unbindPowerEvents();
       shutdownAsrModelManager();
     });
 

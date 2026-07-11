@@ -20,6 +20,7 @@ const _waitQueue = []; // 排队等待的 episode 对象
 // [bugfix B] 缓存发起下载时的单集元数据，完成后回写 db.episodes，
 // 让"我的下载"能 join 到（done 的 IPC 回包只带 episodeId/filePath/bytesTotal）
 const _metaCache = new Map(); // episodeId → episode 元数据
+const _powerResumeSet = new Set(); // 睡眠唤醒后同一任务只允许一次自动重入
 
 // [缓存·C3/B] 音频缓存：episodeDownloads 行 auto:true=自动缓存(可淘汰)、否则=手动下载(永不淘汰)。
 //   淘汰只动 auto 行、绝不碰手动下载;删除复用 removeDownload(主进程删文件,删失败不删 DB)。
@@ -38,7 +39,8 @@ export function getDownloadConcurrency() {
 }
 
 // 实际向主进程发起下载（不含并发判断）
-async function _doStart(episode) {
+async function _doStart(episode, context) {
+  const runContext = context || {};
   const isAuto = _autoSet.has(episode.id); // [C3] 自动缓存：全程不进下载 UI(进度条/已下载标记/系统通知)
   // [C3] 自动缓存不写 progressMap → 单集行不显进度条/"下载中"态(缓存应静默,与下载彻底解耦)
   if (!isAuto) {
@@ -91,7 +93,9 @@ async function _doStart(episode) {
     _activeSet.delete(episode.id);
     _autoSet.delete(episode.id); // [C3] 清自动缓存标记,防陈旧标记误标后续手动下载
     store.commit('clearDownloadProgress', episode.id);
-    store.dispatch('showToast', '下载启动失败：' + ((e && e.message) || ''));
+    if (!runContext.powerResume) {
+      store.dispatch('showToast', '下载启动失败：' + ((e && e.message) || ''));
+    }
     _pump();
     return { ok: false };
   }
@@ -100,7 +104,12 @@ async function _doStart(episode) {
     _activeSet.delete(episode.id);
     _autoSet.delete(episode.id); // [C3] 同上
     store.commit('clearDownloadProgress', episode.id);
-    store.dispatch('showToast', '下载启动失败：' + ((res && res.error) || ''));
+    if (!runContext.powerResume) {
+      store.dispatch(
+        'showToast',
+        '下载启动失败：' + ((res && res.error) || '')
+      );
+    }
     _pump();
   }
   return res || { ok: false };
@@ -196,6 +205,25 @@ export function registerDownloadListeners() {
     // [B-52] 释放槽位，拉起排队中的下一个
     _activeSet.delete(p.episodeId);
     _pump();
+  });
+  ipcRenderer.on('podcast:download:resume-needed', async (_e, p) => {
+    if (!p || !p.episodeId || _powerResumeSet.has(p.episodeId)) return;
+    const episode = _metaCache.get(p.episodeId);
+    if (!episode || !_activeSet.has(p.episodeId)) return;
+    _powerResumeSet.add(p.episodeId);
+    try {
+      const result = await _doStart(episode, { powerResume: true });
+      if (!result || result.ok === false) {
+        store.dispatch(
+          'showToast',
+          p.partPreserved
+            ? '系统唤醒后下载未能续传，已保留临时文件'
+            : '系统唤醒后下载恢复失败'
+        );
+      }
+    } finally {
+      _powerResumeSet.delete(p.episodeId);
+    }
   });
   // [缓存·B] 流播缓存代理把某集下满 → 登记为 auto 行(进 LRU/TTL 淘汰)+ pathMap(下次直接 file:// 秒播)。
   //   已是手动下载(auto!==true)的不降级。静默(不弹"下载完成")。登记后跑一次预算淘汰。
@@ -299,6 +327,7 @@ export async function cancelDownload(episodeId) {
     episodeId,
   });
   _activeSet.delete(episodeId);
+  _powerResumeSet.delete(episodeId);
   _autoSet.delete(episodeId); // [C3] 清自动缓存标记
   store.commit('clearDownloadProgress', episodeId);
   _pump();

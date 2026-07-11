@@ -41,6 +41,7 @@ import { ipcRenderer } from './electron/ipcRenderer';
 import { isAccountLoggedIn, isLooseLoggedIn } from '@/utils/auth';
 import Lyrics from './views/lyrics.vue';
 import { mapState } from 'vuex';
+import { installAudioOutputDeviceMonitor } from '@/utils/audioOutputDevices';
 
 export default {
   name: 'App',
@@ -95,7 +96,12 @@ export default {
     },
   },
   created() {
-    if (this.isElectron) ipcRenderer(this);
+    if (this.isElectron) {
+      this._disposeIpcPowerEvents = ipcRenderer(this);
+      this._disposeOutputDeviceMonitor = installAudioOutputDeviceMonitor(
+        this.player
+      );
+    }
     window.addEventListener('keydown', this.handleKeydown);
     // [键盘滚动] 长按连续平滑滚动需要成对的 keyup(松开收尾)与 blur(切窗口防卡在持续滚动)。
     window.addEventListener('keyup', this.handleScrollKeyup);
@@ -103,6 +109,8 @@ export default {
     this.fetchData();
   },
   beforeDestroy() {
+    if (this._disposeIpcPowerEvents) this._disposeIpcPowerEvents();
+    if (this._disposeOutputDeviceMonitor) this._disposeOutputDeviceMonitor();
     window.removeEventListener('keydown', this.handleKeydown);
     window.removeEventListener('keyup', this.handleScrollKeyup);
     window.removeEventListener('blur', this.stopKbScroll);

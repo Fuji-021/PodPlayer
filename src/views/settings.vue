@@ -1722,8 +1722,20 @@ export default {
       await deleteNasProfile(p.id);
       await this.loadNas();
     },
-    getAllOutputDevices() {
-      navigator.mediaDevices.enumerateDevices().then(devices => {
+    async getAllOutputDevices() {
+      const mediaDevices =
+        typeof navigator !== 'undefined' && navigator.mediaDevices;
+      if (
+        !mediaDevices ||
+        typeof mediaDevices.enumerateDevices !== 'function'
+      ) {
+        this.allOutputDevices = [
+          { deviceId: 'default', label: 'settings.permissionRequired' },
+        ];
+        return;
+      }
+      try {
+        const devices = await mediaDevices.enumerateDevices();
         this.allOutputDevices = devices.filter(device => {
           return device.kind == 'audiooutput';
         });
@@ -1740,7 +1752,11 @@ export default {
             },
           ];
         }
-      });
+      } catch (e) {
+        this.allOutputDevices = [
+          { deviceId: 'default', label: 'settings.permissionRequired' },
+        ];
+      }
     },
     logout() {
       doLogout();

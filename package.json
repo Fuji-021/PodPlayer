@@ -26,6 +26,7 @@
     "electron:publish": "vue-cli-service electron:build -mwl -p always",
     "postinstall": "electron-builder install-app-deps",
     "postuninstall": "electron-builder install-app-deps",
+    "test:power-resume": "node scripts/power_resume_smoke.js",
     "prettier": "npx prettier --write ./src",
     "netease_api:run": "npx @neteaseapireborn/api"
   },
