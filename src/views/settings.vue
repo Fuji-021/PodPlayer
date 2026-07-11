@@ -244,7 +244,7 @@
               </div>
             </div>
             <div class="description">
-              扩展海外及英文播客搜索，也可能补充部分中文节目。 需自行申请
+              扩展海外及英文播客搜索，也可能补充部分中文节目。需自行申请
               PodcastIndex 免费密钥。
             </div>
           </div>
@@ -2258,14 +2258,14 @@ h3 {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
   max-width: 100%;
 }
 
 .settings-info-button {
   display: inline-grid;
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
   place-items: center;
   margin: 0;
@@ -2275,7 +2275,7 @@ h3 {
   background: transparent;
   color: var(--color-secondary);
   font-family: Georgia, serif;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
 
@@ -2349,13 +2349,20 @@ h3 {
   }
 }
 
-.settings-primary-action {
+.settings-feature-actions .settings-primary-action {
   margin: 0;
-  background: var(--color-primary-bg);
+  opacity: 1;
+  background: transparent;
   color: var(--color-primary);
 
   &:hover {
-    background: var(--color-primary-bg);
+    background: var(--color-primary-bg-for-transparent);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    background: transparent;
+    cursor: not-allowed;
   }
 }
 
@@ -2365,8 +2372,11 @@ h3 {
   align-items: center;
   gap: 24px;
   margin-top: 12px;
-  padding: 16px 0 0;
-  border-top: 1px solid var(--color-secondary-bg);
+  padding: 14px 16px;
+  border: 1px solid var(--color-secondary-bg);
+  border-radius: 8px;
+  background: var(--color-secondary-bg-for-transparent);
+  color: var(--color-text);
 }
 
 .settings-advanced-copy {
@@ -2380,6 +2390,10 @@ h3 {
 
   .description {
     margin-top: 0.35em;
+    color: var(--color-secondary);
+    font-size: 13px;
+    line-height: 1.55;
+    opacity: 1;
   }
 }
 
