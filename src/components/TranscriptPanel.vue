@@ -272,6 +272,10 @@ import {
   postprocessSegments,
   groupParagraphs,
 } from '@/utils/podcast/transcriptPostprocess';
+import {
+  getQueuedStateFromAsrStatus,
+  getTranscriptEntryBehavior,
+} from '@/utils/podcast/transcriptEntryPolicy';
 
 export default {
   name: 'TranscriptPanel',
@@ -430,51 +434,40 @@ export default {
     },
     // 单集详情入口只消费这个面板给出的动作描述；模型/下载/文稿任务的真实状态仍只在本组件维护。
     entryActionInfo() {
-      if (this.initializing) {
-        return {
-          action: 'focus',
-          shouldScroll: false,
+      const behavior = getTranscriptEntryBehavior({
+        initializing: this.initializing,
+        platformSupported: this.platformSupported,
+        modelReady: this.modelReady,
+        mode: this.mode,
+        hasLocalFile: this.hasLocalFile,
+      });
+      const copy = {
+        loading: {
           label: '文字稿状态加载中',
           tip: '正在读取文字稿状态',
-        };
-      }
-      if (!this.platformSupported) {
-        return {
-          action: 'focus',
-          shouldScroll: false,
+        },
+        unsupported: {
           label: '当前平台不支持文字稿',
           tip: '当前平台暂不支持本地转文字稿',
-        };
-      }
-      if (!this.modelReady) {
-        return {
-          action: 'settings',
-          shouldScroll: false,
+        },
+        'no-model': {
           label: '部署模型后生成',
           tip: '部署本地模型后生成文字稿',
-        };
-      }
-      if (this.mode === 'idle') {
-        return this.hasLocalFile
-          ? {
-              action: 'generate',
-              shouldScroll: false,
-              label: '生成文字稿',
-              tip: '生成文字稿',
-            }
-          : {
-              action: 'focus',
-              shouldScroll: false,
-              label: '下载后生成',
-              tip: '下载本集后可生成文字稿',
-            };
-      }
-      return {
-        action: 'focus',
-        shouldScroll: true,
-        label: '跳到文字稿',
-        tip: '跳到文字稿',
+        },
+        generate: {
+          label: '生成文字稿',
+          tip: '生成文字稿',
+        },
+        'needs-download': {
+          label: '下载后生成',
+          tip: '下载本集后可生成文字稿',
+        },
+        available: {
+          label: '跳到文字稿',
+          tip: '跳到文字稿',
+        },
       };
+      return Object.assign({}, behavior, copy[behavior.reason]);
     },
     downloadLocalPath() {
       const downloads = this.$store.state.podcastDownloads || {};
@@ -699,12 +692,19 @@ export default {
         status = null;
       }
       if (reqId !== this._entryReq || episodeId !== this.episodeId) return;
-      this.modelReady = !!(status && status.modelReady);
-      this.platformSupported = !status || status.platformSupported !== false;
-      if (status && status.isThisQueued) this.queuedLocal = true;
+      this.applyEntryReadinessStatus(status, episodeId);
       const hasLocalFile = await this.checkLocalFile(episodeId);
       if (reqId !== this._entryReq || episodeId !== this.episodeId) return;
       this.hasLocalFile = hasLocalFile || !!this.downloadLocalPath;
+    },
+    applyEntryReadinessStatus(status, episodeId) {
+      this.modelReady = !!(status && status.modelReady);
+      this.platformSupported = !status || status.platformSupported !== false;
+      const queuedState = getQueuedStateFromAsrStatus(status);
+      if (queuedState !== null) {
+        this.queuedLocal = queuedState;
+        this._queuedLocalEpisodeId = episodeId;
+      }
     },
     async refreshLocalFileAvailability() {
       const reqId = (this._localFileReq || 0) + 1;
@@ -749,7 +749,10 @@ export default {
       this._segmentsReq = (this._segmentsReq || 0) + 1;
       const episodeId = this.episodeId;
       this.initializing = true;
-      this.queuedLocal = false;
+      if (this._queuedLocalEpisodeId !== episodeId) {
+        this.queuedLocal = false;
+        this._queuedLocalEpisodeId = episodeId;
+      }
       this.segments = [];
       this.loadingSegs = false;
       this.curIdx = -1;
@@ -770,9 +773,7 @@ export default {
         st = null;
       }
       if (reqId !== this._initReq || episodeId !== this.episodeId) return;
-      this.modelReady = !!(st && st.modelReady);
-      this.platformSupported = !st || st.platformSupported !== false;
-      if (st && st.isThisQueued) this.queuedLocal = true;
+      this.applyEntryReadinessStatus(st, episodeId);
       // 本地音频是否存在（已下载/已缓存）→ 决定能否生成
       const hasLocalFile =
         (await this.checkLocalFile(episodeId)) || !!this.downloadLocalPath;
