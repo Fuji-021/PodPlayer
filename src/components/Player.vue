@@ -817,6 +817,7 @@
                   ref="volControlImm"
                   class="vol-control imm-vol"
                   @click.stop
+                  @wheel="onImmVolumeWheel"
                 >
                   <button-icon
                     :class="{ active: volMenuOpen }"
@@ -830,11 +831,19 @@
                     />
                   </button-icon>
                   <transition name="fade">
+                    <span
+                      v-if="immVolFeedbackVisible && !volMenuOpen"
+                      class="imm-vol-feedback"
+                      aria-live="polite"
+                    >
+                      {{ volPercent }}%
+                    </span>
+                  </transition>
+                  <transition name="fade">
                     <div
                       v-if="volMenuOpen"
-                      class="vol-menu"
+                      class="vol-menu imm-vol-menu"
                       @click.stop
-                      @wheel.prevent="onVolumeWheel"
                     >
                       <div class="vol-slider">
                         <span class="v-label">音量 {{ volPercent }}%</span>
@@ -844,7 +853,9 @@
                             :min="0"
                             :max="1"
                             :interval="0.01"
-                            :height="4"
+                            direction="btt"
+                            :height="132"
+                            :width="4"
                             :drag-on-click="true"
                             :duration="0"
                             tooltip="none"
@@ -986,6 +997,7 @@ export default {
       // [沉浸式播放页] 音量弹窗(沉浸页专用：点击弹滑条，区别于 bar 的常驻滑条)
       volMenuOpen: false,
       volOutsideListener: null,
+      immVolFeedbackVisible: false,
       immTooltipVisible: false,
     };
   },
@@ -1270,6 +1282,7 @@ export default {
     // [沉浸式播放页 P0] 卸载时若沉浸页还开着，恢复全局滚动 + 关队列/音量面板监听(防泄漏) + 清 body 标记
     this.closeQueuePanel();
     this.closeVolMenu();
+    this.clearImmVolumeFeedback();
     if (this.immersiveOpen) {
       this.$store.commit('enableScrolling', true);
       if (typeof document !== 'undefined') {
@@ -1321,6 +1334,42 @@ export default {
       const next = Math.max(0, Math.min(1, this.volume + delta));
       // 用 setter 触发 player.volume = next（已带 howler.volume 同步）
       this.volume = Math.round(next * 100) / 100;
+    },
+    normalizeWheelDelta(e) {
+      let delta = Number(e && e.deltaY) || 0;
+      if (e && e.deltaMode === 1) delta *= 16;
+      else if (e && e.deltaMode === 2) delta *= 120;
+      return delta;
+    },
+    showImmVolumeFeedback() {
+      this.immVolFeedbackVisible = true;
+      clearTimeout(this._immVolFeedbackTimer);
+      this._immVolFeedbackTimer = setTimeout(() => {
+        this.immVolFeedbackVisible = false;
+        this._immVolFeedbackTimer = null;
+      }, 720);
+    },
+    clearImmVolumeFeedback() {
+      clearTimeout(this._immVolFeedbackTimer);
+      this._immVolFeedbackTimer = null;
+      this.immVolFeedbackVisible = false;
+    },
+    onImmVolumeWheel(e) {
+      const wheelDelta = this.normalizeWheelDelta(e);
+      if (!wheelDelta) return;
+      // 只有命中沉浸页音量控件才接管本次滚轮；其余区域的页面滚动不受影响。
+      e.preventDefault();
+      e.stopPropagation();
+      const now = Date.now();
+      if (now - (this._immVolWheelAt || 0) < 80) return;
+      this._immVolWheelAt = now;
+      const step = 0.02;
+      const next = Math.max(
+        0,
+        Math.min(1, this.volume + (wheelDelta < 0 ? step : -step))
+      );
+      if (next !== this.volume) this.volume = Math.round(next * 100) / 100;
+      this.showImmVolumeFeedback();
     },
     // [播客改造 A-7.1] 点击爱心：播客 → 本地收藏切换；网易云 → 原 likeATrack action
     toggleFavorite() {
@@ -2015,6 +2064,7 @@ export default {
         this._immKeyHandler = null;
       }
       this.immTooltipVisible = false;
+      this.clearImmVolumeFeedback();
       // [沉浸页·文稿] 关沉浸页 → 收起文稿并卸载组件(下次重开重新挂)；可用性置假待重开时重测
       this.immTranscriptOpen = false;
       this.immTranscriptMounted = false;
@@ -2093,8 +2143,7 @@ export default {
         /* ignore */
       }
     },
-    // [沉浸式播放页] 音量弹窗：点击切换、点外部关闭(同倍速/睡眠模式)。取消一键静音——
-    //   要静音把滑条拖到底即可。滚轮在弹窗内调节(onVolumeWheel 复用 bar 逻辑)。
+    // [沉浸式播放页] 音量弹层：点击切换、点外部关闭；滚轮由明确命中区接管但不会自动展开。
     toggleVolMenu() {
       this.volMenuOpen ? this.closeVolMenu() : this.openVolMenu();
     },
@@ -3484,6 +3533,70 @@ export default {
     visibility: visible;
     background-color: var(--color-primary);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  }
+}
+.imm-vol {
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+}
+.imm-vol-feedback {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 7px);
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(29, 30, 34, 0.9);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.imm-vol-menu {
+  right: 0;
+  left: auto;
+  transform: none;
+  width: 64px;
+  min-width: 64px;
+  padding: 10px 12px 12px;
+  color: #fff;
+  background: rgba(29, 30, 34, 0.94);
+  border-radius: 8px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+  -webkit-app-region: no-drag;
+  .vol-slider {
+    align-items: center;
+    gap: 8px;
+  }
+  .v-label {
+    min-width: 40px;
+    text-align: center;
+    color: inherit;
+    opacity: 0.9;
+  }
+  .vol-track {
+    width: 16px;
+    height: 132px;
+    min-height: 132px;
+    justify-content: center;
+  }
+  .vol-track .vue-slider {
+    flex: none;
+  }
+  ::v-deep .vue-slider-rail {
+    background-color: rgba(255, 255, 255, 0.28);
+  }
+  ::v-deep .vue-slider-process {
+    background-color: var(--color-primary);
   }
 }
 // 三大金刚：无圆圈、播放键更大、居中、组内稍疏。

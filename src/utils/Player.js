@@ -220,8 +220,11 @@ export default class {
     return this._volume;
   }
   set volume(volume) {
-    this._volume = volume;
-    this._howler?.volume(volume);
+    const next = Math.max(0, Math.min(1, Number(volume) || 0));
+    // 记住最近可听音量：拖到 0 后 mute() 仍能恢复；从静音滚高后也以新值为准。
+    if (next > 0) this._volumeBeforeMuted = next;
+    this._volume = next;
+    this._howler?.volume(next);
   }
   // [播客改造] 播放倍速：底层走 howler.rate()（HTML5 模式下用 audio.playbackRate）
   get playbackRate() {
