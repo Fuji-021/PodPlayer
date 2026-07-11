@@ -586,7 +586,7 @@ export default {
       const el = panel && panel.$el;
       if (!el) return;
       const info = await panel.activateDetailEntry();
-      if (!info || info.action !== 'settings') this.scrollToTranscript();
+      if (info && info.shouldScroll) this.scrollToTranscript();
     },
     scrollToTranscript() {
       const panel = this.$refs.transcriptPanel;

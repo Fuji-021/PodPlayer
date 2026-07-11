@@ -433,6 +433,7 @@ export default {
       if (this.initializing) {
         return {
           action: 'focus',
+          shouldScroll: false,
           label: '文字稿状态加载中',
           tip: '正在读取文字稿状态',
         };
@@ -440,6 +441,7 @@ export default {
       if (!this.platformSupported) {
         return {
           action: 'focus',
+          shouldScroll: false,
           label: '当前平台不支持文字稿',
           tip: '当前平台暂不支持本地转文字稿',
         };
@@ -447,6 +449,7 @@ export default {
       if (!this.modelReady) {
         return {
           action: 'settings',
+          shouldScroll: false,
           label: '部署模型后生成',
           tip: '部署本地模型后生成文字稿',
         };
@@ -455,20 +458,28 @@ export default {
         return this.hasLocalFile
           ? {
               action: 'generate',
+              shouldScroll: false,
               label: '生成文字稿',
               tip: '生成文字稿',
             }
           : {
               action: 'focus',
+              shouldScroll: false,
               label: '下载后生成',
               tip: '下载本集后可生成文字稿',
             };
       }
       return {
         action: 'focus',
+        shouldScroll: true,
         label: '跳到文字稿',
         tip: '跳到文字稿',
       };
+    },
+    downloadLocalPath() {
+      const downloads = this.$store.state.podcastDownloads || {};
+      const pathMap = downloads.pathMap || {};
+      return pathMap[this.episodeId] || '';
     },
     estCharsPerLine() {
       const w = this.listWidth || 760;
@@ -565,6 +576,15 @@ export default {
     episodeId() {
       this.init();
     },
+    downloadLocalPath(path, previousPath) {
+      if (path) {
+        this.hasLocalFile = true;
+        return;
+      }
+      if (previousPath || !this.initializing) {
+        this.refreshLocalFileAvailability();
+      }
+    },
     entryActionInfo: {
       immediate: true,
       handler(info) {
@@ -616,6 +636,8 @@ export default {
   },
   beforeDestroy() {
     this._initReq = (this._initReq || 0) + 1;
+    this._entryReq = (this._entryReq || 0) + 1;
+    this._localFileReq = (this._localFileReq || 0) + 1;
     this._segmentsReq = (this._segmentsReq || 0) + 1;
     this._rowReq = (this._rowReq || 0) + 1;
     if (this._onEsc) window.removeEventListener('keydown', this._onEsc);
@@ -682,7 +704,27 @@ export default {
       if (status && status.isThisQueued) this.queuedLocal = true;
       const hasLocalFile = await this.checkLocalFile(episodeId);
       if (reqId !== this._entryReq || episodeId !== this.episodeId) return;
-      this.hasLocalFile = hasLocalFile;
+      this.hasLocalFile = hasLocalFile || !!this.downloadLocalPath;
+    },
+    async refreshLocalFileAvailability() {
+      const reqId = (this._localFileReq || 0) + 1;
+      this._localFileReq = reqId;
+      const episodeId = this.episodeId;
+      if (!episodeId) {
+        this.hasLocalFile = false;
+        return false;
+      }
+      const hasLocalFile =
+        (await this.checkLocalFile(episodeId)) || !!this.downloadLocalPath;
+      if (
+        reqId !== this._localFileReq ||
+        episodeId !== this.episodeId ||
+        this._isBeingDestroyed
+      ) {
+        return false;
+      }
+      this.hasLocalFile = hasLocalFile || !!this.downloadLocalPath;
+      return hasLocalFile;
     },
     async activateDetailEntry() {
       await this.refreshEntryReadiness();
@@ -732,11 +774,12 @@ export default {
       this.platformSupported = !st || st.platformSupported !== false;
       if (st && st.isThisQueued) this.queuedLocal = true;
       // 本地音频是否存在（已下载/已缓存）→ 决定能否生成
-      const hasLocalFile = await this.checkLocalFile(episodeId);
+      const hasLocalFile =
+        (await this.checkLocalFile(episodeId)) || !!this.downloadLocalPath;
       if (reqId !== this._initReq || episodeId !== this.episodeId) return;
       const dbRow = await getTranscript(episodeId).catch(() => null);
       if (reqId !== this._initReq || episodeId !== this.episodeId) return;
-      this.hasLocalFile = hasLocalFile;
+      this.hasLocalFile = hasLocalFile || !!this.downloadLocalPath;
       this.dbRow = dbRow;
       this.initializing = false;
       if (this.mode === 'done' || this.mode === 'paused') {

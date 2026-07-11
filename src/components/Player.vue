@@ -846,7 +846,7 @@
                       @click.stop
                     >
                       <div class="vol-slider">
-                        <span class="v-label">音量 {{ volPercent }}%</span>
+                        <span class="v-label">{{ volPercent }}%</span>
                         <div class="vol-track">
                           <vue-slider
                             v-model="volume"
@@ -3565,9 +3565,9 @@ export default {
   right: 0;
   left: auto;
   transform: none;
-  width: 64px;
-  min-width: 64px;
-  padding: 10px 12px 12px;
+  width: 46px;
+  min-width: 46px;
+  padding: 8px 8px 10px;
   color: #fff;
   background: rgba(29, 30, 34, 0.94);
   border-radius: 8px;
@@ -3578,7 +3578,7 @@ export default {
     gap: 8px;
   }
   .v-label {
-    min-width: 40px;
+    min-width: 0;
     text-align: center;
     color: inherit;
     opacity: 0.9;
