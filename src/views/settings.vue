@@ -211,84 +211,194 @@
         </div>
       </div>
 
-      <!-- [资源池] PodcastIndex：开放播客索引(免费 key)，作为 Apple/iTunes 都搜不到的节目(如耳听为真/
-           红衣大叔)的解析与搜索兜底源。key/secret 仅存本地 localStorage、随请求传主进程做 sha1 鉴权，绝不进 git。 -->
       <h3 v-if="isElectron">{{ $t('settings.pod.podcastIndex') }}</h3>
-      <div v-if="isElectron" class="item">
-        <div class="left">
-          <div class="title">{{ $t('settings.pod.podcastIndexKey') }}</div>
-          <div class="description">{{
-            $t('settings.pod.podcastIndexDesc')
-          }}</div>
-        </div>
-        <div class="right">
-          <input
-            v-model="podcastIndexKey"
-            class="text-input margin-right-0"
-            :placeholder="$t('settings.pod.podcastIndexKeyPlaceholder')"
-          />
-        </div>
-      </div>
-      <div v-if="isElectron" class="item">
-        <div class="left">
-          <div class="title">{{ $t('settings.pod.podcastIndexSecret') }}</div>
-        </div>
-        <div class="right">
-          <input
-            v-model="podcastIndexSecret"
-            type="password"
-            class="text-input margin-right-0"
-            :placeholder="$t('settings.pod.podcastIndexSecretPlaceholder')"
-          />
-        </div>
-      </div>
-
-      <h3 v-if="isElectron">本地转文字稿</h3>
-      <div v-if="isElectron" class="item asr-model-item">
-        <div class="left">
-          <div class="title">SenseVoiceSmall 模型部署</div>
-          <div class="description">
-            {{ asrModelStatusText }}
-            <template v-if="asrModel.modelDir">
-              <br />{{ asrModel.modelDir }}
-            </template>
-            <br />联网下载约 240 MB；官方 HuggingFace 不可达时可能使用
-            hf-mirror.com。只部署模型，不会自动生成文稿，也不会调用 DeepSeek。
+      <section v-if="isElectron" class="settings-feature-block">
+        <div class="item settings-feature-item">
+          <div class="left">
+            <div class="settings-feature-title">
+              <div class="title">PodcastIndex 播客搜索</div>
+              <button
+                class="settings-info-button"
+                type="button"
+                aria-label="PodcastIndex 说明"
+                :aria-expanded="settingsInfoPopover === 'podcast-index'"
+                aria-controls="podcast-index-info"
+                @mousedown.stop
+                @click.stop="toggleSettingsInfo('podcast-index')"
+              >
+                i
+              </button>
+              <div
+                v-if="settingsInfoPopover === 'podcast-index'"
+                id="podcast-index-info"
+                class="settings-info-popover"
+                role="note"
+                @mousedown.stop
+                @click.stop
+              >
+                <strong>关于 PodcastIndex</strong>
+                <p>
+                  需自行申请 PodcastIndex 免费密钥。它用于扩展搜索，
+                  不保证覆盖所有缺失节目；密钥只保存在本机。
+                </p>
+              </div>
+            </div>
+            <div class="description">
+              扩展海外及英文播客搜索，也可能补充部分中文节目。 需自行申请
+              PodcastIndex 免费密钥。
+            </div>
+          </div>
+          <div class="right settings-feature-actions">
+            <span class="settings-status">{{
+              podcastIndexConfigured ? '已配置' : '未配置'
+            }}</span>
+            <button
+              class="settings-primary-action"
+              type="button"
+              :aria-expanded="showPodcastIndexAdvanced"
+              aria-controls="podcast-index-advanced"
+              @click="togglePodcastIndexAdvanced"
+            >
+              {{ podcastIndexActionLabel }}
+            </button>
           </div>
         </div>
-        <div class="right asr-model-actions">
-          <span v-tip="asrDownloadTitle" class="asr-model-action-wrap">
-            <button
-              :disabled="
-                !asrDownloadAvailable || asrModel.installing || asrModel.ready
-              "
-              :aria-label="asrDownloadTitle"
-              @click="installAsrModel"
-            >
-              一键部署模型
-            </button>
-          </span>
-          <button
-            :disabled="asrModel.installing || !asrModel.platformSupported"
-            @click="selectAsrModelDir"
-          >
-            选择本地模型目录
-          </button>
-          <button
-            :disabled="asrModel.installing || !asrModel.platformSupported"
-            @click="verifyAsrModel"
-          >
-            重新校验
-          </button>
-          <button
-            class="danger"
-            :disabled="!asrModel.ready || asrModel.installing"
-            @click="removeAsrModel"
-          >
-            删除模型
-          </button>
+        <div
+          v-if="showPodcastIndexAdvanced"
+          id="podcast-index-advanced"
+          class="settings-advanced-panel"
+        >
+          <div class="settings-advanced-copy">
+            <div class="title">高级配置</div>
+            <div class="description">仅在需要扩展搜索时填写。</div>
+          </div>
+          <div class="settings-advanced-controls settings-secret-controls">
+            <label class="settings-field">
+              <span>API Key</span>
+              <input
+                v-model="podcastIndexKey"
+                class="text-input margin-right-0"
+                :placeholder="$t('settings.pod.podcastIndexKeyPlaceholder')"
+              />
+            </label>
+            <label class="settings-field">
+              <span>API Secret</span>
+              <input
+                v-model="podcastIndexSecret"
+                type="password"
+                class="text-input margin-right-0"
+                :placeholder="$t('settings.pod.podcastIndexSecretPlaceholder')"
+              />
+            </label>
+          </div>
         </div>
-      </div>
+      </section>
+
+      <h3 v-if="isElectron">本地转文字稿</h3>
+      <section v-if="isElectron" class="settings-feature-block">
+        <div class="item settings-feature-item">
+          <div class="left">
+            <div class="settings-feature-title">
+              <div class="title">本地转写模型</div>
+              <button
+                class="settings-info-button"
+                type="button"
+                aria-label="本地转写模型说明"
+                :aria-expanded="settingsInfoPopover === 'asr-model'"
+                aria-controls="asr-model-info"
+                @mousedown.stop
+                @click.stop="toggleSettingsInfo('asr-model')"
+              >
+                i
+              </button>
+              <div
+                v-if="settingsInfoPopover === 'asr-model'"
+                id="asr-model-info"
+                class="settings-info-popover"
+                role="note"
+                @mousedown.stop
+                @click.stop
+              >
+                <strong>本地模型部署</strong>
+                <p>
+                  一键部署会联网下载约 240 MB 模型；官方 HuggingFace
+                  不可达时可能使用
+                  hf-mirror.com。只部署模型，不会自动生成文字稿或调用联网 AI。
+                </p>
+              </div>
+            </div>
+            <div class="description">
+              部署模型后，可在已下载单集上手动生成文字稿。
+            </div>
+          </div>
+          <div class="right settings-feature-actions">
+            <span
+              class="settings-status"
+              :class="{ ready: asrModel.ready, warning: asrModel.error }"
+              >{{ asrModelShortStatus }}</span
+            >
+            <button
+              class="settings-primary-action"
+              type="button"
+              :disabled="asrModel.installing || asrModel.status === 'checking'"
+              :aria-expanded="
+                asrPrimaryOpensAdvanced ? showAsrModelAdvanced : null
+              "
+              :aria-controls="
+                asrPrimaryOpensAdvanced ? 'asr-model-advanced' : null
+              "
+              @click="onAsrModelPrimaryAction"
+            >
+              {{ asrPrimaryActionLabel }}
+            </button>
+          </div>
+        </div>
+        <div
+          v-if="showAsrModelAdvanced"
+          id="asr-model-advanced"
+          class="settings-advanced-panel asr-model-advanced"
+        >
+          <div class="settings-advanced-copy">
+            <div class="title">模型管理</div>
+            <div class="description">{{ asrModelStatusText }}</div>
+            <code v-if="asrModel.modelDir" class="settings-model-path">{{
+              asrModel.modelDir
+            }}</code>
+          </div>
+          <div class="settings-advanced-controls asr-model-actions">
+            <span v-tip="asrDownloadTitle" class="asr-model-action-wrap">
+              <button
+                :disabled="
+                  !asrDownloadAvailable || asrModel.installing || asrModel.ready
+                "
+                :aria-label="asrDownloadTitle"
+                @click="installAsrModel"
+              >
+                一键部署模型
+              </button>
+            </span>
+            <button
+              :disabled="asrModel.installing || !asrModel.platformSupported"
+              @click="selectAsrModelDir"
+            >
+              选择本地模型目录
+            </button>
+            <button
+              :disabled="asrModel.installing || !asrModel.platformSupported"
+              @click="verifyAsrModel"
+            >
+              重新校验
+            </button>
+            <button
+              class="danger"
+              :disabled="!asrModel.ready || asrModel.installing"
+              @click="removeAsrModel"
+            >
+              删除模型
+            </button>
+          </div>
+        </div>
+      </section>
       <div v-if="isElectron && asrModel.installing" class="item asr-model-item">
         <div class="left">
           <div class="title">{{ asrInstallStatusText }}</div>
@@ -330,50 +440,97 @@
         </div>
       </div>
 
-      <!-- [B路·AI精修] DeepSeek 接入(可选·默认关·自带 key)。key 仅本地保存(localStorage/electron-store)。 -->
-      <div v-if="isElectron" class="item">
-        <div class="left">
-          <div class="title">AI 文稿精修（DeepSeek）</div>
-          <div class="description">
-            可选。在转文字稿「已优化」之上，用 DeepSeek
-            做<b>段内词汇纠错</b>（同音/近音错字）。开启后点单集文字稿里的「AI
-            优化」即生效；<b>会把本集文稿联网发送到 DeepSeek</b
-            >（约几分钱/集）。留空 = 纯本地，体验不变。
+      <section v-if="isElectron" class="settings-feature-block">
+        <div class="item settings-feature-item">
+          <div class="left">
+            <div class="settings-feature-title">
+              <div class="title">AI 文稿精修</div>
+              <button
+                class="settings-info-button"
+                type="button"
+                aria-label="联网 AI 精修说明"
+                :aria-expanded="settingsInfoPopover === 'ai-refine'"
+                aria-controls="ai-refine-info"
+                @mousedown.stop
+                @click.stop="toggleSettingsInfo('ai-refine')"
+              >
+                i
+              </button>
+              <div
+                v-if="settingsInfoPopover === 'ai-refine'"
+                id="ai-refine-info"
+                class="settings-info-popover"
+                role="note"
+                @mousedown.stop
+                @click.stop
+              >
+                <strong>联网与兼容性</strong>
+                <p>
+                  只有你主动点击精修时，才会发送本集文字稿。默认服务为
+                  DeepSeek， 接口兼容 OpenAI 格式；其它服务尚未经过兼容性认证。
+                </p>
+              </div>
+            </div>
+            <div class="description">
+              仅在你主动点击精修后联网发送本集文字稿。
+            </div>
+          </div>
+          <div class="right settings-feature-actions">
+            <span class="settings-status">{{
+              aiRefineConfigured ? '已配置' : '未配置'
+            }}</span>
+            <button
+              class="settings-primary-action"
+              type="button"
+              :aria-expanded="showAiRefineAdvanced"
+              aria-controls="ai-refine-advanced"
+              @click="toggleAiRefineAdvanced"
+            >
+              {{ aiRefineActionLabel }}
+            </button>
           </div>
         </div>
-        <div class="right">
-          <input
-            v-model="deepseekKey"
-            type="password"
-            class="text-input margin-right-0"
-            placeholder="DeepSeek API Key（仅本地保存，不上传）"
-          />
+        <div
+          v-if="showAiRefineAdvanced"
+          id="ai-refine-advanced"
+          class="settings-advanced-panel"
+        >
+          <div class="settings-advanced-copy">
+            <div class="title">高级设置</div>
+            <div class="description">
+              默认服务为 DeepSeek；模型和 Endpoint 是 OpenAI-compatible
+              高级配置。
+            </div>
+          </div>
+          <div class="settings-advanced-controls settings-ai-controls">
+            <label class="settings-field">
+              <span>API Key</span>
+              <input
+                v-model="deepseekKey"
+                type="password"
+                class="text-input margin-right-0"
+                placeholder="仅保存在本机"
+              />
+            </label>
+            <label class="settings-field">
+              <span>模型</span>
+              <input
+                v-model="deepseekModel"
+                class="text-input margin-right-0"
+                placeholder="deepseek-chat"
+              />
+            </label>
+            <label class="settings-field settings-wide-field">
+              <span>Endpoint</span>
+              <input
+                v-model="deepseekEndpoint"
+                class="text-input margin-right-0"
+                placeholder="https://api.deepseek.com"
+              />
+            </label>
+          </div>
         </div>
-      </div>
-      <div v-if="isElectron && deepseekKey" class="item">
-        <div class="left">
-          <div class="title">AI 模型</div>
-        </div>
-        <div class="right">
-          <input
-            v-model="deepseekModel"
-            class="text-input margin-right-0"
-            placeholder="deepseek-chat"
-          />
-        </div>
-      </div>
-      <div v-if="isElectron && deepseekKey" class="item">
-        <div class="left">
-          <div class="title">AI Endpoint（OpenAI 兼容，可选）</div>
-        </div>
-        <div class="right">
-          <input
-            v-model="deepseekEndpoint"
-            class="text-input margin-right-0"
-            placeholder="https://api.deepseek.com"
-          />
-        </div>
-      </div>
+      </section>
 
       <!-- [§12] 「自定义」段(连接 Last.fm 听歌 scrobble + Discord Rich Presence「正在听」)=
            网易云音乐专属、与播客无关，已删；NAS 入口为独立的「NAS 就近音源」段。 -->
@@ -876,6 +1033,10 @@ export default {
         testMsg: '',
         testOk: false,
       },
+      settingsInfoPopover: '',
+      showPodcastIndexAdvanced: false,
+      showAsrModelAdvanced: false,
+      showAiRefineAdvanced: false,
       asrModel: {
         status: 'checking',
         ready: false,
@@ -991,6 +1152,37 @@ export default {
     },
     asrDownloadAvailable() {
       return !!this.asrModel.remoteDownloadAvailable;
+    },
+    podcastIndexConfigured() {
+      return !!(this.podcastIndexKey && this.podcastIndexSecret);
+    },
+    podcastIndexActionLabel() {
+      return this.podcastIndexConfigured ? '高级设置' : '配置密钥';
+    },
+    aiRefineConfigured() {
+      return !!this.deepseekKey;
+    },
+    aiRefineActionLabel() {
+      return this.aiRefineConfigured ? '高级设置' : '配置服务';
+    },
+    asrModelShortStatus() {
+      if (this.asrModel.installing) return '部署中';
+      if (this.asrModel.status === 'checking') return '检查中';
+      if (!this.asrModel.platformSupported) return '不支持';
+      if (this.asrModel.error) return '校验失败';
+      if (this.asrModel.ready) return '已安装';
+      if (this.asrModel.status === 'path-unavailable') return '路径不可用';
+      return '未安装';
+    },
+    asrPrimaryActionLabel() {
+      if (this.asrModel.installing) return '部署中';
+      if (this.asrModel.status === 'checking') return '检查中';
+      if (this.asrModel.ready) return '管理模型';
+      if (!this.asrModel.platformSupported) return '查看状态';
+      return this.asrDownloadAvailable ? '一键部署模型' : '选择本地目录';
+    },
+    asrPrimaryOpensAdvanced() {
+      return this.asrModel.ready || !this.asrModel.platformSupported;
     },
     asrDownloadTitle() {
       if (this.asrModel.ready) return '模型已经安装并通过校验';
@@ -1315,6 +1507,7 @@ export default {
     },
   },
   created() {
+    this.bindSettingsInfoDismiss();
     if (process.env.IS_ELECTRON) {
       this.getAllOutputDevices();
       this.loadNas();
@@ -1325,6 +1518,7 @@ export default {
     }
   },
   activated() {
+    this.bindSettingsInfoDismiss();
     if (process.env.IS_ELECTRON) {
       this.getAllOutputDevices();
       this.loadNas();
@@ -1335,15 +1529,68 @@ export default {
     }
   },
   deactivated() {
+    this.closeSettingsInfo();
+    this.unbindSettingsInfoDismiss();
     this.stopNasPoll();
     this.unbindAsrModelProgress();
   },
   beforeDestroy() {
+    this.closeSettingsInfo();
+    this.unbindSettingsInfoDismiss();
     this.stopNasPoll();
     this.unbindAsrModelProgress();
   },
   methods: {
     ...mapActions(['showToast']),
+    bindSettingsInfoDismiss() {
+      if (this._settingsInfoDismissBound || typeof document === 'undefined') {
+        return;
+      }
+      this._settingsInfoDismissBound = true;
+      this._onSettingsInfoPointerDown = () => this.closeSettingsInfo();
+      this._onSettingsInfoKeyDown = e => {
+        if (e.key === 'Escape') this.closeSettingsInfo();
+      };
+      document.addEventListener('mousedown', this._onSettingsInfoPointerDown);
+      document.addEventListener('keydown', this._onSettingsInfoKeyDown);
+    },
+    unbindSettingsInfoDismiss() {
+      if (!this._settingsInfoDismissBound || typeof document === 'undefined') {
+        return;
+      }
+      document.removeEventListener(
+        'mousedown',
+        this._onSettingsInfoPointerDown
+      );
+      document.removeEventListener('keydown', this._onSettingsInfoKeyDown);
+      this._settingsInfoDismissBound = false;
+      this._onSettingsInfoPointerDown = null;
+      this._onSettingsInfoKeyDown = null;
+    },
+    closeSettingsInfo() {
+      this.settingsInfoPopover = '';
+    },
+    toggleSettingsInfo(name) {
+      this.settingsInfoPopover = this.settingsInfoPopover === name ? '' : name;
+    },
+    togglePodcastIndexAdvanced() {
+      this.showPodcastIndexAdvanced = !this.showPodcastIndexAdvanced;
+    },
+    toggleAiRefineAdvanced() {
+      this.showAiRefineAdvanced = !this.showAiRefineAdvanced;
+    },
+    async onAsrModelPrimaryAction() {
+      if (this.asrModel.installing) return;
+      if (this.asrModel.ready || !this.asrModel.platformSupported) {
+        this.showAsrModelAdvanced = !this.showAsrModelAdvanced;
+        return;
+      }
+      if (this.asrDownloadAvailable) {
+        await this.installAsrModel();
+        return;
+      }
+      await this.selectAsrModelDir();
+    },
     // [缓存·C1] 占用格式化 + 刷新 + 一键清理（封面 + 发现榜单）
     formatBytes(b) {
       const n = Number(b) || 0;
@@ -1991,9 +2238,190 @@ h3 {
   gap: 24px;
 }
 
+.settings-feature-block {
+  margin: 24px 0;
+
+  > .item {
+    margin: 0;
+  }
+}
+
+.settings-feature-item {
+  gap: 24px;
+
+  .left {
+    min-width: 0;
+  }
+}
+
+.settings-feature-title {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+}
+
+.settings-info-button {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-secondary);
+  font-family: Georgia, serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+
+  &:hover,
+  &[aria-expanded='true'] {
+    background: transparent;
+    color: var(--color-primary);
+    transform: none;
+  }
+}
+
+.settings-info-popover {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 9px);
+  left: 0;
+  width: min(320px, calc(100vw - 64px));
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(29, 30, 34, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  line-height: 1.55;
+
+  &::before {
+    position: absolute;
+    top: -5px;
+    left: 39px;
+    width: 10px;
+    height: 10px;
+    background: inherit;
+    content: '';
+    transform: rotate(45deg);
+  }
+
+  strong,
+  p {
+    position: relative;
+  }
+
+  strong {
+    display: block;
+    margin-bottom: 4px;
+    color: #fff;
+  }
+}
+
+.settings-feature-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.settings-status {
+  min-width: 52px;
+  color: var(--color-secondary);
+  font-size: 13px;
+  text-align: right;
+  white-space: nowrap;
+
+  &.ready {
+    color: #27ae60;
+    font-weight: 600;
+  }
+
+  &.warning {
+    color: #e0a800;
+  }
+}
+
+.settings-primary-action {
+  margin: 0;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+
+  &:hover {
+    background: var(--color-primary-bg);
+  }
+}
+
+.settings-advanced-panel {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.7fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 24px;
+  margin-top: 12px;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--color-secondary-bg);
+}
+
+.settings-advanced-copy {
+  min-width: 0;
+
+  .title {
+    font-size: 14px;
+    font-weight: 600;
+    opacity: 0.85;
+  }
+
+  .description {
+    margin-top: 0.35em;
+  }
+}
+
+.settings-advanced-controls {
+  min-width: 0;
+}
+
+.settings-secret-controls,
+.settings-ai-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-field {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+
+  .text-input {
+    width: 100%;
+    min-width: 0;
+    margin-right: 0;
+    font-size: 14px;
+  }
+}
+
+.settings-wide-field {
+  grid-column: span 2;
+}
+
+.asr-model-advanced {
+  align-items: start;
+}
+
 .asr-model-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
 
@@ -2003,6 +2431,27 @@ h3 {
 
   button.danger {
     color: #e25555;
+  }
+}
+
+.settings-model-path {
+  display: block;
+  margin-top: 8px;
+  color: var(--color-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .settings-feature-item,
+  .settings-advanced-panel {
+    align-items: flex-start;
+  }
+
+  .settings-advanced-panel {
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
 }
 
