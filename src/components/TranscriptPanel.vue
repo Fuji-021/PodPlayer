@@ -4,25 +4,25 @@
       <h2>AI 文字稿</h2>
       <div v-if="mode === 'done' || mode === 'paused'" class="t-actions">
         <button
+          v-tip="'回到本页顶部'"
           class="t-link t-top-link"
-          title="回到本页顶部"
           @click="scrollPageTop"
         >
           <svg-icon icon-class="arrow-up" />
           <span>顶部</span>
         </button>
         <button
+          v-tip="'播放时自动高亮并滚动到当前段'"
           class="t-link"
           :class="{ on: follow }"
-          title="播放时自动高亮并滚动到当前段"
           @click="toggleFollow"
         >
           {{ follow ? '跟随中' : '跟随' }}
         </button>
         <button
+          v-tip="viewModeTitle"
           class="t-link t-mode-cycle"
           :class="{ on: viewMode !== 'raw' }"
-          :title="viewModeTitle"
           @click="cycleViewMode"
         >
           {{ viewModeLabel }}
@@ -30,41 +30,32 @@
         <!-- [B路·AI精修] 触发/进度/取消 -->
         <button
           v-if="aiLive.status === 'running' && aiLive.episodeId === episodeId"
+          v-tip="'取消 AI 精修'"
           class="t-link danger"
-          title="取消 AI 精修"
           @click="onAiCancel"
         >
           AI中 {{ aiPct }}% · 取消
         </button>
-        <button
-          v-else
-          class="t-link"
-          :title="
-            aiKey
-              ? 'AI 段内词汇精修（联网·发送本集文稿到 DeepSeek·约几分钱/集）'
-              : '需先在设置填 DeepSeek API Key'
-          "
-          @click="onAiRefine"
-        >
+        <button v-else v-tip="aiRefineTip" class="t-link" @click="onAiRefine">
           {{ aiAvailable ? '重跑 AI' : 'AI 优化' }}
         </button>
         <button
+          v-tip="'导出为 txt / srt 文件'"
           class="t-link"
-          title="导出为 txt / srt 文件"
           :disabled="!segments.length"
           @click="onExport"
         >
           导出
         </button>
         <button
+          v-tip="'管理本节目纠错词典'"
           class="t-link"
           :class="{ on: showDict }"
-          title="管理本节目纠错词典"
           @click="showDict = !showDict"
         >
           词典{{ dictCount ? '·' + dictCount : '' }}
         </button>
-        <button class="t-link" title="删除文字稿" @click="onDelete"
+        <button v-tip="'删除文字稿'" class="t-link" @click="onDelete"
           >删除</button
         >
       </div>
@@ -144,10 +135,7 @@
           placeholder="正确写法"
           @keyup.enter="addSelToDict"
         />
-        <label
-          class="t-fix-mode"
-          title="勾选=连同近音变体一起归一(锚定)；不勾=只精确替换这个词"
-        >
+        <label v-tip="'勾选后连同近音变体一起归一'" class="t-fix-mode">
           <input
             type="checkbox"
             :checked="sel.mode === 'anchor'"
@@ -192,11 +180,10 @@
       <div v-else class="seg-box">
         <!-- 展开/收起：浮在文稿框右上角的小按钮(批注：缩小 + 放进框里) -->
         <button
+          v-tip="expandTitle"
           class="t-expand-float"
           :class="{ on: expanded }"
-          :title="
-            expanded ? '退出展开' : '展开为大窗口（保留导航/播放栏，非真全屏）'
-          "
+          :aria-label="expandTitle"
           @click="toggleExpand"
         >
           <svg-icon :icon-class="expanded ? 'fullscreen-exit' : 'fullscreen'" />
@@ -433,6 +420,56 @@ export default {
         ? '点击切换：已优化 / AI 精修 / 原文'
         : '点击切换：已优化 / 原文';
     },
+    aiRefineTip() {
+      return this.aiKey
+        ? '联网 AI 精修（仅在点击后发送本集文字稿）'
+        : '需先在设置中配置 AI 精修服务';
+    },
+    expandTitle() {
+      return this.expanded ? '退出展开' : '展开为大窗口（保留导航和播放栏）';
+    },
+    // 单集详情入口只消费这个面板给出的动作描述；模型/下载/文稿任务的真实状态仍只在本组件维护。
+    entryActionInfo() {
+      if (this.initializing) {
+        return {
+          action: 'focus',
+          label: '文字稿状态加载中',
+          tip: '正在读取文字稿状态',
+        };
+      }
+      if (!this.platformSupported) {
+        return {
+          action: 'focus',
+          label: '当前平台不支持文字稿',
+          tip: '当前平台暂不支持本地转文字稿',
+        };
+      }
+      if (!this.modelReady) {
+        return {
+          action: 'settings',
+          label: '部署模型后生成',
+          tip: '部署本地模型后生成文字稿',
+        };
+      }
+      if (this.mode === 'idle') {
+        return this.hasLocalFile
+          ? {
+              action: 'generate',
+              label: '生成文字稿',
+              tip: '生成文字稿',
+            }
+          : {
+              action: 'focus',
+              label: '下载后生成',
+              tip: '下载本集后可生成文字稿',
+            };
+      }
+      return {
+        action: 'focus',
+        label: '跳到文字稿',
+        tip: '跳到文字稿',
+      };
+    },
     estCharsPerLine() {
       const w = this.listWidth || 760;
       const textW = Math.max(240, w - 100);
@@ -528,6 +565,12 @@ export default {
     episodeId() {
       this.init();
     },
+    entryActionInfo: {
+      immediate: true,
+      handler(info) {
+        this.$emit('entry-action', Object.assign({}, info));
+      },
+    },
     // [性能·虚拟化] 行集变化(切集 / 词典 / 原文切换) → 重置窗口并重算
     rows() {
       this.resetWindow();
@@ -621,6 +664,42 @@ export default {
       if (scroller) {
         scroller.scrollTop = 0;
       }
+    },
+    async refreshEntryReadiness() {
+      const reqId = (this._entryReq || 0) + 1;
+      this._entryReq = reqId;
+      const episodeId = this.episodeId;
+      if (!episodeId) return;
+      let status = null;
+      try {
+        status = await getAsrStatus(episodeId);
+      } catch (e) {
+        status = null;
+      }
+      if (reqId !== this._entryReq || episodeId !== this.episodeId) return;
+      this.modelReady = !!(status && status.modelReady);
+      this.platformSupported = !status || status.platformSupported !== false;
+      if (status && status.isThisQueued) this.queuedLocal = true;
+      const hasLocalFile = await this.checkLocalFile(episodeId);
+      if (reqId !== this._entryReq || episodeId !== this.episodeId) return;
+      this.hasLocalFile = hasLocalFile;
+    },
+    async activateDetailEntry() {
+      await this.refreshEntryReadiness();
+      const info = this.entryActionInfo;
+      if (info.action === 'settings') {
+        this.$store.dispatch('showToast', '请先在设置部署本地转写模型');
+        this.goModelSettings();
+      } else if (info.action === 'generate') {
+        this.onGenerate();
+      } else if (
+        !this.hasLocalFile &&
+        this.modelReady &&
+        this.platformSupported
+      ) {
+        this.$store.dispatch('showToast', '下载本集后可生成文字稿');
+      }
+      return info;
     },
     async init() {
       const reqId = (this._initReq || 0) + 1;

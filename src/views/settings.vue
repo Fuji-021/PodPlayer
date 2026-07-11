@@ -257,15 +257,17 @@
           </div>
         </div>
         <div class="right asr-model-actions">
-          <button
-            :disabled="
-              !asrDownloadAvailable || asrModel.installing || asrModel.ready
-            "
-            :title="asrDownloadTitle"
-            @click="installAsrModel"
-          >
-            一键部署模型
-          </button>
+          <span v-tip="asrDownloadTitle" class="asr-model-action-wrap">
+            <button
+              :disabled="
+                !asrDownloadAvailable || asrModel.installing || asrModel.ready
+              "
+              :aria-label="asrDownloadTitle"
+              @click="installAsrModel"
+            >
+              一键部署模型
+            </button>
+          </span>
           <button
             :disabled="asrModel.installing || !asrModel.platformSupported"
             @click="selectAsrModelDir"
