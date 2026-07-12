@@ -1419,21 +1419,39 @@ export default {
 
 .rail-track {
   position: relative;
-  height: 4px;
-  margin: 3px 42px 0;
-  border-radius: 999px;
-  background: var(--color-secondary-bg);
+  height: 16px;
+  margin: -3px 42px 0;
+
+  &::before {
+    position: absolute;
+    top: 6px;
+    right: 0;
+    left: 0;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--color-secondary-bg);
+    content: '';
+  }
 }
 
 .rail-thumb {
   position: absolute;
   left: 0;
-  top: 0;
+  top: 6px;
   height: 4px;
   border-radius: inherit;
   background: var(--color-primary);
   cursor: ew-resize;
   touch-action: none;
+
+  &::after {
+    position: absolute;
+    top: -6px;
+    right: 0;
+    bottom: -6px;
+    left: 0;
+    content: '';
+  }
 }
 
 .updates-tools {
@@ -1526,6 +1544,7 @@ export default {
   align-items: flex-end;
   height: 34px;
   padding: 0 2px 7px;
+  box-sizing: border-box;
   color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 700;
