@@ -59,16 +59,17 @@
             @scroll.passive="onRailScroll"
           >
             <button
+              v-tip="'全部节目'"
               class="rail-item rail-all"
               :class="{ active: !selectedPodcastId }"
               :aria-selected="!selectedPodcastId"
+              aria-label="全部节目"
               role="option"
               @click="selectPodcast('')"
             >
               <span class="rail-all-icon">
                 <svg-icon icon-class="list" />
               </span>
-              <span class="rail-name">全部</span>
             </button>
             <button
               v-for="podcast in railPodcasts"
@@ -79,6 +80,7 @@
               class="rail-item"
               :class="{ active: selectedPodcastId === podcast.id }"
               :aria-selected="selectedPodcastId === podcast.id"
+              :aria-label="podcast.title || '未命名节目'"
               :data-podcast-id="podcast.id"
               role="option"
               @click="selectPodcast(podcast.id)"
@@ -90,7 +92,6 @@
                 ></span>
                 <PodImage class="rail-cover-image" :src="podcast.coverUrl" />
               </span>
-              <span class="rail-name">{{ podcast.title || '未命名节目' }}</span>
             </button>
           </div>
           <button
@@ -1326,14 +1327,13 @@ export default {
 
 .rail-item {
   position: relative;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 116px);
-  flex: 0 0 auto;
-  gap: 7px;
+  display: inline-flex;
+  flex: 0 0 42px;
+  width: 42px;
   align-items: center;
-  min-width: 0;
+  justify-content: center;
   height: 42px;
-  padding: 4px 8px 4px 4px;
+  padding: 3px;
   border: 1px solid transparent;
   border-radius: 7px;
   color: var(--color-text-secondary);
@@ -1349,10 +1349,6 @@ export default {
     color: var(--color-text);
     border-color: var(--color-primary);
     background: var(--color-primary-bg-for-transparent);
-
-    .rail-name {
-      font-weight: 700;
-    }
   }
 }
 
@@ -1407,14 +1403,6 @@ export default {
     width: 17px;
     height: 17px;
   }
-}
-
-.rail-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  line-height: 1.2;
 }
 
 .rail-track {
@@ -1830,7 +1818,8 @@ export default {
   }
 
   .rail-item {
-    grid-template-columns: 32px minmax(0, 100px);
+    flex-basis: 40px;
+    width: 40px;
   }
 
   .rail-cover,
