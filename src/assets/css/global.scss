@@ -4,6 +4,7 @@
   src: url('~@/assets/fonts/Barlow-Regular.woff2') format('woff2'),
     url('~@/assets/fonts/Barlow-Regular.ttf') format('truetype');
 }
+
 @font-face {
   font-family: 'Barlow';
   font-weight: medium;
@@ -33,6 +34,33 @@
   font-weight: 900;
   src: url('~@/assets/fonts/Barlow-Black.woff2') format('woff2'),
     url('~@/assets/fonts/Barlow-Black.ttf') format('truetype');
+}
+
+// 播客单集列表共用的播放/更多操作按钮。详情页与更新流共享这一份视觉语义。
+.podcast-episode-action {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--color-text);
+  background: transparent;
+  opacity: 0.4;
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s, opacity 0.15s;
+
+  .svg-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  &:hover {
+    color: var(--color-primary);
+    background: var(--color-secondary-bg-for-transparent);
+    opacity: 1;
+  }
 }
 
 :root {

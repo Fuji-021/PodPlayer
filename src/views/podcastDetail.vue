@@ -182,7 +182,7 @@
           <!-- 播放 + 更多 -->
           <button
             v-if="!selectMode"
-            class="ep-play-btn"
+            class="ep-play-btn podcast-episode-action"
             @click.stop="playEpisode(ep)"
             @dblclick.stop
           >
@@ -190,7 +190,7 @@
           </button>
           <button
             v-if="!selectMode"
-            class="ep-menu-btn"
+            class="ep-menu-btn podcast-episode-action"
             @click.stop="openEpisodeMenu($event, ep)"
             @dblclick.stop
           >
@@ -1800,30 +1800,6 @@ export default {
       color: #27ae60; // 绿
       opacity: 1;
       font-weight: 600;
-    }
-  }
-  // [S-3] play-circle + 三点冒号两按钮共用样式
-  .ep-play-btn,
-  .ep-menu-btn {
-    background: transparent;
-    color: var(--color-text);
-    opacity: 0.4;
-    padding: 8px;
-    border-radius: 50%;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: 0.15s;
-    flex-shrink: 0;
-    .svg-icon {
-      width: 18px;
-      height: 18px;
-    }
-    &:hover {
-      opacity: 1;
-      background: var(--color-secondary-bg-for-transparent);
-      color: var(--color-primary);
     }
   }
 }

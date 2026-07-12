@@ -178,6 +178,56 @@ async function main() {
       400
     );
 
+    const alreadySorted = [
+      { id: 'today', pubTime: crossYearNow },
+      { id: 'yesterday', pubTime: localTime(2024, 11, 31) },
+      { id: 'older', pubTime: localTime(2024, 10, 1) },
+    ];
+    assert.deepStrictEqual(
+      rules
+        .groupSortedSubscriptionUpdates(alreadySorted, crossYearNow)
+        .flatMap(group => group.episodes.map(item => item.id)),
+      ['today', 'yesterday', 'older']
+    );
+
+    assert.deepStrictEqual(
+      rules.getStableVirtualRange({
+        itemCount: 100,
+        firstVisible: 18,
+        lastVisible: 26,
+        currentStart: 6,
+        currentEnd: 39,
+        buffer: 12,
+        guard: 4,
+      }),
+      { start: 6, end: 39, changed: false }
+    );
+    assert.deepStrictEqual(
+      rules.getStableVirtualRange({
+        itemCount: 100,
+        firstVisible: 35,
+        lastVisible: 43,
+        currentStart: 6,
+        currentEnd: 39,
+        buffer: 12,
+        guard: 4,
+      }),
+      { start: 23, end: 56, changed: true }
+    );
+    assert.deepStrictEqual(
+      rules.getStableVirtualRange({
+        itemCount: 20,
+        firstVisible: 0,
+        lastVisible: 5,
+        currentStart: 0,
+        currentEnd: 0,
+        buffer: 12,
+        guard: 4,
+        force: true,
+      }),
+      { start: 0, end: 18, changed: true }
+    );
+
     process.stdout.write('subscription updates rules smoke: PASS\n');
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -95,7 +95,7 @@ export function filterSubscriptionUpdates(
   });
 }
 
-export function groupSubscriptionUpdates(items, now = Date.now()) {
+export function groupSortedSubscriptionUpdates(items, now = Date.now()) {
   const groups = UPDATE_DATE_BUCKETS.map(bucket => ({
     ...bucket,
     episodes: [],
@@ -105,11 +105,15 @@ export function groupSubscriptionUpdates(items, now = Date.now()) {
     return map;
   }, {});
 
-  sortSubscriptionUpdates(items).forEach(item => {
+  (items || []).forEach(item => {
     byId[getUpdateDateBucket(item && item.pubTime, now)].episodes.push(item);
   });
 
   return groups.filter(group => group.episodes.length);
+}
+
+export function groupSubscriptionUpdates(items, now = Date.now()) {
+  return groupSortedSubscriptionUpdates(sortSubscriptionUpdates(items), now);
 }
 
 export function rankSubscriptionRail(podcasts, now = Date.now()) {
@@ -190,6 +194,51 @@ export function getRailThumbDragTarget({
   const delta = Number(pointerX) - Number(startPointerX);
   const target = Number(startScrollLeft) + (delta / travel) * max;
   return Math.max(0, Math.min(max, target));
+}
+
+export function getStableVirtualRange({
+  itemCount = 0,
+  firstVisible = 0,
+  lastVisible = 0,
+  currentStart = 0,
+  currentEnd = 0,
+  buffer = 12,
+  guard = 4,
+  force = false,
+} = {}) {
+  const count = Math.max(0, Math.floor(Number(itemCount) || 0));
+  if (!count) return { start: 0, end: 0, changed: false };
+
+  const first = Math.max(
+    0,
+    Math.min(count - 1, Math.floor(Number(firstVisible) || 0))
+  );
+  const last = Math.max(
+    first,
+    Math.min(count - 1, Math.floor(Number(lastVisible) || first))
+  );
+  const overscan = Math.max(0, Math.floor(Number(buffer) || 0));
+  const safeGuard = Math.max(
+    0,
+    Math.min(overscan, Math.floor(Number(guard) || 0))
+  );
+  const oldStart = Math.max(0, Math.floor(Number(currentStart) || 0));
+  const oldEnd = Math.min(count, Math.floor(Number(currentEnd) || 0));
+  const currentValid = oldEnd > oldStart;
+  const safeStart = oldStart === 0 ? 0 : oldStart + safeGuard;
+  const safeEnd = oldEnd === count ? count : oldEnd - safeGuard;
+
+  if (!force && currentValid && first >= safeStart && last + 1 <= safeEnd) {
+    return { start: oldStart, end: oldEnd, changed: false };
+  }
+
+  const start = Math.max(0, first - overscan);
+  const end = Math.min(count, last + overscan + 1);
+  return {
+    start,
+    end,
+    changed: start !== oldStart || end !== oldEnd,
+  };
 }
 
 export function flattenUpdateGroups(groups) {

@@ -120,7 +120,12 @@
       </section>
 
       <div class="updates-tools">
-        <div class="updates-segmented" role="tablist" aria-label="更新筛选">
+        <div
+          class="updates-segmented"
+          :class="{ 'is-unfinished': unfinishedOnly }"
+          role="tablist"
+          aria-label="更新筛选"
+        >
           <button
             :class="{ active: !unfinishedOnly }"
             :aria-selected="!unfinishedOnly"
@@ -163,13 +168,18 @@
       <section
         v-else-if="loaded && !filteredEpisodes.length"
         class="updates-empty updates-filter-empty"
+        :class="{ 'is-filter-switching': filterSwitching }"
       >
         <h2>{{ emptyFilterTitle }}</h2>
         <button class="secondary-action" @click="setUnfinishedOnly(false)">
           切回全部
         </button>
       </section>
-      <section v-else class="updates-list">
+      <section
+        v-else
+        class="updates-list"
+        :class="{ 'is-filter-switching': filterSwitching }"
+      >
         <div v-if="!loaded" class="updates-skeleton" aria-label="正在载入更新">
           <div v-for="index in 5" :key="index" class="skeleton-row"></div>
         </div>
@@ -200,7 +210,6 @@
               v-else
               class="update-episode-row"
               :class="{
-                'is-current': isCurrentEpisode(item.episode),
                 'is-playing': isCurrentEpisode(item.episode) && playerPlaying,
               }"
               @contextmenu.prevent="openEpisodeMenu($event, item.episode)"
@@ -254,34 +263,36 @@
               </div>
               <div class="update-episode-actions">
                 <button
-                  v-tip="'更多操作'"
-                  class="row-icon-button"
-                  aria-label="更多操作"
-                  @click="openEpisodeMenu($event, item.episode)"
-                >
-                  <svg-icon icon-class="menu-dots-vertical" />
-                </button>
-                <button
                   v-tip="
                     isCurrentEpisode(item.episode) && playerPlaying
                       ? '暂停'
                       : '播放'
                   "
-                  class="row-play-button"
+                  class="podcast-episode-action"
                   :aria-label="
                     isCurrentEpisode(item.episode) && playerPlaying
                       ? '暂停'
                       : '播放'
                   "
                   @click="playEpisode(item.episode)"
+                  @dblclick.stop
                 >
                   <svg-icon
                     :icon-class="
                       isCurrentEpisode(item.episode) && playerPlaying
                         ? 'pause'
-                        : 'play'
+                        : 'play-circle'
                     "
                   />
+                </button>
+                <button
+                  v-tip="'更多操作'"
+                  class="podcast-episode-action"
+                  aria-label="更多操作"
+                  @click="openEpisodeMenu($event, item.episode)"
+                  @dblclick.stop
+                >
+                  <svg-icon icon-class="menu-dots-vertical" />
                 </button>
               </div>
             </article>
@@ -289,6 +300,18 @@
         </div>
       </section>
     </template>
+
+    <transition name="updates-back-top">
+      <button
+        v-show="showBackTop"
+        v-tip="'回到更新顶部'"
+        class="updates-back-top"
+        aria-label="回到更新顶部"
+        @click="scrollFeedToTopSmooth"
+      >
+        <svg-icon icon-class="arrow-up" />
+      </button>
+    </transition>
 
     <ContextMenu ref="episodeMenu">
       <div v-if="menuEpisode" class="item" @click="playEpisode(menuEpisode)">
@@ -366,7 +389,8 @@ import {
   getRailArrowTarget,
   getRailMetrics,
   getRailThumbDragTarget,
-  groupSubscriptionUpdates,
+  getStableVirtualRange,
+  groupSortedSubscriptionUpdates,
 } from '@/utils/podcast/subscriptionUpdatesRules';
 import { getSubscriptionUpdatesSnapshot } from '@/utils/podcast/subscriptionUpdatesData';
 import { refreshSubscribedPodcasts } from '@/utils/podcast/subscriptionRefresh';
@@ -374,7 +398,8 @@ import { markAllSubscriptionsEntryFromUpdates } from '@/utils/podcast/subscripti
 
 const UPDATE_ROW_HEIGHT = 96;
 const UPDATE_GROUP_HEIGHT = 34;
-const VIRTUAL_BUFFER = 8;
+const VIRTUAL_BUFFER = 12;
+const VIRTUAL_GUARD = 4;
 
 function metricHeight(item) {
   return item.type === 'group' ? UPDATE_GROUP_HEIGHT : UPDATE_ROW_HEIGHT;
@@ -417,6 +442,7 @@ export default {
       refreshFailures: [],
       selectedPodcastId: '',
       unfinishedOnly: false,
+      filterSwitching: false,
       loaded: false,
       loadingError: '',
       listNow: Date.now(),
@@ -427,9 +453,11 @@ export default {
       railScrolling: false,
       railDragging: false,
       railHaloMap: {},
+      liveListenByEpisode: {},
       nasByPodcast: {},
       menuEpisode: null,
       deleteDownloadTarget: null,
+      showBackTop: false,
     };
   },
   computed: {
@@ -446,7 +474,10 @@ export default {
       });
     },
     updateGroups() {
-      return groupSubscriptionUpdates(this.filteredEpisodes, this.listNow);
+      return groupSortedSubscriptionUpdates(
+        this.filteredEpisodes,
+        this.listNow
+      );
     },
     flatItems() {
       return flattenUpdateGroups(this.updateGroups);
@@ -543,8 +574,7 @@ export default {
   watch: {
     flatItems() {
       this.$nextTick(() => {
-        this.recalcVirtualWindow();
-        this.hydrateVisibleNasState();
+        this.recalcVirtualWindow(true);
       });
     },
     '$store.state.podcastListening.listenTick'() {
@@ -566,16 +596,17 @@ export default {
         this.railResizeObserver.observe(this.$refs.railTrack);
     }
     this.$nextTick(() => {
-      this.recalcVirtualWindow();
+      this.recalcVirtualWindow(true);
       this.updateRailMetrics();
     });
   },
   activated() {
+    this.bindMainScroll();
     if (this._wasActivated) {
       this.listNow = Date.now();
       this.$parent?.$refs?.scrollbar?.restorePosition();
       this.$nextTick(() => {
-        this.recalcVirtualWindow();
+        this.recalcVirtualWindow(true);
         this.updateRailMetrics();
       });
       this.loadSnapshot().then(() => this.checkBackgroundRefresh());
@@ -583,21 +614,44 @@ export default {
     this._wasActivated = true;
   },
   deactivated() {
+    this.unbindMainScroll();
+    if (this._virtualRaf) {
+      cancelAnimationFrame(this._virtualRaf);
+      this._virtualRaf = null;
+    }
+    if (this._railScrollRaf) {
+      cancelAnimationFrame(this._railScrollRaf);
+      this._railScrollRaf = null;
+    }
+    if (this._railScrollTimer) {
+      clearTimeout(this._railScrollTimer);
+      this._railScrollTimer = null;
+    }
+    this.railScrolling = false;
     this.stopRailAnimation();
+    this.stopFeedScrollAnimation();
     this.finishRailDrag();
+    if (this._filterRaf) {
+      cancelAnimationFrame(this._filterRaf);
+      this._filterRaf = null;
+    }
+    this.filterSwitching = false;
+    this._listenSyncToken = (this._listenSyncToken || 0) + 1;
     this._refreshToken = (this._refreshToken || 0) + 1;
   },
   beforeDestroy() {
     this._isDestroyed = true;
     this._loadToken = (this._loadToken || 0) + 1;
     this._refreshToken = (this._refreshToken || 0) + 1;
-    if (this._scrollEl) {
-      this._scrollEl.removeEventListener('scroll', this.onMainScroll);
-    }
+    this._listenSyncToken = (this._listenSyncToken || 0) + 1;
+    this.unbindMainScroll();
     window.removeEventListener('resize', this.onResize);
     if (this._virtualRaf) cancelAnimationFrame(this._virtualRaf);
     if (this._railScrollRaf) cancelAnimationFrame(this._railScrollRaf);
+    if (this._railDragRaf) cancelAnimationFrame(this._railDragRaf);
+    if (this._filterRaf) cancelAnimationFrame(this._filterRaf);
     this.stopRailAnimation();
+    this.stopFeedScrollAnimation();
     this.finishRailDrag();
     if (this._railScrollTimer) clearTimeout(this._railScrollTimer);
     if (this.railResizeObserver) this.railResizeObserver.disconnect();
@@ -630,9 +684,8 @@ export default {
       this.pendingNewCount = 0;
       this.primeRailHalos();
       this.$nextTick(() => {
-        this.recalcVirtualWindow();
+        this.recalcVirtualWindow(true);
         this.updateRailMetrics();
-        this.hydrateVisibleNasState();
       });
     },
     async checkBackgroundRefresh() {
@@ -657,6 +710,7 @@ export default {
         if (freshCount && main && main.scrollTop > 24) {
           this.pendingSnapshot = nextSnapshot;
           this.pendingNewCount = freshCount;
+          this.$nextTick(() => this.recalcVirtualWindow(true));
           return;
         }
         this.applySnapshot(nextSnapshot);
@@ -673,7 +727,7 @@ export default {
       this.scrollFeedToTop();
       this.primeRailHalos();
       this.$nextTick(() => {
-        this.recalcVirtualWindow();
+        this.recalcVirtualWindow(true);
         this.updateRailMetrics();
       });
     },
@@ -681,36 +735,59 @@ export default {
       return this._scrollEl || (this.$el && this.$el.closest('main'));
     },
     bindMainScroll() {
-      this._scrollEl = this.getMainScrollElement();
-      if (this._scrollEl) {
-        this._scrollEl.addEventListener('scroll', this.onMainScroll, {
-          passive: true,
-        });
+      const main = this.getMainScrollElement();
+      if (main) {
+        this.bindMainScrollTarget(main);
         return;
       }
       this.$nextTick(() => {
-        if (this._isDestroyed || this._scrollEl) return;
-        this._scrollEl = this.getMainScrollElement();
-        if (this._scrollEl) {
-          this._scrollEl.addEventListener('scroll', this.onMainScroll, {
-            passive: true,
-          });
-          this.recalcVirtualWindow();
-        }
+        if (this._isDestroyed || this._mainScrollBound) return;
+        const delayedMain = this.getMainScrollElement();
+        if (!delayedMain) return;
+        this.bindMainScrollTarget(delayedMain);
+        this.recalcVirtualWindow(true);
       });
     },
+    bindMainScrollTarget(main) {
+      if (!main || this._mainScrollBound === main) return;
+      this.unbindMainScroll();
+      this._scrollEl = main;
+      this._mainScrollBound = main;
+      main.addEventListener('scroll', this.onMainScroll, { passive: true });
+      main.addEventListener('wheel', this.stopFeedScrollAnimation, {
+        passive: true,
+      });
+      main.addEventListener('pointerdown', this.stopFeedScrollAnimation, {
+        passive: true,
+      });
+      main.addEventListener('touchstart', this.stopFeedScrollAnimation, {
+        passive: true,
+      });
+      this.showBackTop = main.scrollTop > 520;
+    },
+    unbindMainScroll() {
+      const main = this._mainScrollBound;
+      if (!main) return;
+      main.removeEventListener('scroll', this.onMainScroll);
+      main.removeEventListener('wheel', this.stopFeedScrollAnimation);
+      main.removeEventListener('pointerdown', this.stopFeedScrollAnimation);
+      main.removeEventListener('touchstart', this.stopFeedScrollAnimation);
+      this._mainScrollBound = null;
+    },
     onResize() {
-      this.recalcVirtualWindow();
+      this.recalcVirtualWindow(true);
       this.updateRailMetrics();
     },
     onMainScroll() {
       if (this._virtualRaf) return;
       this._virtualRaf = requestAnimationFrame(() => {
         this._virtualRaf = null;
+        const main = this.getMainScrollElement();
+        this.showBackTop = !!(main && main.scrollTop > 520);
         this.recalcVirtualWindow();
       });
     },
-    recalcVirtualWindow() {
+    recalcVirtualWindow(forceMeasure = false) {
       const metrics = this.flatMetrics;
       const main = this.getMainScrollElement();
       const list = this.$refs.feedList;
@@ -719,20 +796,35 @@ export default {
         this.winEnd = metrics.length;
         return;
       }
-      const listOffset =
-        main.getBoundingClientRect().top - list.getBoundingClientRect().top;
-      const visibleStart = Math.max(0, listOffset);
-      const visibleEnd = visibleStart + main.clientHeight;
-      let start = findVirtualIndex(metrics, visibleStart) - VIRTUAL_BUFFER;
-      let end = findVirtualIndex(metrics, visibleEnd) + VIRTUAL_BUFFER + 1;
-      start = Math.max(0, start);
-      end = Math.min(metrics.length, end);
-      if (start >= end) {
-        start = 0;
-        end = Math.min(metrics.length, VIRTUAL_BUFFER * 3);
+      if (forceMeasure || !Number.isFinite(this._feedListTop)) {
+        const mainRect = main.getBoundingClientRect();
+        const listRect = list.getBoundingClientRect();
+        this._feedListTop = main.scrollTop + listRect.top - mainRect.top;
       }
-      this.winStart = start;
-      this.winEnd = end;
+      const viewportStart = main.scrollTop - this._feedListTop;
+      const visibleStart = Math.max(0, viewportStart);
+      const visibleEnd = Math.max(
+        visibleStart,
+        viewportStart + main.clientHeight
+      );
+      const firstVisible = findVirtualIndex(metrics, visibleStart);
+      const lastVisible = findVirtualIndex(
+        metrics,
+        Math.max(visibleStart, visibleEnd - 1)
+      );
+      const range = getStableVirtualRange({
+        itemCount: metrics.length,
+        firstVisible,
+        lastVisible,
+        currentStart: this.winStart,
+        currentEnd: this.winEnd,
+        buffer: VIRTUAL_BUFFER,
+        guard: VIRTUAL_GUARD,
+        force: forceMeasure,
+      });
+      if (!range.changed && !forceMeasure) return;
+      this.winStart = range.start;
+      this.winEnd = range.end;
       this.hydrateVisibleNasState();
     },
     selectPodcast(podcastId) {
@@ -740,18 +832,55 @@ export default {
       this.selectedPodcastId = podcastId;
       this.scrollFeedToTop();
       this.$nextTick(() => {
-        this.recalcVirtualWindow();
+        this.recalcVirtualWindow(true);
         if (podcastId) this.ensureRailItemVisible(podcastId);
       });
     },
     setUnfinishedOnly(value) {
       if (this.unfinishedOnly === value) return;
+      this.filterSwitching = true;
       this.unfinishedOnly = value;
       this.scrollFeedToTop();
+      this.$nextTick(() => {
+        this.recalcVirtualWindow(true);
+        if (this._filterRaf) cancelAnimationFrame(this._filterRaf);
+        this._filterRaf = requestAnimationFrame(() => {
+          this._filterRaf = null;
+          this.filterSwitching = false;
+        });
+      });
     },
     scrollFeedToTop() {
       const main = this.getMainScrollElement();
+      this.stopFeedScrollAnimation();
       if (main) main.scrollTop = 0;
+      this.showBackTop = false;
+    },
+    scrollFeedToTopSmooth() {
+      const main = this.getMainScrollElement();
+      if (!main || main.scrollTop <= 0) return;
+      this.stopFeedScrollAnimation();
+      const start = main.scrollTop;
+      const duration = Math.min(420, Math.max(240, 180 + Math.sqrt(start) * 2));
+      const startedAt = performance.now();
+      const tick = now => {
+        const progress = Math.min(1, (now - startedAt) / duration);
+        const eased = 1 - Math.pow(1 - progress, 4);
+        main.scrollTop = start * (1 - eased);
+        if (progress < 1) {
+          this._feedScrollRaf = requestAnimationFrame(tick);
+        } else {
+          this._feedScrollRaf = null;
+          main.scrollTop = 0;
+          this.showBackTop = false;
+        }
+      };
+      this._feedScrollRaf = requestAnimationFrame(tick);
+    },
+    stopFeedScrollAnimation() {
+      if (!this._feedScrollRaf) return;
+      cancelAnimationFrame(this._feedScrollRaf);
+      this._feedScrollRaf = null;
     },
     goAllSubscriptions(action) {
       markAllSubscriptionsEntryFromUpdates();
@@ -789,17 +918,31 @@ export default {
     isCurrentEpisode(episode) {
       return !!(episode && this.currentEpisodeId === episode.id);
     },
+    liveListenState(episode) {
+      return episode && this.liveListenByEpisode[episode.id]
+        ? this.liveListenByEpisode[episode.id]
+        : null;
+    },
     isUnstarted(episode) {
+      if (!episode) return false;
+      const live = this.liveListenState(episode);
+      const listenStats = (live && live.listenStats) || episode.listenStats;
+      const listenedSec = live
+        ? live.listenedSec
+        : Number(episode.listenedSec) || 0;
       return !!(
         episode &&
-        !episode.completed &&
-        !(episode.listenStats && episode.listenStats.listenedSec) &&
-        !episode.listenedSec
+        !(live ? live.completed : episode.completed) &&
+        !(listenStats && listenStats.listenedSec) &&
+        !listenedSec
       );
     },
     progressLabel(episode) {
-      if (episode.completed) return '已完成';
-      const percent = listenedPercentStepped(episode.listenStats);
+      const live = this.liveListenState(episode);
+      if (live ? live.completed : episode.completed) return '已完成';
+      const percent = listenedPercentStepped(
+        (live && live.listenStats) || episode.listenStats
+      );
       if (percent >= 5) return '已听 ' + percent + '%';
       return '未听';
     },
@@ -975,14 +1118,19 @@ export default {
       this.$store.dispatch('showToast', '已删除下载');
     },
     onRailScroll() {
-      this.updateRailMetrics();
       this.railScrolling = true;
+      if (!this._railScrollRaf) {
+        this._railScrollRaf = requestAnimationFrame(() => {
+          this._railScrollRaf = null;
+          this.updateRailMetrics(false);
+        });
+      }
       if (this._railScrollTimer) clearTimeout(this._railScrollTimer);
       this._railScrollTimer = setTimeout(() => {
         this.railScrolling = false;
-      }, 150);
+      }, 120);
     },
-    updateRailMetrics() {
+    updateRailMetrics(measureTrack = true) {
       const viewport = this.$refs.railViewport;
       if (!viewport) return;
       this.railMetrics = getRailMetrics({
@@ -990,9 +1138,11 @@ export default {
         clientWidth: viewport.clientWidth,
         scrollWidth: viewport.scrollWidth,
       });
-      this.railTrackWidth = this.$refs.railTrack
-        ? this.$refs.railTrack.clientWidth
-        : 0;
+      if (measureTrack) {
+        this.railTrackWidth = this.$refs.railTrack
+          ? this.$refs.railTrack.clientWidth
+          : 0;
+      }
     },
     scrollRail(direction) {
       const viewport = this.$refs.railViewport;
@@ -1045,10 +1195,15 @@ export default {
       if (!event.isPrimary || !this.railMetrics.canScroll) return;
       this.stopRailAnimation();
       this.railDragging = true;
+      const thumb = this.$refs.railThumb;
       this._railDrag = {
         pointerId: event.pointerId,
         startPointerX: event.clientX,
         startScrollLeft: this.railMetrics.scrollLeft,
+        trackWidth: this.railTrackWidth,
+        thumbWidth: thumb ? thumb.offsetWidth : 0,
+        maxScroll: this.railMetrics.maxScroll,
+        pendingScrollLeft: this.railMetrics.scrollLeft,
       };
       this._railDragTarget = event.currentTarget;
       if (this._railDragTarget.setPointerCapture) {
@@ -1061,18 +1216,22 @@ export default {
     onRailDragMove(event) {
       if (!this._railDrag || event.pointerId !== this._railDrag.pointerId)
         return;
-      const viewport = this.$refs.railViewport;
-      if (!viewport) return;
-      const thumb = this.$refs.railThumb;
-      const target = getRailThumbDragTarget({
+      this._railDrag.pendingScrollLeft = getRailThumbDragTarget({
         startScrollLeft: this._railDrag.startScrollLeft,
         startPointerX: this._railDrag.startPointerX,
         pointerX: event.clientX,
-        trackWidth: this.railTrackWidth,
-        thumbWidth: thumb ? thumb.offsetWidth : 0,
-        maxScroll: this.railMetrics.maxScroll,
+        trackWidth: this._railDrag.trackWidth,
+        thumbWidth: this._railDrag.thumbWidth,
+        maxScroll: this._railDrag.maxScroll,
       });
-      viewport.scrollLeft = target;
+      if (this._railDragRaf) return;
+      this._railDragRaf = requestAnimationFrame(() => {
+        this._railDragRaf = null;
+        const viewport = this.$refs.railViewport;
+        if (viewport && this._railDrag) {
+          viewport.scrollLeft = this._railDrag.pendingScrollLeft;
+        }
+      });
     },
     finishRailDrag(event) {
       if (
@@ -1081,6 +1240,14 @@ export default {
         event.pointerId !== this._railDrag.pointerId
       ) {
         return;
+      }
+      if (this._railDragRaf) {
+        cancelAnimationFrame(this._railDragRaf);
+        this._railDragRaf = null;
+      }
+      const viewport = this.$refs.railViewport;
+      if (viewport && this._railDrag) {
+        viewport.scrollLeft = this._railDrag.pendingScrollLeft;
       }
       if (
         this._railDragTarget &&
@@ -1096,6 +1263,7 @@ export default {
       this._railDrag = null;
       this._railDragTarget = null;
       this.railDragging = false;
+      this.updateRailMetrics(false);
       document.removeEventListener('pointermove', this.onRailDragMove);
       document.removeEventListener('pointerup', this.finishRailDrag);
       document.removeEventListener('pointercancel', this.finishRailDrag);
@@ -1166,21 +1334,30 @@ export default {
     async syncListeningState() {
       const signal = this.$store.state.podcastListening || {};
       if (!signal.episodeId) return;
+      const episodeId = signal.episodeId;
+      const token = (this._listenSyncToken || 0) + 1;
+      this._listenSyncToken = token;
       const index = this.snapshot.episodes.findIndex(
-        episode => episode.id === signal.episodeId
+        episode => episode.id === episodeId
       );
       if (index < 0) return;
       try {
-        const listenStats = await getListenStats(signal.episodeId);
+        const listenStats = await getListenStats(episodeId);
+        if (this._isDestroyed || token !== this._listenSyncToken) return;
         const oldEpisode = this.snapshot.episodes[index];
-        const nextEpisode = {
-          ...oldEpisode,
+        const completed = !!(listenStats && listenStats.completed);
+        this.$set(this.liveListenByEpisode, episodeId, {
           listenStats,
-          completed: !!(listenStats && listenStats.completed),
+          completed,
           listenedSec:
             Number(signal.listenedSec) || oldEpisode.listenedSec || 0,
-        };
-        this.$set(this.snapshot.episodes, index, nextEpisode);
+        });
+        if (completed !== oldEpisode.completed) {
+          this.$set(this.snapshot.episodes, index, {
+            ...oldEpisode,
+            completed,
+          });
+        }
       } catch (e) {
         // 状态同步失败时保留当前列表，下一次播放广播会再校正。
       }
@@ -1266,13 +1443,15 @@ export default {
 }
 
 .updates-rail-section {
+  width: 100%;
+  max-width: 960px;
   margin-bottom: 17px;
 }
 
 .updates-rail {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 34px;
-  gap: 8px;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  gap: 10px;
   align-items: center;
 }
 
@@ -1280,8 +1459,8 @@ export default {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -1307,10 +1486,11 @@ export default {
 .rail-viewport {
   display: flex;
   min-width: 0;
-  gap: 10px;
+  gap: 14px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 4px 2px 7px;
+  padding: 6px 3px 8px;
+  contain: layout paint style;
   scrollbar-width: none;
   scroll-behavior: auto;
 
@@ -1328,14 +1508,14 @@ export default {
 .rail-item {
   position: relative;
   display: inline-flex;
-  flex: 0 0 42px;
-  width: 42px;
+  flex: 0 0 60px;
+  width: 60px;
   align-items: center;
   justify-content: center;
-  height: 42px;
-  padding: 3px;
+  height: 60px;
+  padding: 4px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 9px;
   color: var(--color-text-secondary);
   background: transparent;
   text-align: left;
@@ -1356,26 +1536,26 @@ export default {
 .rail-all-icon {
   position: relative;
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: 52px;
+  height: 52px;
   align-items: center;
   justify-content: center;
   overflow: visible;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .rail-cover-image {
   position: relative;
   z-index: 1;
-  width: 34px;
-  height: 34px;
+  width: 52px;
+  height: 52px;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .rail-cover-halo {
   position: absolute;
-  inset: 5px;
+  inset: 7px;
   z-index: 0;
   border-radius: 8px;
   background-position: center;
@@ -1392,6 +1572,8 @@ export default {
 
 .updates-rail.is-scrolling .rail-cover-halo,
 .updates-rail.is-dragging .rail-cover-halo {
+  filter: none;
+  opacity: 0;
   transition: none;
 }
 
@@ -1407,8 +1589,9 @@ export default {
 
 .rail-track {
   position: relative;
+  width: min(360px, calc(100% - 92px));
   height: 16px;
-  margin: -3px 42px 0;
+  margin: -2px auto 0;
 
   &::before {
     position: absolute;
@@ -1429,7 +1612,7 @@ export default {
   height: 4px;
   border-radius: inherit;
   background: var(--color-primary);
-  cursor: ew-resize;
+  cursor: default;
   touch-action: none;
 
   &::after {
@@ -1451,12 +1634,34 @@ export default {
 }
 
 .updates-segmented {
+  position: relative;
   display: inline-flex;
+  overflow: hidden;
   padding: 3px;
   border-radius: 7px;
   background: var(--color-secondary-bg);
 
+  &::before {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 3px;
+    width: calc((100% - 6px) / 2);
+    border-radius: 5px;
+    background: var(--color-primary);
+    content: '';
+    pointer-events: none;
+    transform: translateX(0);
+    transition: transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1);
+  }
+
+  &.is-unfinished::before {
+    transform: translateX(100%);
+  }
+
   button {
+    position: relative;
+    z-index: 1;
     min-width: 60px;
     min-height: 28px;
     padding: 4px 10px;
@@ -1466,10 +1671,10 @@ export default {
     background: transparent;
     font-size: 13px;
     font-weight: 600;
+    transition: color 130ms ease-out;
 
     &.active {
       color: #fff;
-      background: var(--color-primary);
     }
   }
 }
@@ -1517,6 +1722,18 @@ export default {
 
 .updates-list {
   border-top: 1px solid var(--color-secondary-bg);
+  opacity: 1;
+  transition: opacity 130ms ease-out;
+}
+
+.updates-filter-empty {
+  opacity: 1;
+  transition: opacity 130ms ease-out;
+}
+
+.updates-list.is-filter-switching,
+.updates-filter-empty.is-filter-switching {
+  opacity: 0.62;
 }
 
 .update-virtual-item.is-group {
@@ -1549,19 +1766,8 @@ export default {
   border-top: 1px solid var(--color-secondary-bg);
   box-sizing: border-box;
 
-  &.is-current {
-    background: var(--color-primary-bg-for-transparent);
-
-    &::before {
-      position: absolute;
-      top: 12px;
-      bottom: 12px;
-      left: 0;
-      width: 2px;
-      border-radius: 2px;
-      background: var(--color-primary);
-      content: '';
-    }
+  &.is-playing .update-episode-title {
+    color: var(--color-primary);
   }
 }
 
@@ -1671,42 +1877,47 @@ export default {
 .update-episode-actions {
   display: flex;
   flex: 0 0 auto;
-  gap: 3px;
+  gap: 0;
   align-items: center;
 }
 
-.row-icon-button,
-.row-play-button {
+.updates-back-top {
+  position: fixed;
+  right: clamp(24px, 4vw, 64px);
+  bottom: 108px;
+  z-index: 24;
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: 42px;
+  height: 42px;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: 0;
   border-radius: 50%;
-  color: var(--color-text-secondary);
-  background: transparent;
+  color: var(--color-text);
+  background: var(--color-body-bg);
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.18);
 
   .svg-icon {
-    width: 17px;
-    height: 17px;
+    width: 18px;
+    height: 18px;
   }
 
   &:hover {
     color: var(--color-primary);
-    background: var(--color-primary-bg-for-transparent);
+    background: var(--color-secondary-bg);
   }
 }
 
-.row-play-button {
-  color: #fff;
-  background: var(--color-primary);
+.updates-back-top-enter-active,
+.updates-back-top-leave-active {
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
 
-  &:hover {
-    color: #fff;
-    background: var(--color-primary);
-  }
+.updates-back-top-enter,
+.updates-back-top-leave-to {
+  opacity: 0;
+  transform: translateY(5px);
 }
 
 .updates-empty {
@@ -1818,15 +2029,16 @@ export default {
   }
 
   .rail-item {
-    flex-basis: 40px;
-    width: 40px;
+    flex-basis: 52px;
+    width: 52px;
+    height: 52px;
   }
 
   .rail-cover,
   .rail-cover-image,
   .rail-all-icon {
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
   }
 
   .update-episode-row {
