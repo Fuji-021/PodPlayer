@@ -15,6 +15,19 @@ export function ipcRenderer(vueInstance) {
   const electron = window.require('electron');
   const ipcRenderer = electron.ipcRenderer;
 
+  const onPowerSuspend = (_event, payload) => {
+    if (player && typeof player.handleSystemSuspend === 'function') {
+      player.handleSystemSuspend(payload || {});
+    }
+  };
+  const onPowerResume = (_event, payload) => {
+    if (player && typeof player.handleSystemResume === 'function') {
+      player.handleSystemResume(payload || {}).catch(() => {});
+    }
+  };
+  ipcRenderer.on('app:power-suspend', onPowerSuspend);
+  ipcRenderer.on('app:power-resume', onPowerResume);
+
   // listens to the main process 'changeRouteTo' event and changes the route from
   // inside this Vue instance, according to what path the main process requires.
   // responds to Menu click() events at the main process and changes the route accordingly.
@@ -165,4 +178,9 @@ export function ipcRenderer(vueInstance) {
   ipcRenderer.on('setPosition', (event, position) => {
     player._howler.seek(position);
   });
+
+  return () => {
+    ipcRenderer.removeListener('app:power-suspend', onPowerSuspend);
+    ipcRenderer.removeListener('app:power-resume', onPowerResume);
+  };
 }

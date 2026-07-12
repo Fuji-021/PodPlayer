@@ -70,11 +70,12 @@
             }}</span>
           </button>
           <button
-            v-tip="'跳到文字稿'"
+            v-tip="transcriptEntryAction.tip"
+            :aria-label="transcriptEntryAction.label"
             type="button"
             class="mini-btn transcript-jump"
-            @click="scrollToTranscript"
-            @mouseup.stop.prevent="scrollToTranscript"
+            @click="onTranscriptEntry"
+            @mouseup.stop.prevent="onTranscriptEntry"
           >
             <svg-icon icon-class="notebook" />
           </button>
@@ -134,6 +135,7 @@
       ref="transcriptPanel"
       :episode="episode"
       :episode-id="episodeId"
+      @entry-action="onTranscriptEntryAction"
       @seek="seekToTimestamp"
     />
   </div>
@@ -176,6 +178,11 @@ export default {
       // 播放按钮底色：封面取色后替换，取色前隐藏避免蓝色闪烁
       playBtnColor: null,
       playBtnReady: false,
+      transcriptEntryAction: {
+        action: 'focus',
+        label: '跳到文字稿',
+        tip: '跳到文字稿',
+      },
     };
   },
   computed: {
@@ -567,10 +574,21 @@ export default {
       await removeDownload(this.episode.id);
       this.$store.dispatch('showToast', '已删除下载');
     },
-    scrollToTranscript() {
+    onTranscriptEntryAction(info) {
+      if (!info || !info.action || !info.label || !info.tip) return;
+      this.transcriptEntryAction = info;
+    },
+    async onTranscriptEntry() {
       const now = Date.now();
       if (now - (this._lastTranscriptJumpAt || 0) < 120) return;
       this._lastTranscriptJumpAt = now;
+      const panel = this.$refs.transcriptPanel;
+      const el = panel && panel.$el;
+      if (!el) return;
+      const info = await panel.activateDetailEntry();
+      if (info && info.shouldScroll) this.scrollToTranscript();
+    },
+    scrollToTranscript() {
       const panel = this.$refs.transcriptPanel;
       const el = panel && panel.$el;
       if (!el) return;

@@ -21,6 +21,8 @@ import crypto from 'crypto';
 import https from 'https';
 import http from 'http';
 import { URL } from 'url';
+import { shouldRecoverStalledDownload } from '@/utils/powerResumePolicy';
+import { inspectRangeResponse } from './downloadResumePolicy';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -39,6 +41,9 @@ try {
 
 // epId → { res (当前响应流), writeStream, filePath, canceled }
 const activeTasks = new Map();
+const powerResumeParts = new Map();
+const pendingPowerFinalizers = new Set();
+const POWER_RESUME_GRACE_MS = 5000;
 
 function getPodcastsDir() {
   const dir = path.join(app.getPath('userData'), 'podcasts');
@@ -181,6 +186,166 @@ async function streamGetWithFallback(url, rangeStart = null) {
   }
 }
 
+function destroyResponse(res) {
+  if (!res) return;
+  try {
+    res.unpipe();
+  } catch (e) {
+    // ignore
+  }
+  try {
+    res.destroy();
+  } catch (e) {
+    // ignore
+  }
+}
+
+function validateRangeResponse(result, rangeStart) {
+  const check = inspectRangeResponse(
+    result && result.status,
+    result && result.res && result.res.headers['content-range'],
+    rangeStart
+  );
+  if (check.ok) return check.total;
+  destroyResponse(result && result.res);
+  if (check.error === 'range-status') {
+    throw new Error('服务器不支持断点续传（Range 未返回 206）');
+  }
+  throw new Error('断点续传响应范围不匹配');
+}
+
+async function openDownloadStream(downloadUrl, audioUrl, rangeStart) {
+  try {
+    const result = await streamGetWithFallback(downloadUrl, rangeStart);
+    if (rangeStart !== null && rangeStart > 0) {
+      result.rangeTotal = validateRangeResponse(result, rangeStart);
+    }
+    return result;
+  } catch (firstError) {
+    if (downloadUrl === audioUrl) throw firstError;
+    console.log('[download] NAS 源失败，回退原 CDN');
+    const result = await streamGetWithFallback(audioUrl, rangeStart);
+    if (rangeStart !== null && rangeStart > 0) {
+      result.rangeTotal = validateRangeResponse(result, rangeStart);
+    }
+    return result;
+  }
+}
+
+function sendToRenderer(getWindow, channel, payload) {
+  const win = getWindow && getWindow();
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+function preserveAndRequeueDownload(episodeId, task, event, getWindow) {
+  if (!task || task.settled) return;
+  task.powerResumeAttemptedToken = event.token;
+  task.settled = true;
+  activeTasks.delete(episodeId);
+  if (task.powerResumeTimer) clearTimeout(task.powerResumeTimer);
+  task.powerResumeTimer = null;
+  pendingPowerFinalizers.add(task);
+  try {
+    if (task.res && task.writeStream) task.res.unpipe(task.writeStream);
+  } catch (e) {
+    // ignore
+  }
+  destroyResponse(task.res);
+
+  let finalized = false;
+  const finalize = () => {
+    if (finalized) return;
+    finalized = true;
+    if (task.powerFinalizeTimer) clearTimeout(task.powerFinalizeTimer);
+    task.powerFinalizeTimer = null;
+    pendingPowerFinalizers.delete(task);
+    let partSize = 0;
+    try {
+      if (task.filePath && fs.existsSync(task.filePath)) {
+        partSize = fs.statSync(task.filePath).size;
+      }
+    } catch (e) {
+      partSize = 0;
+    }
+    if (partSize > 0) {
+      powerResumeParts.set(episodeId, {
+        filePath: task.filePath,
+        finalPath: task.finalPath,
+        partSize,
+        downloadUrl: task.downloadUrl,
+        audioUrl: task.audioUrl,
+      });
+    }
+    sendToRenderer(getWindow, 'podcast:download:resume-needed', {
+      episodeId,
+      token: event.token,
+      bytesDone: partSize,
+      partPreserved: partSize > 0,
+    });
+  };
+
+  if (task.writeStream) {
+    task.writeStream.once('close', finalize);
+    try {
+      task.writeStream.end();
+    } catch (e) {
+      finalize();
+    }
+    task.powerFinalizeTimer = setTimeout(() => {
+      try {
+        task.writeStream.destroy();
+      } catch (e) {
+        // ignore
+      }
+      finalize();
+    }, 1500);
+  } else {
+    finalize();
+  }
+}
+
+export function handlePodcastDownloadsSuspend(event) {
+  const payload = event || {};
+  activeTasks.forEach(task => {
+    if (!task || task.settled) return;
+    task.powerSuspendToken = payload.token;
+    task.powerSuspendBytes = task.bytesDone || 0;
+    task.powerSuspendedAt = payload.at || Date.now();
+  });
+}
+
+export function handlePodcastDownloadsResume(event, getWindow) {
+  const payload = event || {};
+  activeTasks.forEach((task, episodeId) => {
+    if (!task || task.powerSuspendToken !== payload.token) return;
+    if (task.powerResumeTimer) clearTimeout(task.powerResumeTimer);
+    task.powerResumeBytes = task.bytesDone || 0;
+    task.powerResumeTimer = setTimeout(() => {
+      task.powerResumeTimer = null;
+      if (
+        shouldRecoverStalledDownload(task, payload, Date.now()) &&
+        activeTasks.get(episodeId) === task
+      ) {
+        preserveAndRequeueDownload(episodeId, task, payload, getWindow);
+      }
+    }, POWER_RESUME_GRACE_MS);
+  });
+}
+
+export function shutdownPodcastDownloadPowerRecovery() {
+  activeTasks.forEach(task => {
+    if (task && task.powerResumeTimer) clearTimeout(task.powerResumeTimer);
+    if (task && task.powerFinalizeTimer) clearTimeout(task.powerFinalizeTimer);
+    if (task) task.powerResumeTimer = null;
+    if (task) task.powerFinalizeTimer = null;
+  });
+  pendingPowerFinalizers.forEach(task => {
+    if (task && task.powerFinalizeTimer) clearTimeout(task.powerFinalizeTimer);
+    if (task) task.powerFinalizeTimer = null;
+  });
+  pendingPowerFinalizers.clear();
+}
+
 // [缓存·代理] 供 podcastAudioProxy 复用：路径助手 + 带 Range 的上游抓取(含重定向/代理回退)。
 export {
   getPodcastsDir,
@@ -243,21 +408,32 @@ export function registerPodcastDownloadIpc(getWindow) {
       const dir = path.join(getPodcastsDir(), podcastHashOf(feedUrl));
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-      // [C3·软耦合] 先试就近源(downloadUrl，可能是 NAS)；若失败且用的是 NAS 源 → 回退原 CDN(audioUrl)。
-      //   保证 NAS 下载中途出问题绝不阻断"拿到文件"这件事(NAS 永不让下载变差)。
-      let res, finalUrl;
-      try {
-        ({ res, finalUrl } = await streamGetWithFallback(downloadUrl));
-      } catch (e0) {
-        if (downloadUrl !== audioUrl) {
-          console.log('[download] NAS 源失败，回退原 CDN:', episodeId);
-          ({ res, finalUrl } = await streamGetWithFallback(audioUrl));
-        } else {
-          throw e0;
+      // 睡眠唤醒恢复只续当前任务留下的内存登记 .part；普通启动仍沿用原行为，不扫描/接管其它文件。
+      const resumeInfo = powerResumeParts.get(episodeId);
+      let rangeStart = 0;
+      if (resumeInfo && resumeInfo.filePath) {
+        try {
+          rangeStart = fs.existsSync(resumeInfo.filePath)
+            ? fs.statSync(resumeInfo.filePath).size
+            : 0;
+        } catch (e) {
+          rangeStart = 0;
         }
+        if (!rangeStart) powerResumeParts.delete(episodeId);
       }
+
+      // [C3·软耦合] 先试就近源(downloadUrl，可能是 NAS)；若失败且用的是 NAS 源 → 回退原 CDN(audioUrl)。
+      //   唤醒恢复带 Range；源忽略 Range 或范围不匹配时不 append，保留旧 part 并明确失败。
+      const result = await openDownloadStream(
+        (resumeInfo && resumeInfo.downloadUrl) || downloadUrl,
+        (resumeInfo && resumeInfo.audioUrl) || audioUrl,
+        rangeStart > 0 ? rangeStart : null
+      );
+      const res = result.res;
+      const finalUrl = result.finalUrl;
       console.log(
-        '[download] response 200',
+        '[download] response',
+        result.status,
         res.headers['content-type'],
         res.headers['content-length']
       );
@@ -266,14 +442,32 @@ export function registerPodcastDownloadIpc(getWindow) {
       // [orphan-download] 写 .part 临时文件，writeStream 'finish' 后原子 rename 成正式名 finalPath。
       //   崩溃/被杀进程时 finish 不触发 → 只会残留 *.part(启动期 sweep 清掉)，绝不留下截断的正式
       //   文件被 relink 误判为"已完成"。filePath 仍指 .part(failDownload 删的就是它，无需改动)。
-      const finalPath = path.join(dir, safeFileName(guid) + ext);
-      const filePath = finalPath + '.part';
-      const total = Number(res.headers['content-length']) || 0;
-      const writeStream = fs.createWriteStream(filePath);
+      const finalPath =
+        rangeStart > 0 && resumeInfo && resumeInfo.finalPath
+          ? resumeInfo.finalPath
+          : path.join(dir, safeFileName(guid) + ext);
+      const filePath =
+        rangeStart > 0 && resumeInfo && resumeInfo.filePath
+          ? resumeInfo.filePath
+          : finalPath + '.part';
+      const contentLength = Number(res.headers['content-length']) || 0;
+      const total =
+        rangeStart > 0
+          ? result.rangeTotal || rangeStart + contentLength
+          : contentLength;
+      const writeStream = fs.createWriteStream(filePath, {
+        flags: rangeStart > 0 ? 'a' : 'w',
+      });
       const task = {
         res,
         writeStream,
         filePath,
+        finalPath,
+        downloadUrl,
+        audioUrl,
+        bytesDone: rangeStart,
+        lastProgressAt: Date.now(),
+        resumedAfterPower: rangeStart > 0,
         canceled: false,
         settled: false,
         title: String(title || ''),
@@ -298,10 +492,12 @@ export function registerPodcastDownloadIpc(getWindow) {
         } catch (e) {
           // ignore
         }
-        try {
-          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        } catch (e) {
-          // ignore
+        if (!task.resumedAfterPower) {
+          try {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          } catch (e) {
+            // ignore
+          }
         }
         if (task.canceled) return;
         console.error(
@@ -320,11 +516,13 @@ export function registerPodcastDownloadIpc(getWindow) {
         }
       };
 
-      let done = 0;
+      let done = rangeStart;
       let lastSent = 0;
       res.on('data', chunk => {
         done += chunk.length;
         const now = Date.now();
+        task.bytesDone = done;
+        task.lastProgressAt = now;
         const win = getWindow && getWindow();
         if (
           win &&
@@ -348,6 +546,7 @@ export function registerPodcastDownloadIpc(getWindow) {
         if (task.settled || task.canceled) return;
         task.settled = true;
         activeTasks.delete(episodeId);
+        if (task.powerResumeTimer) clearTimeout(task.powerResumeTimer);
         // [orphan-download] .part 写完 → 原子 rename 成正式名 finalPath。rename 失败则按失败收尾
         //   (删 .part)、不留半成品冒充完成。
         try {
@@ -359,10 +558,12 @@ export function registerPodcastDownloadIpc(getWindow) {
             episodeId,
             (e && e.message) || e
           );
-          try {
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-          } catch (e2) {
-            // ignore
+          if (!task.resumedAfterPower) {
+            try {
+              if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+            } catch (e2) {
+              // ignore
+            }
           }
           const wf = getWindow && getWindow();
           if (wf && !wf.isDestroyed()) {
@@ -373,6 +574,7 @@ export function registerPodcastDownloadIpc(getWindow) {
           }
           return;
         }
+        powerResumeParts.delete(episodeId);
         console.log('[download] done', episodeId, done, 'bytes');
         const w = getWindow && getWindow();
         if (w && !w.isDestroyed()) {
@@ -417,9 +619,22 @@ export function registerPodcastDownloadIpc(getWindow) {
   // 取消下载
   ipcMain.handle('podcast:download:cancel', async (_e, { episodeId } = {}) => {
     const task = activeTasks.get(episodeId);
-    if (!task) return { ok: false, error: '没有正在进行的下载' };
+    if (!task) {
+      const resumeInfo = powerResumeParts.get(episodeId);
+      if (!resumeInfo) return { ok: false, error: '没有正在进行的下载' };
+      try {
+        if (resumeInfo.filePath && fs.existsSync(resumeInfo.filePath)) {
+          fs.unlinkSync(resumeInfo.filePath);
+        }
+      } catch (e) {
+        return { ok: false, error: String((e && e.message) || e) };
+      }
+      powerResumeParts.delete(episodeId);
+      return { ok: true };
+    }
     task.canceled = true;
     task.settled = true; // [审P1-1] 取消即定锚：destroy 触发的 error/finish 全部短路、不误报
+    if (task.powerResumeTimer) clearTimeout(task.powerResumeTimer);
     try {
       task.res.destroy();
     } catch (e) {
@@ -438,6 +653,7 @@ export function registerPodcastDownloadIpc(getWindow) {
       // ignore
     }
     activeTasks.delete(episodeId);
+    powerResumeParts.delete(episodeId);
     return { ok: true };
   });
 

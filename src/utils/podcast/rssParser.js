@@ -50,7 +50,39 @@ function attrNS(el, localName, attr) {
   const all = (el && el.children) || [];
   for (let i = 0; i < all.length; i++) {
     if (all[i].localName === localName) {
-      return all[i].getAttribute(attr) || '';
+      const value = all[i].getAttribute(attr);
+      if (value && value.trim()) return value.trim();
+    }
+  }
+  return '';
+}
+
+function resolveUrl(raw, baseUrl) {
+  const value = (raw || '').trim();
+  if (!value) return '';
+  try {
+    return new URL(value, baseUrl).href;
+  } catch (e) {
+    return value;
+  }
+}
+
+function coverUrl(el, baseUrl) {
+  const imageHref = attrNS(el, 'image', 'href');
+  if (imageHref) return resolveUrl(imageHref, baseUrl);
+
+  const all = (el && el.children) || [];
+  for (let i = 0; i < all.length; i++) {
+    const image = all[i];
+    if (image.localName !== 'image') continue;
+    const nestedUrl = textNS(image, 'url');
+    if (nestedUrl) return resolveUrl(nestedUrl, baseUrl);
+    if (
+      !image.children.length &&
+      image.textContent &&
+      image.textContent.trim()
+    ) {
+      return resolveUrl(image.textContent, baseUrl);
     }
   }
   return '';
@@ -87,7 +119,7 @@ export function parseRss(xmlText, feedUrl) {
     feedUrl,
     title: text(channel, 'title'),
     description: text(channel, 'description'),
-    coverUrl: attrNS(channel, 'image', 'href') || text(channel, 'image') || '',
+    coverUrl: coverUrl(channel, feedUrl),
     author: textNS(channel, 'author') || '',
     link: text(channel, 'link'),
     updatedAt: Date.now(),
@@ -107,7 +139,7 @@ export function parseRss(xmlText, feedUrl) {
       const guidEl = item.getElementsByTagName('guid')[0];
       const guid = guidEl?.textContent?.trim() || audioUrl;
 
-      const epCover = attrNS(item, 'image', 'href') || podcast.coverUrl || '';
+      const epCover = coverUrl(item, feedUrl) || podcast.coverUrl || '';
 
       return {
         id: `${feedUrl}::${guid}`,
