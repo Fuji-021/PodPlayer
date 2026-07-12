@@ -105,9 +105,9 @@
           </button>
         </div>
         <div
-          v-show="railMetrics.canScroll"
           ref="railTrack"
           class="rail-track"
+          :class="{ 'is-hidden': !railMetrics.canScroll }"
           aria-hidden="true"
         >
           <div
@@ -1444,7 +1444,6 @@ export default {
 
 .updates-rail-section {
   width: 100%;
-  max-width: 960px;
   margin-bottom: 17px;
 }
 
@@ -1484,9 +1483,11 @@ export default {
 }
 
 .rail-viewport {
+  --rail-gap: 12px;
+
   display: flex;
   min-width: 0;
-  gap: 14px;
+  gap: var(--rail-gap);
   overflow-x: auto;
   overflow-y: hidden;
   padding: 6px 3px 8px;
@@ -1508,11 +1509,10 @@ export default {
 .rail-item {
   position: relative;
   display: inline-flex;
-  flex: 0 0 60px;
-  width: 60px;
+  flex: 0 0 clamp(84px, 8vw, 124px);
   align-items: center;
   justify-content: center;
-  height: 60px;
+  height: 80px;
   padding: 4px;
   border: 1px solid transparent;
   border-radius: 9px;
@@ -1536,8 +1536,8 @@ export default {
 .rail-all-icon {
   position: relative;
   display: inline-flex;
-  width: 52px;
-  height: 52px;
+  width: 72px;
+  height: 72px;
   align-items: center;
   justify-content: center;
   overflow: visible;
@@ -1547,8 +1547,8 @@ export default {
 .rail-cover-image {
   position: relative;
   z-index: 1;
-  width: 52px;
-  height: 52px;
+  width: 72px;
+  height: 72px;
   overflow: hidden;
   border-radius: 8px;
 }
@@ -1591,7 +1591,12 @@ export default {
   position: relative;
   width: min(360px, calc(100% - 92px));
   height: 16px;
-  margin: -2px auto 0;
+  margin: 0 auto;
+
+  &.is-hidden {
+    visibility: hidden;
+    pointer-events: none;
+  }
 
   &::before {
     position: absolute;
@@ -2029,16 +2034,16 @@ export default {
   }
 
   .rail-item {
-    flex-basis: 52px;
-    width: 52px;
-    height: 52px;
+    flex-basis: 56px;
+    min-width: 56px;
+    height: 56px;
   }
 
   .rail-cover,
   .rail-cover-image,
   .rail-all-icon {
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 48px;
   }
 
   .update-episode-row {
