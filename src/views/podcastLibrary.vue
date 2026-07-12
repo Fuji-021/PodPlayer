@@ -3,7 +3,11 @@
     <div class="header">
       <!-- [B-33] 标题 + 紧贴"阅"字的"更多"按钮 → 点击弹排序下拉（选项文字外显，自带方向） -->
       <div class="title-row">
-        <h1>我的订阅</h1>
+        <button v-tip="'返回更新'" class="return-updates" @click="goUpdates">
+          <svg-icon icon-class="arrow-left" />
+          <span>返回更新</span>
+        </button>
+        <h1>全部订阅</h1>
         <div ref="sortControl" class="sort-control">
           <button
             class="more-btn"
@@ -267,7 +271,6 @@ import {
   getSubscribedPodcasts,
   deletePodcast,
   getEpisodesByPodcast,
-  refreshAllSubscriptions,
   exportSubscriptionsOpml,
 } from '@/utils/podcast/service';
 import { getPodcastListenSummary } from '@/utils/podcast/listening';
@@ -280,6 +283,8 @@ import {
 import { ensureTinyCover } from '@/utils/podcast/coverHalo';
 import { prefetchDetail } from '@/utils/podcast/detailPrefetch';
 import { showNotification } from '@/utils/podcast/notify';
+import { refreshSubscribedPodcasts } from '@/utils/podcast/subscriptionRefresh';
+import { consumeAllSubscriptionsEntryFromUpdates } from '@/utils/podcast/subscriptionNavigation';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 // [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
@@ -438,14 +443,20 @@ export default {
     clearTimeout(this._nasHoverTimer); // [NAS] hover 预取防抖定时器
   },
   activated() {
-    // [滚动位修复] 返回订阅页时恢复离开时的滚动位置(Scrollbar 按路由名 'library' 已存)。
+    // [滚动位修复] 从更新页进入管理页必须从顶部开始；从详情返回仍恢复本页位置。
     //   原先缺此调用 → 详情页未命中缓存时 _presentEpisodes 把共享 <main>.scrollTop 归 0，返回就停在
     //   顶部(命中缓存不归 0 时恰好原地，故"有概率")。此刻 keep-alive 缓存的旧 DOM 高度完整、
     //   loadPodcasts 末尾才整体赋值不清空列表 → 同步 restore 不会因高度塌缩被夹到顶部。
-    this.$parent?.$refs?.scrollbar?.restorePosition();
+    if (consumeAllSubscriptionsEntryFromUpdates()) {
+      const main = this.$el && this.$el.closest('main');
+      if (main) main.scrollTop = 0;
+    } else {
+      this.$parent?.$refs?.scrollbar?.restorePosition();
+    }
     this.loadPodcasts();
     this.autoRefresh(); // [B-80] 进页后台静默刷新订阅(10 分钟节流，无打扰)
     this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合(未连上则空、无标识)
+    this.handleUpdatesEntryAction();
   },
   created() {
     this.loadPodcasts();
@@ -453,6 +464,18 @@ export default {
     this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合
   },
   methods: {
+    goUpdates() {
+      this.$router.push({ name: 'library' });
+    },
+    handleUpdatesEntryAction() {
+      const action = this.$route.query && this.$route.query.action;
+      if (action !== 'add' && action !== 'import') return;
+      this.$router.replace({ name: 'subscriptionLibrary' });
+      this.$nextTick(() => {
+        if (action === 'add') this.openAddDialog();
+        else this.openImportOpml();
+      });
+    },
     // [NAS] 拉取"NAS 上有哪些节目"集合(未连上/未启用则空集)；失败静默。
     async refreshNasSet() {
       try {
@@ -571,23 +594,20 @@ export default {
       }
       console.log('[播客库] loaded', this.podcasts.length, 'podcasts');
     },
-    // [B-80] 后台静默自动刷新订阅(无打扰)：并发重抓所有 RSS，diff 新单集入库→更新角标。
-    //   10 分钟节流(每次进页都跑会狂抓)；无 toast、无转圈，发现新集只让卡片角标静静出现。
+    // [B-80] 复用唯一后台刷新协调者：更新流和全部订阅页即使同时 keep-alive，
+    //   也只会有一次 RSS 刷新在途；本页保留旧的角标与桌面通知呈现。
     // [T3] 有基线(列表非空)时对比刷新前后 newCount 合计差，差值>0 则弹桌面通知。
     async autoRefresh() {
-      const KEY = 'podcastLibrary.lastAutoRefresh';
-      const last = Number(localStorage.getItem(KEY) || 0);
-      if (Date.now() - last < 10 * 60 * 1000) return; // 节流
       if (this._autoRefreshing) return;
       this._autoRefreshing = true;
-      localStorage.setItem(KEY, String(Date.now()));
       const countBefore = this.podcasts.length
         ? this.podcasts.reduce(function (s, p) {
             return s + (p.newCount || 0);
           }, 0)
         : -1; // 列表为空 → 无基线，跳过通知
       try {
-        await refreshAllSubscriptions();
+        const result = await refreshSubscribedPodcasts();
+        if (result && result.skipped) return;
         await this.loadPodcasts(); // 重读，含更新后的 newCount → 角标自动出现
         if (countBefore >= 0) {
           const countAfter = this.podcasts.reduce(function (s, p) {
@@ -996,6 +1016,29 @@ export default {
     font-weight: 700;
     line-height: 1;
     margin: 0;
+  }
+}
+.return-updates {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  font-size: 13px;
+  cursor: pointer;
+
+  .svg-icon {
+    width: 15px;
+    height: 15px;
+  }
+
+  &:hover {
+    color: var(--color-primary);
+    background: var(--color-primary-bg-for-transparent);
   }
 }
 .actions {

@@ -251,7 +251,9 @@ export default {
         //   使高亮不在进详情后变白，且反映从哪个区进来的。
         const n = this.$route.name;
         if (n === 'home') this.navSection = 'home';
-        else if (n === 'library') this.navSection = 'library';
+        else if (n === 'library' || n === 'subscriptionLibrary') {
+          this.navSection = 'library';
+        }
         // [刷新高亮修] 持久化当前区，供详情页刷新/reload 后恢复正确高亮(详情路由保持不变、不覆盖)
         localStorage.setItem('navSection', this.navSection);
       },

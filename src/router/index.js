@@ -116,8 +116,18 @@ const routes = [
   {
     path: '/library',
     name: 'library',
-    // [播客改造] 原 library.vue 是网易云音乐库，保留源码不删；
-    // /library 现在指向播客库新页面，作为本软件的主功能页。
+    // [订阅更新流] 保留 library 顶级语义，默认进入按单集聚合的更新流；
+    // 原节目网格移动到 /library/all，避免丢失成熟的订阅管理能力。
+    component: () => import('@/views/subscriptionUpdates.vue'),
+    meta: {
+      requireLogin: false,
+      keepAlive: true,
+      savePosition: true,
+    },
+  },
+  {
+    path: '/library/all',
+    name: 'subscriptionLibrary',
     component: () => import('@/views/podcastLibrary.vue'),
     meta: {
       requireLogin: false,

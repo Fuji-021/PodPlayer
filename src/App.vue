@@ -58,7 +58,7 @@ export default {
     return {
       isElectron: process.env.IS_ELECTRON, // true || undefined
       userSelectNone: false,
-      // [路由过渡·单 RV] keep-alive 缓存的页面(组件 name)= 原 router meta.keepAlive 的 8 个路由。
+      // [路由过渡·单 RV] keep-alive 缓存的页面(组件 name)必须与 router meta.keepAlive 同步。
       //   ⚠️ 增删 keepAlive 页时这里必须同步(否则该页不被缓存 → 丢 activated/滚动恢复/分页返回不变等)。
       keepAliveComponents: [
         'Home',
@@ -67,6 +67,7 @@ export default {
         'ArtistMV',
         'Next',
         'Search',
+        'SubscriptionUpdates',
         'PodcastLibrary',
         'DiscoverList',
       ],
