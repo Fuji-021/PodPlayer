@@ -44,18 +44,21 @@ export async function getSubscriptionUpdatesSnapshot(now = Date.now()) {
     .anyOf(podcastIds)
     .toArray();
   const episodeIds = episodes.map(episode => episode.id);
-  const [stats, progresses, favorites, transcripts] = await Promise.all([
-    db.episodeListenStats.bulkGet(episodeIds).catch(() => []),
-    db.episodeProgress.bulkGet(episodeIds).catch(() => []),
-    db.favorites.bulkGet(episodeIds).catch(() => []),
-    db.transcripts.bulkGet(episodeIds).catch(() => []),
-  ]);
+  const [stats, progresses, favorites, transcripts, downloads] =
+    await Promise.all([
+      db.episodeListenStats.bulkGet(episodeIds).catch(() => []),
+      db.episodeProgress.bulkGet(episodeIds).catch(() => []),
+      db.favorites.bulkGet(episodeIds).catch(() => []),
+      db.transcripts.bulkGet(episodeIds).catch(() => []),
+      db.episodeDownloads.bulkGet(episodeIds).catch(() => []),
+    ]);
 
   const podcastById = new Map(podcasts.map(podcast => [podcast.id, podcast]));
   const statsById = toMap(stats);
   const progressById = toMap(progresses);
   const favoriteById = toMap(favorites);
   const transcriptById = toMap(transcripts);
+  const downloadById = toMap(downloads);
   const subscribedOrder = subscriptionOrder(podcasts);
   const latestByPodcast = new Map();
   const listenByPodcast = new Map();
@@ -85,6 +88,11 @@ export async function getSubscriptionUpdatesSnapshot(now = Date.now()) {
       listenStats: statsRow || null,
       favorited: !!favoriteById.get(episode.id),
       transcriptReady: !!(transcript && transcript.status === 'done'),
+      downloaded: !!(
+        downloadById.get(episode.id) &&
+        downloadById.get(episode.id).status === 'done' &&
+        downloadById.get(episode.id).auto !== true
+      ),
       stableOrder:
         (subscribedOrder.get(episode.podcastId) || 0) * 1000000 + index,
     };
@@ -106,5 +114,8 @@ export async function getSubscriptionUpdatesSnapshot(now = Date.now()) {
     episodes: sortSubscriptionUpdates(rows),
     podcastCount: podcasts.length,
     favoriteIds: [...favoriteById.keys()],
+    downloadedIds: rows
+      .filter(episode => episode.downloaded)
+      .map(episode => episode.id),
   };
 }
