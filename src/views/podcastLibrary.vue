@@ -284,7 +284,10 @@ import { ensureTinyCover } from '@/utils/podcast/coverHalo';
 import { prefetchDetail } from '@/utils/podcast/detailPrefetch';
 import { showNotification } from '@/utils/podcast/notify';
 import { refreshSubscribedPodcasts } from '@/utils/podcast/subscriptionRefresh';
-import { consumeAllSubscriptionsEntryFromUpdates } from '@/utils/podcast/subscriptionNavigation';
+import {
+  consumeAllSubscriptionsEntryFromUpdates,
+  onSubscriptionUpdatesChanged,
+} from '@/utils/podcast/subscriptionNavigation';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 // [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
@@ -441,6 +444,10 @@ export default {
     clearTimeout(this._cleanTimer); // [B-80]
     clearTimeout(this._sinkTimer);
     clearTimeout(this._nasHoverTimer); // [NAS] hover 预取防抖定时器
+    if (this._removeSubscriptionUpdatesChanged) {
+      this._removeSubscriptionUpdatesChanged();
+      this._removeSubscriptionUpdatesChanged = null;
+    }
   },
   activated() {
     // [滚动位修复] 从更新页进入管理页必须从顶部开始；从详情返回仍恢复本页位置。
@@ -453,12 +460,23 @@ export default {
     } else {
       this.$parent?.$refs?.scrollbar?.restorePosition();
     }
-    this.loadPodcasts();
-    this.autoRefresh(); // [B-80] 进页后台静默刷新订阅(10 分钟节流，无打扰)
-    this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合(未连上则空、无标识)
+    if (this._wasActivated && this._subscriptionLibraryDirty) {
+      this.loadPodcasts();
+      this.refreshNasSet(); // 只有订阅数据变更时才重读 NAS 标识。
+    }
+    if (this._wasActivated) {
+      this.autoRefresh(); // [B-80] 进页后台静默刷新订阅(10 分钟节流，无打扰)
+    }
+    this._wasActivated = true;
     this.handleUpdatesEntryAction();
   },
   created() {
+    this._subscriptionLibraryDirty = false;
+    this._removeSubscriptionUpdatesChanged = onSubscriptionUpdatesChanged(
+      () => {
+        this._subscriptionLibraryDirty = true;
+      }
+    );
     this.loadPodcasts();
     this.autoRefresh(); // [B-80] 启动即后台静默刷新一次(节流保护)
     this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合
@@ -582,6 +600,7 @@ export default {
         lastListenedAt: lastMap[p.id] || 0,
       }));
       this.loaded = true;
+      this._subscriptionLibraryDirty = false;
       this.primeHalos(); // [B-71/H1] 后台把各封面降采样成光晕小图
       // [B-51] 写缓存供下次冷启动秒显（避免第一次打开短暂空白）
       try {
