@@ -312,6 +312,7 @@ import {
 } from '@/utils/podcast/service';
 // [B67-BUG-2] 缓存优先：未订阅节目的后台预览抓取在详情页内做
 import { previewPodcast } from '@/utils/podcast/discover';
+import { notifySubscriptionUpdatesChanged } from '@/utils/podcast/subscriptionNavigation';
 import { getEpisodeProgressBulk } from '@/utils/podcast/db';
 import {
   getListenStats,
@@ -763,7 +764,9 @@ export default {
       }
       // [B-46 / D-3] 进详情即视为"已看过新单集"，清掉我的订阅页该卡片的新单集角标
       if (podcast.newCount) {
-        updatePodcast(feedUrl, { newCount: 0 }).catch(() => {});
+        updatePodcast(feedUrl, { newCount: 0 })
+          .then(() => notifySubscriptionUpdatesChanged())
+          .catch(() => {});
       }
       const eps = await getEpisodesByPodcast(feedUrl);
       if (feedUrl !== this.feedUrl) return;
@@ -1239,6 +1242,7 @@ export default {
       if (!this.podcast) return;
       try {
         await updatePodcast(this.feedUrl, { subscribed: true });
+        notifySubscriptionUpdatesChanged();
         this.podcast = { ...this.podcast, subscribed: true };
         this.$store.commit('addSubscribedPodcast', {
           name: this.podcast.title,

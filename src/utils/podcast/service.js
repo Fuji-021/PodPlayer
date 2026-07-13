@@ -13,6 +13,7 @@ import {
   deletePodcast,
 } from './db';
 import { handoffToNas } from './nasSource';
+import { notifySubscriptionUpdatesChanged } from './subscriptionNavigation';
 import { rlog } from '@/utils/log';
 
 const electron =
@@ -71,6 +72,7 @@ export async function subscribeByRssUrl(feedUrl, source = 'manual') {
     : { ...podcast, source, subscribed: true };
   await upsertPodcast(merged);
   await upsertEpisodes(episodes);
+  notifySubscriptionUpdatesChanged();
   // [NAS 托管·P0] 订阅成功后旁路托管到 NAS：fire-and-forget，不 await、失败绝不影响订阅返回与播放。
   //   总开关关 / 无 NAS / NAS 不可达 → 内部静默 skip。OPML 批量导入每档各自触发(各自幂等、失败静默)。
   if (nasHandoffOn()) {
@@ -233,6 +235,7 @@ export async function refreshAllSubscriptions(onProgress) {
   await runLimited(pods, 5, async p => {
     let newCount = 0;
     let error = null;
+    let changed = false;
     try {
       // [T7③·ETag/304] 条件请求：将上次存的 ETag/Last-Modified 传给主进程，
       //   若 RSS 未变化服务端返回 304，直接跳过解析+写库（省带宽+主线程解析开销）。
@@ -252,7 +255,13 @@ export async function refreshAllSubscriptions(onProgress) {
         // 304：本档无新集，跳过解析与写库
         done++;
         if (typeof onProgress === 'function') onProgress(done, total, p.title);
-        results.push({ id: p.id, title: p.title, newCount: 0, error: null });
+        results.push({
+          id: p.id,
+          title: p.title,
+          newCount: 0,
+          error: null,
+          changed: false,
+        });
         return;
       }
       // 收到新内容：保存 ETag/Last-Modified 供下次条件请求用
@@ -264,6 +273,7 @@ export async function refreshAllSubscriptions(onProgress) {
       }
       const xml = res.text;
       const { podcast: meta, episodes } = parseRss(xml, p.id);
+      changed = true;
       // [T7·数据层①] 只取主键(primaryKeys)做 diff，不加载含 description 等重文本的完整行
       const existingIds = new Set(await getEpisodeIdsByPodcast(p.id));
       const fresh = episodes.filter(e => !existingIds.has(e.id));
@@ -283,10 +293,10 @@ export async function refreshAllSubscriptions(onProgress) {
     }
     done++;
     if (typeof onProgress === 'function') onProgress(done, total, p.title);
-    results.push({ id: p.id, title: p.title, newCount, error });
+    results.push({ id: p.id, title: p.title, newCount, error, changed });
   });
   const totalNew = results.reduce((s, r) => s + r.newCount, 0);
-  return { totalNew, results };
+  return { totalNew, results, changed: results.some(r => r.changed) };
 }
 
 /**

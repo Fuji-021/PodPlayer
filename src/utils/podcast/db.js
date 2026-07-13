@@ -2,6 +2,7 @@
 // 表结构在 utils/db.js 版本 5 里声明：podcasts / episodes / episodeProgress。
 import Dexie from 'dexie';
 import { db } from '@/utils/db';
+import { notifySubscriptionUpdatesChanged } from './subscriptionNavigation';
 
 // [封面闪烁修] 节目行会话内存层：DiscoverCard 首帧需同步拿到 DB 封面，避免"目录 logo 版→DB 版"二次淡入闪烁。
 //   仅缓存 getPodcast/warmPodcastMem 读到的行；coverUrl 经 upsertPodcast 与 updatePodcast(订阅刷新封面同步)
@@ -128,6 +129,7 @@ export function getPodcast(id) {
 export async function deletePodcast(id) {
   // [T1 P1-b] nasRemoveAt 记录取消订阅时间，reconcileNas 满 7 天宽限后删 NAS 档（需用户开启且 armed）
   await db.podcasts.update(id, { subscribed: false, nasRemoveAt: Date.now() });
+  notifySubscriptionUpdatesChanged();
 }
 
 // [F2 / B69-F2] 预览孤儿清理：发现页"预览"(previewByRssUrl)会把 subscribed:false 节目 +

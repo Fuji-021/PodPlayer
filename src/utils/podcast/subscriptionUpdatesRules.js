@@ -3,6 +3,7 @@ export const UPDATE_DATE_BUCKETS = [
   { id: 'yesterday', label: '昨天' },
   { id: 'this-week', label: '本周更早' },
   { id: 'last-week', label: '上周' },
+  { id: 'last-month', label: '近一个月' },
   { id: 'older', label: '更早' },
 ];
 
@@ -25,17 +26,22 @@ function timestampOf(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function dayStart(time) {
-  const date = new Date(time);
+function atLocalDayStart(value) {
+  const date = new Date(value);
   date.setHours(0, 0, 0, 0);
-  return date.getTime();
+  return date;
 }
 
-function mondayStart(time) {
-  const date = new Date(dayStart(time));
-  const offset = (date.getDay() + 6) % 7;
-  date.setDate(date.getDate() - offset);
-  return date.getTime();
+function moveLocalDays(date, days) {
+  const result = new Date(date.getTime());
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+function mondayStart(value) {
+  const date = atLocalDayStart(value);
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  return date;
 }
 
 function stableValue(item, fallbackIndex) {
@@ -50,19 +56,28 @@ function compareStable(a, b) {
   return String(a.item && a.item.id).localeCompare(String(b.item && b.item.id));
 }
 
+export function getLocalDayKey(now = Date.now()) {
+  const date = new Date(now);
+  return [date.getFullYear(), date.getMonth(), date.getDate()].join('-');
+}
+
 export function getUpdateDateBucket(pubTime, now = Date.now()) {
   const value = timestampOf(pubTime);
   if (!value) return 'older';
 
-  const today = dayStart(now);
-  const yesterday = today - 24 * 60 * 60 * 1000;
+  // Always move calendar dates through Date#setDate. A fixed 24-hour offset
+  // would put rows in the wrong bucket across a local DST boundary.
+  const today = atLocalDayStart(now);
+  const yesterday = moveLocalDays(today, -1);
   const thisWeek = mondayStart(now);
-  const lastWeek = thisWeek - 7 * 24 * 60 * 60 * 1000;
+  const lastWeek = moveLocalDays(thisWeek, -7);
+  const lastMonth = moveLocalDays(today, -30);
 
-  if (value >= today) return 'today';
-  if (value >= yesterday) return 'yesterday';
-  if (value >= thisWeek) return 'this-week';
-  if (value >= lastWeek) return 'last-week';
+  if (value >= today.getTime()) return 'today';
+  if (value >= yesterday.getTime()) return 'yesterday';
+  if (value >= thisWeek.getTime()) return 'this-week';
+  if (value >= lastWeek.getTime()) return 'last-week';
+  if (value >= lastMonth.getTime()) return 'last-month';
   return 'older';
 }
 
@@ -95,6 +110,28 @@ export function filterSubscriptionUpdates(
   });
 }
 
+export function resolveSubscriptionSelection(podcasts, selectedPodcastId) {
+  if (!selectedPodcastId) return '';
+  return (podcasts || []).some(
+    podcast => podcast && podcast.id === selectedPodcastId
+  )
+    ? selectedPodcastId
+    : '';
+}
+
+export function countPendingSubscriptionEpisodes(
+  currentEpisodes,
+  nextEpisodes
+) {
+  const shownIds = new Set(
+    (currentEpisodes || []).map(item => item && item.id)
+  );
+  return (nextEpisodes || []).reduce(
+    (count, item) => count + (item && shownIds.has(item.id) ? 0 : 1),
+    0
+  );
+}
+
 export function groupSortedSubscriptionUpdates(items, now = Date.now()) {
   const groups = UPDATE_DATE_BUCKETS.map(bucket => ({
     ...bucket,
@@ -114,6 +151,52 @@ export function groupSortedSubscriptionUpdates(items, now = Date.now()) {
 
 export function groupSubscriptionUpdates(items, now = Date.now()) {
   return groupSortedSubscriptionUpdates(sortSubscriptionUpdates(items), now);
+}
+
+export function flattenUpdateGroups(groups) {
+  const rows = [];
+  (groups || []).forEach(group => {
+    rows.push({
+      type: 'group',
+      key: 'group:' + group.id,
+      group,
+    });
+    group.episodes.forEach(episode => {
+      rows.push({
+        type: 'episode',
+        key: 'episode:' + episode.id,
+        episode,
+      });
+    });
+  });
+  return rows;
+}
+
+export function buildFixedUpdateMetrics(
+  flatItems,
+  { rowHeight = 96, groupHeight = 34 } = {}
+) {
+  let top = 0;
+  return (flatItems || []).map(item => {
+    const height = item.type === 'group' ? groupHeight : rowHeight;
+    const metric = { ...item, top, height };
+    top += height;
+    return metric;
+  });
+}
+
+export function createSubscriptionUpdateView(items, now = Date.now(), heights) {
+  const groups = groupSortedSubscriptionUpdates(items, now);
+  const flatItems = flattenUpdateGroups(groups);
+  const metrics = buildFixedUpdateMetrics(flatItems, heights);
+  const last = metrics[metrics.length - 1];
+  return {
+    episodes: items || [],
+    groups,
+    flatItems,
+    metrics,
+    totalHeight: last ? last.top + last.height : 0,
+  };
 }
 
 export function rankSubscriptionRail(podcasts, now = Date.now()) {
@@ -168,6 +251,22 @@ export function getRailMetrics({
   };
 }
 
+export function getRailThumbGeometry({
+  trackWidth = 0,
+  visibleRatio = 1,
+  canScroll = false,
+  compact = false,
+} = {}) {
+  const width = Math.max(0, Number(trackWidth) || 0);
+  if (!canScroll || !width) return { width: 0, travel: 0 };
+  const min = compact ? 48 : 64;
+  const max = compact ? 96 : 160;
+  const naturalWidth = width * Math.max(0, Math.min(1, visibleRatio));
+  const visualWidth = Math.min(max, Math.max(min, naturalWidth / 3));
+  const thumbWidth = Math.min(width, visualWidth);
+  return { width: thumbWidth, travel: Math.max(0, width - thumbWidth) };
+}
+
 export function getRailArrowTarget({
   scrollLeft = 0,
   clientWidth = 0,
@@ -178,6 +277,22 @@ export function getRailArrowTarget({
   const step = Math.max(0, Number(clientWidth) || 0) * 0.7;
   const target = metrics.scrollLeft + (direction < 0 ? -step : step);
   return Math.max(0, Math.min(metrics.maxScroll, target));
+}
+
+export function getRailArrowGoal({
+  scrollLeft = 0,
+  goal = null,
+  clientWidth = 0,
+  scrollWidth = 0,
+  direction = 1,
+} = {}) {
+  const base = Number.isFinite(goal) ? goal : scrollLeft;
+  return getRailArrowTarget({
+    scrollLeft: base,
+    clientWidth,
+    scrollWidth,
+    direction,
+  });
 }
 
 export function getRailThumbDragTarget({
@@ -239,23 +354,4 @@ export function getStableVirtualRange({
     end,
     changed: start !== oldStart || end !== oldEnd,
   };
-}
-
-export function flattenUpdateGroups(groups) {
-  const rows = [];
-  (groups || []).forEach(group => {
-    rows.push({
-      type: 'group',
-      key: 'group:' + group.id,
-      group,
-    });
-    group.episodes.forEach(episode => {
-      rows.push({
-        type: 'episode',
-        key: 'episode:' + episode.id,
-        episode,
-      });
-    });
-  });
-  return rows;
 }

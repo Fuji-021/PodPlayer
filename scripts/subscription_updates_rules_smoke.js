@@ -27,6 +27,51 @@ async function main() {
       logLevel: 'silent',
     });
     const rules = require(output);
+    const guardOutput = path.join(tempDir, 'input-guard.cjs');
+    await esbuild.build({
+      entryPoints: [path.join(root, 'src/utils/mainScrollInputGuard.js')],
+      outfile: guardOutput,
+      bundle: true,
+      format: 'cjs',
+      platform: 'node',
+      logLevel: 'silent',
+    });
+    const { shouldYieldMainScrollKey } = require(guardOutput);
+    const mockDbOutput = path.join(tempDir, 'mock-utils-db.js');
+    const mockPodcastDbOutput = path.join(tempDir, 'mock-podcast-db.js');
+    fs.writeFileSync(mockDbOutput, 'export const db = {};\n');
+    fs.writeFileSync(
+      mockPodcastDbOutput,
+      'export async function getSubscribedPodcasts() { return []; }\n'
+    );
+    const snapshotOutput = path.join(tempDir, 'snapshot.cjs');
+    await esbuild.build({
+      entryPoints: [
+        path.join(root, 'src/utils/podcast/subscriptionUpdatesData.js'),
+      ],
+      outfile: snapshotOutput,
+      bundle: true,
+      format: 'cjs',
+      platform: 'node',
+      logLevel: 'silent',
+      plugins: [
+        {
+          name: 'subscription-updates-db-mock',
+          setup(build) {
+            build.onResolve({ filter: /^@\/utils\/db$/ }, () => ({
+              path: mockDbOutput,
+            }));
+            build.onResolve({ filter: /^\.\/db$/ }, args => {
+              if (args.importer.endsWith('subscriptionUpdatesData.js')) {
+                return { path: mockPodcastDbOutput };
+              }
+              return null;
+            });
+          },
+        },
+      ],
+    });
+    const snapshots = require(snapshotOutput);
 
     const monday = localTime(2025, 0, 6);
     assert.strictEqual(
@@ -54,6 +99,24 @@ async function main() {
     assert.strictEqual(
       rules.getUpdateDateBucket(localTime(2024, 1, 25), crossMonthNow),
       'last-week'
+    );
+
+    const lastMonthNow = localTime(2025, 5, 1);
+    assert.strictEqual(
+      rules.getUpdateDateBucket(localTime(2025, 4, 2), lastMonthNow),
+      'last-month'
+    );
+    assert.strictEqual(
+      rules.getUpdateDateBucket(localTime(2025, 4, 1), lastMonthNow),
+      'older'
+    );
+
+    // Calendar-day boundaries must not use a fixed 24-hour subtraction. This
+    // case runs in the host local timezone and remains valid across DST zones.
+    const dstBoundaryNow = localTime(2025, 2, 10, 12);
+    assert.strictEqual(
+      rules.getUpdateDateBucket(localTime(2025, 2, 9, 0), dstBoundaryNow),
+      'yesterday'
     );
 
     const crossYearNow = localTime(2025, 0, 1);
@@ -99,6 +162,21 @@ async function main() {
     assert.deepStrictEqual(
       filtered.map(item => item.id),
       ['sub-unplayed', 'sub-playing']
+    );
+    assert.strictEqual(
+      rules.resolveSubscriptionSelection([{ id: 'kept' }], 'removed'),
+      ''
+    );
+    assert.strictEqual(
+      rules.resolveSubscriptionSelection([{ id: 'kept' }], 'kept'),
+      'kept'
+    );
+    assert.strictEqual(
+      rules.countPendingSubscriptionEpisodes(
+        [{ id: 'shown' }, { id: 'unchanged' }],
+        [{ id: 'new' }, { id: 'shown' }, { id: 'unchanged' }]
+      ),
+      1
     );
 
     const ranked = rules.rankSubscriptionRail(
@@ -177,6 +255,32 @@ async function main() {
       }),
       400
     );
+    assert.deepStrictEqual(
+      rules.getRailThumbGeometry({
+        trackWidth: 1200,
+        visibleRatio: 0.25,
+        canScroll: true,
+      }),
+      { width: 100, travel: 1100 }
+    );
+    assert.deepStrictEqual(
+      rules.getRailThumbGeometry({
+        trackWidth: 1200,
+        visibleRatio: 0.9,
+        canScroll: true,
+      }),
+      { width: 160, travel: 1040 }
+    );
+    assert.strictEqual(
+      rules.getRailArrowGoal({
+        scrollLeft: 100,
+        goal: 310,
+        clientWidth: 300,
+        scrollWidth: 1200,
+        direction: 1,
+      }),
+      520
+    );
 
     const alreadySorted = [
       { id: 'today', pubTime: crossYearNow },
@@ -228,7 +332,138 @@ async function main() {
       { start: 0, end: 18, changed: true }
     );
 
-    process.stdout.write('subscription updates rules smoke: PASS\n');
+    const view = rules.createSubscriptionUpdateView(
+      [
+        { id: 'today', pubTime: crossYearNow },
+        { id: 'older', pubTime: localTime(2024, 10, 1) },
+      ],
+      crossYearNow,
+      { rowHeight: 96, groupHeight: 34 }
+    );
+    assert.strictEqual(view.flatItems.length, 4);
+    assert.strictEqual(view.metrics[0].top, 0);
+    assert.strictEqual(view.totalHeight, 260);
+
+    const snapshot = snapshots.createSubscriptionUpdateSnapshot({
+      podcasts: [
+        { id: 'pod-a', title: 'A' },
+        { id: 'pod-b', title: 'B' },
+      ],
+      episodes: [
+        {
+          id: 'a-new',
+          podcastId: 'pod-a',
+          pubTime: crossYearNow,
+          completed: false,
+        },
+        {
+          id: 'b-mid',
+          podcastId: 'pod-b',
+          pubTime: localTime(2024, 11, 31),
+          completed: false,
+        },
+        {
+          id: 'a-done',
+          podcastId: 'pod-a',
+          pubTime: localTime(2024, 11, 30),
+          completed: true,
+        },
+      ],
+      now: crossYearNow,
+      version: 1,
+    });
+    const allView = snapshots.getSubscriptionUpdateView(snapshot, {
+      now: crossYearNow,
+    });
+    const unfinishedView = snapshots.getSubscriptionUpdateView(snapshot, {
+      unfinishedOnly: true,
+      now: crossYearNow,
+    });
+    const unaffectedPodcastView = snapshots.getSubscriptionUpdateView(
+      snapshot,
+      {
+        podcastId: 'pod-b',
+        now: crossYearNow,
+      }
+    );
+    assert.strictEqual(allView.episodes.length, 3);
+    assert.strictEqual(unfinishedView.episodes.length, 2);
+    const completedSnapshot = snapshots.applySubscriptionUpdateCompletion(
+      snapshot,
+      'a-new',
+      true,
+      crossYearNow
+    );
+    assert.strictEqual(
+      snapshots.getSubscriptionUpdateView(completedSnapshot, {
+        unfinishedOnly: true,
+        now: crossYearNow,
+      }).episodes.length,
+      1
+    );
+    assert.strictEqual(
+      snapshots.getSubscriptionUpdateView(completedSnapshot, {
+        podcastId: 'pod-b',
+        now: crossYearNow,
+      }),
+      unaffectedPodcastView
+    );
+    const restoredSnapshot = snapshots.applySubscriptionUpdateCompletion(
+      completedSnapshot,
+      'a-new',
+      false,
+      crossYearNow
+    );
+    assert.deepStrictEqual(
+      snapshots
+        .getSubscriptionUpdateView(restoredSnapshot, {
+          unfinishedOnly: true,
+          now: crossYearNow,
+        })
+        .episodes.map(item => item.id),
+      ['a-new', 'b-mid']
+    );
+
+    assert.strictEqual(shouldYieldMainScrollKey({ tagName: 'INPUT' }), true);
+    assert.strictEqual(
+      shouldYieldMainScrollKey({
+        tagName: 'DIV',
+        closest: selector => (selector === '.vue-slider' ? {} : null),
+      }),
+      true
+    );
+    assert.strictEqual(
+      shouldYieldMainScrollKey({
+        tagName: 'DIV',
+        closest: () => null,
+      }),
+      false
+    );
+
+    const synthetic = Array.from({ length: 10000 }, (_, index) => ({
+      id: 'synthetic-' + index,
+      podcastId: 'pod-' + (index % 32),
+      pubTime: crossYearNow - index * 60000,
+      completed: index % 3 === 0,
+      stableOrder: index,
+    }));
+    const perfStartedAt = process.hrtime.bigint();
+    const syntheticView = rules.createSubscriptionUpdateView(
+      rules.sortSubscriptionUpdates(synthetic),
+      crossYearNow
+    );
+    const elapsedMs = Number(process.hrtime.bigint() - perfStartedAt) / 1e6;
+    assert.strictEqual(syntheticView.episodes.length, 10000);
+    assert.ok(
+      elapsedMs < 2000,
+      '10k pure update view took too long: ' + elapsedMs.toFixed(1) + 'ms'
+    );
+
+    process.stdout.write(
+      'subscription updates rules smoke: PASS (' +
+        elapsedMs.toFixed(1) +
+        'ms / 10k)\n'
+    );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

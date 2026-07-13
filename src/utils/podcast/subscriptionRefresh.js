@@ -1,4 +1,6 @@
 import { refreshAllSubscriptions } from './service';
+import { markSubscriptionUpdatesDirty } from './subscriptionUpdatesData';
+import { notifySubscriptionUpdatesChanged } from './subscriptionNavigation';
 
 const REFRESH_KEY = 'podcastLibrary.lastAutoRefresh';
 const DEFAULT_INTERVAL = 10 * 60 * 1000;
@@ -43,6 +45,10 @@ export function refreshSubscribedPodcasts({
   refreshInFlight = refreshAllSubscriptions()
     .then(result => {
       latestResult = result || { totalNew: 0, results: [] };
+      if (latestResult.changed) {
+        markSubscriptionUpdatesDirty();
+        notifySubscriptionUpdatesChanged();
+      }
       return { ...latestResult, skipped: false };
     })
     .finally(() => {
