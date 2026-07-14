@@ -588,6 +588,7 @@ export default {
 .rail-item {
   --rail-cover-lift: 0px;
   --rail-cover-scale: 1;
+  --rail-cover-transition: 140ms;
   --rail-halo-opacity: 0;
   --rail-halo-scale: 0.9;
   position: relative;
@@ -624,7 +625,7 @@ export default {
   justify-content: center;
   border-radius: var(--radius-cover);
   transform: translateY(var(--rail-cover-lift)) scale(var(--rail-cover-scale));
-  transition: transform 180ms ease-out;
+  transition: transform var(--rail-cover-transition) ease-out;
 }
 
 .rail-all-icon {
@@ -646,6 +647,7 @@ export default {
 .rail-item.active {
   // The selected state keeps the hover lift, then adds its small scale.
   --rail-cover-scale: 1.045;
+  --rail-cover-transition: 180ms;
   --rail-halo-scale: 0.98;
 }
 
