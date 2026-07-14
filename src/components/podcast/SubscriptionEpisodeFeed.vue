@@ -120,6 +120,8 @@ export default {
     this._isActive = false;
     this.unbindMainScroll();
     this.stopScrollAnimation();
+    this.cancelVirtualFrame();
+    this.cancelVisibleHydration();
     if (this._resizeRaf) {
       cancelAnimationFrame(this._resizeRaf);
       this._resizeRaf = null;
@@ -127,10 +129,11 @@ export default {
   },
   beforeDestroy() {
     this._destroyed = true;
+    this._isActive = false;
     this.unbindMainScroll();
     this.stopScrollAnimation();
-    if (this._virtualRaf) cancelAnimationFrame(this._virtualRaf);
-    if (this._hydrateTimer) clearTimeout(this._hydrateTimer);
+    this.cancelVirtualFrame();
+    this.cancelVisibleHydration();
     if (this._resizeRaf) cancelAnimationFrame(this._resizeRaf);
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', this.handleViewportResize);
@@ -150,7 +153,9 @@ export default {
         return;
       }
       this.$nextTick(() => {
-        if (this._destroyed || this._mainScrollBound) return;
+        if (this._destroyed || !this._isActive || this._mainScrollBound) {
+          return;
+        }
         const delayed = this.getMainScrollElement();
         if (delayed) this.bindMainScrollTarget(delayed);
       });
@@ -183,9 +188,10 @@ export default {
       this._scrollEl = null;
     },
     onMainScroll() {
-      if (this._virtualRaf) return;
+      if (!this._isActive || this._virtualRaf) return;
       this._virtualRaf = requestAnimationFrame(() => {
         this._virtualRaf = null;
+        if (this._destroyed || !this._isActive) return;
         const main = this.getMainScrollElement();
         this.showBackTop = !!(main && main.scrollTop > 520);
         this.recalcWindow(false);
@@ -201,6 +207,7 @@ export default {
       });
     },
     recalcWindow(forceMeasure) {
+      if (this._destroyed || !this._isActive) return;
       const metrics = this.metrics;
       const main = this.getMainScrollElement();
       const list = this.$refs.feedList;
@@ -243,16 +250,33 @@ export default {
       }
     },
     scheduleVisibleHydration() {
+      if (this._destroyed || !this._isActive) return;
       if (this._hydrateTimer) clearTimeout(this._hydrateTimer);
       const token = (this._hydrateToken || 0) + 1;
       this._hydrateToken = token;
       this._hydrateTimer = setTimeout(() => {
-        if (this._destroyed || token !== this._hydrateToken) return;
+        if (token === this._hydrateToken) this._hydrateTimer = null;
+        if (
+          this._destroyed ||
+          !this._isActive ||
+          token !== this._hydrateToken
+        ) {
+          return;
+        }
         const episodes = this.virtualItems
           .filter(item => item.type === 'episode')
           .map(item => item.episode);
         this.$emit('visible-episodes', episodes, token);
       }, 150);
+    },
+    cancelVirtualFrame() {
+      if (this._virtualRaf) cancelAnimationFrame(this._virtualRaf);
+      this._virtualRaf = null;
+    },
+    cancelVisibleHydration() {
+      this._hydrateToken = (this._hydrateToken || 0) + 1;
+      if (this._hydrateTimer) clearTimeout(this._hydrateTimer);
+      this._hydrateTimer = null;
     },
     scrollToTop() {
       const main = this.getMainScrollElement();

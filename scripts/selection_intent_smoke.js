@@ -16,8 +16,8 @@ function element(parent, selection) {
     parentNode: parent || null,
     dataset: selection ? { selection } : {},
     closest(selector) {
-      if (selector !== '[data-selection="content"]') return null;
-      if (this.dataset.selection === 'content') return this;
+      if (selector !== '[data-selection]') return null;
+      if (this.dataset.selection) return this;
       return this.parentElement && this.parentElement.closest
         ? this.parentElement.closest(selector)
         : null;
@@ -59,6 +59,7 @@ async function main() {
     const row = element();
     const content = element(row, 'content');
     const ui = element(row, 'ui');
+    const nestedUi = element(content, 'ui');
     const outside = element();
     const selectedText = { parentElement: content, parentNode: content };
     const outsideText = { parentElement: outside, parentNode: outside };
@@ -72,6 +73,7 @@ async function main() {
     };
     assert.strictEqual(intent.isContentSelectionTarget(selectedText), true);
     assert.strictEqual(intent.isContentSelectionTarget(ui), false);
+    assert.strictEqual(intent.isContentSelectionTarget(nestedUi), false);
     assert.strictEqual(intent.hasSelectionWithin(row), true);
     assert.strictEqual(
       intent.shouldPreserveSelection({ target: selectedText }, row),
@@ -79,6 +81,10 @@ async function main() {
     );
     assert.strictEqual(
       intent.shouldPreserveSelection({ target: ui }, row),
+      false
+    );
+    assert.strictEqual(
+      intent.shouldPreserveSelection({ target: nestedUi }, row),
       false
     );
 

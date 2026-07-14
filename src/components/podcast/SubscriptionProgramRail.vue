@@ -98,6 +98,7 @@ import { ensureTinyCover, peekTinyCover } from '@/utils/podcast/coverHalo';
 import {
   getRailArrowGoal,
   getRailMetrics,
+  getRailMotionStep,
   getRailThumbDragTarget,
   getRailThumbGeometry,
 } from '@/utils/podcast/subscriptionUpdatesRules';
@@ -318,10 +319,7 @@ export default {
     },
     startAnimation() {
       if (this._animationRaf) return;
-      this._animationStartedAt = 0;
-      this._animationStartLeft = this.$refs.viewport
-        ? this.$refs.viewport.scrollLeft
-        : 0;
+      this._lastAnimationAt = 0;
       const tick = now => {
         const viewport = this.$refs.viewport;
         if (
@@ -332,17 +330,18 @@ export default {
           this._animationRaf = null;
           return;
         }
-        if (!this._animationStartedAt) {
-          this._animationStartedAt = now;
-          this._animationStartLeft = viewport.scrollLeft;
-        }
-        const progress = Math.min(1, (now - this._animationStartedAt) / 210);
-        const eased = 1 - Math.pow(1 - progress, 3);
-        const next =
-          this._animationStartLeft +
-          (this._railGoal - this._animationStartLeft) * eased;
+        const deltaMs = this._lastAnimationAt
+          ? now - this._lastAnimationAt
+          : 16;
+        this._lastAnimationAt = now;
+        const next = getRailMotionStep({
+          scrollLeft: viewport.scrollLeft,
+          goal: this._railGoal,
+          maxScroll: this._metrics ? this._metrics.maxScroll : 0,
+          deltaMs,
+        });
         this.writeRailPosition(next);
-        if (progress >= 1) {
+        if (next === this._railGoal) {
           this.writeRailPosition(this._railGoal);
           this._railGoal = null;
           this._animationRaf = null;
@@ -358,7 +357,7 @@ export default {
     stopAnimation() {
       if (this._animationRaf) cancelAnimationFrame(this._animationRaf);
       this._animationRaf = null;
-      this._animationStartedAt = 0;
+      this._lastAnimationAt = 0;
     },
     ensureSelectedVisible(podcastId) {
       const viewport = this.$refs.viewport;
@@ -515,8 +514,7 @@ export default {
       const isVisible =
         this.previewPodcastId === podcast.id ||
         this.selectedPodcastId === podcast.id;
-      const url =
-        this.haloMap[podcast.id] || (isVisible ? podcast.coverUrl : '');
+      const url = isVisible ? this.haloMap[podcast.id] || podcast.coverUrl : '';
       return url ? { backgroundImage: 'url("' + url + '")' } : {};
     },
   },
@@ -588,6 +586,10 @@ export default {
 }
 
 .rail-item {
+  --rail-cover-lift: 0px;
+  --rail-cover-scale: 1;
+  --rail-halo-opacity: 0;
+  --rail-halo-scale: 0.9;
   position: relative;
   display: inline-flex;
   flex: 0 0 96px;
@@ -621,9 +623,8 @@ export default {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-cover);
-  transform: translateY(0) scale(1);
+  transform: translateY(var(--rail-cover-lift)) scale(var(--rail-cover-scale));
   transition: transform 180ms ease-out;
-  will-change: transform;
 }
 
 .rail-all-icon {
@@ -636,15 +637,20 @@ export default {
   }
 }
 
-.rail-item:hover .rail-cover,
-.rail-item:hover .rail-all-icon {
-  transform: translateY(-3px) scale(1);
+.rail-item:hover,
+.rail-item.active {
+  --rail-cover-lift: -3px;
+  --rail-halo-opacity: 1;
 }
 
-.rail-item.active .rail-cover,
-.rail-item.active .rail-all-icon {
-  // 选中态继承 hover 的抬起，再叠加轻微放大；移开指针后也保持。
-  transform: translateY(-3px) scale(1.045);
+.rail-item.active {
+  // The selected state keeps the hover lift, then adds its small scale.
+  --rail-cover-scale: 1.045;
+  --rail-halo-scale: 0.98;
+}
+
+.rail-item:hover:not(.active) {
+  --rail-halo-scale: 0.96;
 }
 
 .rail-item.active .rail-all-icon {
@@ -663,7 +669,7 @@ export default {
 
 .rail-cover-halo {
   position: absolute;
-  top: 5px;
+  top: 8px;
   right: 0;
   left: 0;
   height: 100%;
@@ -671,26 +677,10 @@ export default {
   border-radius: var(--radius-cover);
   background-position: center;
   background-size: cover;
-  filter: blur(10px) opacity(0.42);
-  opacity: 0;
-  transform: scale(0.9);
-  transition: filter 180ms ease-out, opacity 180ms ease-out,
-    transform 180ms ease-out, top 180ms ease-out;
-  will-change: transform, opacity;
-}
-
-.rail-item:hover .rail-cover-halo {
-  top: 8px;
-  filter: blur(12px) opacity(0.56);
-  opacity: 1;
-  transform: scale(0.96);
-}
-
-.rail-item.active .rail-cover-halo {
-  top: 8px;
   filter: blur(12px) opacity(0.6);
-  opacity: 1;
-  transform: scale(0.98);
+  opacity: var(--rail-halo-opacity);
+  transform: scale(var(--rail-halo-scale));
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
 }
 
 .program-rail.is-moving .rail-cover-halo,

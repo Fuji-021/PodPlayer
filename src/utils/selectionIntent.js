@@ -9,17 +9,20 @@ function nodeIsWithin(root, node) {
   return root === node || root.contains(node);
 }
 
+function nearestSelectionMarker(target) {
+  const element = asElement(target);
+  return element && typeof element.closest === 'function'
+    ? element.closest('[data-selection]')
+    : null;
+}
+
 /**
  * Returns whether an event target belongs to a user-readable content island.
  * UI shells deliberately remain selectable only when they opt into this marker.
  */
 export function isContentSelectionTarget(target) {
-  const element = asElement(target);
-  return !!(
-    element &&
-    typeof element.closest === 'function' &&
-    element.closest('[data-selection="content"]')
-  );
+  const marker = nearestSelectionMarker(target);
+  return !!(marker && marker.dataset.selection === 'content');
 }
 
 /**

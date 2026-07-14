@@ -311,6 +311,31 @@ export function getRailArrowGoal({
   });
 }
 
+/**
+ * Advances the rail toward its current target without retaining an obsolete
+ * animation origin. A new arrow click can retarget from the exact visible
+ * position instead of restarting an easing curve and jumping.
+ */
+export function getRailMotionStep({
+  scrollLeft = 0,
+  goal = 0,
+  maxScroll = 0,
+  deltaMs = 16,
+} = {}) {
+  const max = Math.max(0, Number(maxScroll) || 0);
+  const current = Math.max(0, Math.min(max, Number(scrollLeft) || 0));
+  const target = Math.max(0, Math.min(max, Number(goal) || 0));
+  const distance = target - current;
+  if (Math.abs(distance) < 0.75) return target;
+
+  // A short catch-up is responsive at 60 Hz and remains continuous when an
+  // arrow click changes the target before the prior motion settles.
+  const frame = Math.min(64, Math.max(0, Number(deltaMs) || 0));
+  const progress = 1 - Math.exp(-frame / 36);
+  const next = current + distance * progress;
+  return Math.max(0, Math.min(max, next));
+}
+
 export function getRailThumbDragTarget({
   startScrollLeft = 0,
   startPointerX = 0,

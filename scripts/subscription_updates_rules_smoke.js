@@ -319,6 +319,23 @@ export const db = {
       }),
       520
     );
+    const forwardRailStep = rules.getRailMotionStep({
+      scrollLeft: 100,
+      goal: 520,
+      maxScroll: 900,
+      deltaMs: 16,
+    });
+    assert.ok(forwardRailStep > 100 && forwardRailStep < 520);
+    const reversedRailStep = rules.getRailMotionStep({
+      scrollLeft: forwardRailStep,
+      goal: 0,
+      maxScroll: 900,
+      deltaMs: 16,
+    });
+    assert.ok(
+      reversedRailStep >= 0 && reversedRailStep < forwardRailStep,
+      'rail retarget should reverse from the current position without a snap'
+    );
 
     const alreadySorted = [
       { id: 'today', pubTime: crossYearNow },
