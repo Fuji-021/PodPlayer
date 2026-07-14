@@ -64,9 +64,15 @@ export default {
         show(el, el.__vTip__.text, el.__vTip__.placement);
       },
       leave: hide,
+      dismiss: hide,
     };
     el.addEventListener('mouseenter', el.__vTip__.enter);
     el.addEventListener('mouseleave', el.__vTip__.leave);
+    // Router navigation can replace the target before a mouseleave fires.
+    // Dismiss on the initiating interaction so the singleton floater cannot
+    // remain pinned over the next page.
+    el.addEventListener('pointerdown', el.__vTip__.dismiss);
+    el.addEventListener('click', el.__vTip__.dismiss);
   },
   update(el, binding) {
     if (el.__vTip__) {
@@ -78,6 +84,8 @@ export default {
     if (el.__vTip__) {
       el.removeEventListener('mouseenter', el.__vTip__.enter);
       el.removeEventListener('mouseleave', el.__vTip__.leave);
+      el.removeEventListener('pointerdown', el.__vTip__.dismiss);
+      el.removeEventListener('click', el.__vTip__.dismiss);
       hide(); // 防"宿主已卸载但浮层还亮着"
       delete el.__vTip__;
     }

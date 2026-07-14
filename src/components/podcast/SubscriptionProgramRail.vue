@@ -6,10 +6,10 @@
   >
     <div ref="root" class="program-rail">
       <button
-        v-tip="'向左浏览节目'"
+        v-tip="'向左浏览'"
         class="rail-arrow"
         :disabled="!state.canPrev"
-        aria-label="向左浏览节目"
+        aria-label="向左浏览"
         @click="scrollRail(-1)"
       >
         <svg-icon icon-class="arrow-left" />
@@ -54,8 +54,10 @@
           :aria-label="podcast.title || '未命名节目'"
           :data-podcast-id="podcast.id"
           role="option"
-          @pointerenter="warmHalo(podcast)"
-          @focus="warmHalo(podcast)"
+          @pointerenter="previewHalo(podcast)"
+          @pointerleave="clearPreviewHalo(podcast)"
+          @focus="previewHalo(podcast)"
+          @blur="clearPreviewHalo(podcast)"
           @click="select(podcast.id)"
         >
           <span class="rail-cover">
@@ -65,10 +67,10 @@
         </button>
       </div>
       <button
-        v-tip="'向右浏览节目'"
+        v-tip="'向右浏览'"
         class="rail-arrow"
         :disabled="!state.canNext"
-        aria-label="向右浏览节目"
+        aria-label="向右浏览"
         @click="scrollRail(1)"
       >
         <svg-icon icon-class="arrow-right" />
@@ -115,6 +117,7 @@ export default {
         canNext: false,
       },
       haloMap: {},
+      previewPodcastId: '',
     };
   },
   watch: {
@@ -168,6 +171,7 @@ export default {
       this._haloToken = (this._haloToken || 0) + 1;
       this._railGoal = null;
       this._controllerOwnsScroll = false;
+      this.previewPodcastId = '';
       this.stopAnimation();
       this.finishDrag();
       if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
@@ -471,6 +475,16 @@ export default {
       document.removeEventListener('pointerup', this.finishDrag);
       document.removeEventListener('pointercancel', this.finishDrag);
     },
+    previewHalo(podcast) {
+      if (!podcast || !podcast.id) return;
+      this.previewPodcastId = podcast.id;
+      this.warmHalo(podcast);
+    },
+    clearPreviewHalo(podcast) {
+      if (podcast && this.previewPodcastId === podcast.id) {
+        this.previewPodcastId = '';
+      }
+    },
     warmHalo(podcast) {
       if (
         !podcast ||
@@ -497,7 +511,12 @@ export default {
       });
     },
     haloStyle(podcast) {
-      const url = podcast && this.haloMap[podcast.id];
+      if (!podcast || !podcast.id) return {};
+      const isVisible =
+        this.previewPodcastId === podcast.id ||
+        this.selectedPodcastId === podcast.id;
+      const url =
+        this.haloMap[podcast.id] || (isVisible ? podcast.coverUrl : '');
       return url ? { backgroundImage: 'url("' + url + '")' } : {};
     },
   },
@@ -553,6 +572,7 @@ export default {
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
+  padding: 10px 0 16px;
   scrollbar-width: none;
   scroll-behavior: auto;
 
@@ -581,6 +601,11 @@ export default {
   color: var(--color-text-secondary);
   background: transparent;
 
+  &:hover,
+  &.active {
+    z-index: 1;
+  }
+
   &:focus-visible {
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;
@@ -596,8 +621,9 @@ export default {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-cover);
-  transform: scale(1);
-  transition: transform 180ms ease-out, box-shadow 180ms ease-out;
+  transform: translateY(0) scale(1);
+  transition: transform 180ms ease-out;
+  will-change: transform;
 }
 
 .rail-all-icon {
@@ -610,10 +636,19 @@ export default {
   }
 }
 
+.rail-item:hover .rail-cover,
+.rail-item:hover .rail-all-icon {
+  transform: translateY(-3px) scale(1);
+}
+
 .rail-item.active .rail-cover,
 .rail-item.active .rail-all-icon {
-  transform: scale(1.055);
-  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.2);
+  transform: translateY(0) scale(1.045);
+}
+
+.rail-item.active:hover .rail-cover,
+.rail-item.active:hover .rail-all-icon {
+  transform: translateY(-2px) scale(1.045);
 }
 
 .rail-item.active .rail-all-icon {
@@ -632,20 +667,34 @@ export default {
 
 .rail-cover-halo {
   position: absolute;
-  inset: 1px;
+  top: 5px;
+  right: 0;
+  left: 0;
+  height: 100%;
   z-index: 0;
   border-radius: var(--radius-cover);
   background-position: center;
   background-size: cover;
-  filter: blur(6px);
+  filter: blur(10px) opacity(0.42);
   opacity: 0;
-  transform: scale(1.08);
-  transition: opacity 150ms ease-out;
+  transform: scale(0.9);
+  transition: filter 180ms ease-out, opacity 180ms ease-out,
+    transform 180ms ease-out, top 180ms ease-out;
+  will-change: transform, opacity;
 }
 
-.rail-item:hover .rail-cover-halo,
+.rail-item:hover .rail-cover-halo {
+  top: 8px;
+  filter: blur(12px) opacity(0.56);
+  opacity: 1;
+  transform: scale(0.96);
+}
+
 .rail-item.active .rail-cover-halo {
-  opacity: 0.42;
+  top: 8px;
+  filter: blur(12px) opacity(0.6);
+  opacity: 1;
+  transform: scale(0.98);
 }
 
 .program-rail.is-moving .rail-cover-halo,
