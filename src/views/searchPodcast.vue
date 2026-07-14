@@ -1,6 +1,6 @@
 <template>
   <!-- [B-52] 播客搜索结果页：本地（我的订阅/单集）+ 在线发现（iTunes） -->
-  <div class="search-podcast">
+  <div class="search-podcast" data-selection="ui">
     <h1 class="sp-title">搜索 “{{ keywords }}”</h1>
 
     <!-- 本地：已订阅节目 -->
@@ -11,7 +11,8 @@
           v-for="p in localPods"
           :key="p.id"
           class="local-card"
-          @click="openLocalPodcast(p)"
+          data-selection="ui"
+          @click="openLocalPodcast(p, $event)"
         >
           <div class="lc-cover-box">
             <div
@@ -20,7 +21,7 @@
             ></div>
             <img class="lc-cover" :src="p.coverUrl" @error="onImgErr" />
           </div>
-          <div class="lc-name">{{ p.title }}</div>
+          <div class="lc-name" data-selection="content">{{ p.title }}</div>
         </div>
       </div>
     </section>
@@ -33,7 +34,8 @@
           v-for="ep in localEps"
           :key="ep.id"
           class="ep-row"
-          @click="onRowClick(ep)"
+          data-selection="ui"
+          @click="onRowClick(ep, $event)"
           @contextmenu.prevent="openMenu($event, ep)"
         >
           <!-- 左侧=节目封面(非单集封面，便于认出来源)；卡片整体已有动作反馈，封面不再单独加光晕 -->
@@ -43,9 +45,11 @@
             @error="onImgErr"
           />
           <div class="ep-meta">
-            <div class="ep-t">{{ ep.title }}</div>
+            <div class="ep-t" data-selection="content">{{ ep.title }}</div>
             <div class="ep-s">
-              <span class="ep-pod">{{ ep.podcastTitle }}</span>
+              <span class="ep-pod" data-selection="content">
+                {{ ep.podcastTitle }}
+              </span>
               <!-- 分隔点 call back 状态点：绿=已订阅 / 黄=听过 -->
               <span class="ep-dot" :class="dotClass(ep)"></span>
               <span>{{ formatDate(ep) }}</span>
@@ -124,6 +128,7 @@ import { getListenStatsBulk } from '@/utils/podcast/listening';
 import DiscoverCard from '@/components/DiscoverCard.vue';
 import SvgIcon from '@/components/SvgIcon.vue';
 import BouncingDots from '@/components/BouncingDots.vue';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 export default {
   name: 'SearchPodcast',
@@ -203,13 +208,15 @@ export default {
         if (this.keywords === myKw) this.loadingOnline = false;
       }
     },
-    openLocalPodcast(p) {
+    openLocalPodcast(p, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       this.$router.push({
         name: 'podcastDetail',
         params: { feedUrlEncoded: encodeURIComponent(p.id) },
       });
     },
-    onRowClick(ep) {
+    onRowClick(ep, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       // [B] 右键菜单打开时左键点行只关菜单，不误播
       if (this.menu.open) {
         this.closeMenu();

@@ -1,5 +1,5 @@
 <template>
-  <div class="transcript-section" :class="{ expanded }">
+  <div class="transcript-section" data-selection="ui" :class="{ expanded }">
     <div class="transcript-header">
       <h2>AI 文字稿</h2>
       <div v-if="mode === 'done' || mode === 'paused'" class="t-actions">
@@ -191,6 +191,7 @@
         <div
           ref="list"
           class="seg-list"
+          data-selection="content"
           @scroll.passive="onListScroll"
           @wheel.passive="onUserScrollIntent"
           @pointerdown="onUserScrollIntent"
@@ -207,9 +208,11 @@
               class="seg-row"
               :class="{ active: rowHasActive(w.row) }"
             >
-              <span class="seg-time" @click="onSegClick(w.row.items[0].seg)">{{
-                fmtClock(w.row.items[0].seg.start)
-              }}</span>
+              <span
+                class="seg-time"
+                @click="onSegClick(w.row.items[0].seg, $event)"
+                >{{ fmtClock(w.row.items[0].seg.start) }}</span
+              >
               <span class="seg-text"
                 ><span
                   v-for="it in w.row.items"
@@ -219,7 +222,7 @@
                     active: it.vi === curIdx,
                     'ai-changed': showAi && aiChangedSet.has(it.vi),
                   }"
-                  @click="onSegClick(it.seg)"
+                  @click="onSegClick(it.seg, $event)"
                   >{{ it.seg.display }}</span
                 ></span
               >
@@ -276,6 +279,7 @@ import {
   getQueuedStateFromAsrStatus,
   getTranscriptEntryBehavior,
 } from '@/utils/podcast/transcriptEntryPolicy';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 export default {
   name: 'TranscriptPanel',
@@ -1081,15 +1085,9 @@ export default {
       this.curIdx = -1;
       this.$store.dispatch('showToast', '已删除文字稿');
     },
-    onSegClick(seg) {
+    onSegClick(seg, event) {
       if (!seg) return;
-      // 选中文字(加词典)时不误触跳播（双击选词会同时触发 click）
-      try {
-        const s = window.getSelection && window.getSelection().toString();
-        if (s && s.trim()) return;
-      } catch (e) {
-        /* ignore */
-      }
+      if (shouldPreserveSelection(event, this.$refs.list)) return;
       this.$emit('seek', seg.start || 0);
     },
     // 导出文稿为文件（另存为 txt/srt）

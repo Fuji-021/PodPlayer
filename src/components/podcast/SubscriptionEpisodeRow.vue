@@ -2,8 +2,9 @@
   <article
     class="update-episode-row"
     :class="{ 'is-playing': runtime.isPlaying }"
-    @click="deferOpenEpisode"
-    @dblclick="playFromRow"
+    data-selection="ui"
+    @click="deferOpenEpisode($event)"
+    @dblclick="playFromRow($event)"
     @contextmenu.prevent="$emit('menu', $event, episode)"
   >
     <button
@@ -15,13 +16,15 @@
       <PodImage
         class="update-cover"
         :src="episode.podcastCoverUrl || episode.episodeCoverUrl"
+        loading="eager"
       />
     </button>
     <div class="update-episode-main">
       <div class="update-episode-meta">
         <button
           class="update-podcast-link"
-          @click.stop="$emit('open-podcast', episode)"
+          data-selection="content"
+          @click.stop="openPodcastFromContent($event)"
           @dblclick.stop
         >
           {{ episode.podcastTitle || '未命名节目' }}
@@ -35,7 +38,8 @@
       </div>
       <button
         class="update-episode-title"
-        @click.stop="$emit('open-episode', episode)"
+        data-selection="content"
+        @click.stop="openEpisodeFromContent($event)"
         @dblclick.stop
       >
         {{ episode.title || '未命名单集' }}
@@ -80,6 +84,7 @@
 <script>
 import PodImage from '@/components/PodImage.vue';
 import SvgIcon from '@/components/SvgIcon.vue';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 function formatDuration(value) {
   const total = Math.max(0, Number(value) || 0);
@@ -133,19 +138,50 @@ export default {
     },
   },
   beforeDestroy() {
-    if (this._clickTimer) clearTimeout(this._clickTimer);
+    this.clearClickTimer();
+  },
+  deactivated() {
+    this.clearClickTimer();
   },
   methods: {
-    deferOpenEpisode() {
+    clearClickTimer() {
       if (this._clickTimer) clearTimeout(this._clickTimer);
+      this._clickTimer = null;
+    },
+    preservesContentSelection(event) {
+      return shouldPreserveSelection(event, this.$el);
+    },
+    openPodcastFromContent(event) {
+      if (this.preservesContentSelection(event)) {
+        this.clearClickTimer();
+        return;
+      }
+      this.$emit('open-podcast', this.episode);
+    },
+    openEpisodeFromContent(event) {
+      if (this.preservesContentSelection(event)) {
+        this.clearClickTimer();
+        return;
+      }
+      this.$emit('open-episode', this.episode);
+    },
+    deferOpenEpisode(event) {
+      if (this.preservesContentSelection(event)) {
+        this.clearClickTimer();
+        return;
+      }
+      this.clearClickTimer();
       this._clickTimer = setTimeout(() => {
         this._clickTimer = null;
         this.$emit('open-episode', this.episode);
       }, 250);
     },
-    playFromRow() {
-      if (this._clickTimer) clearTimeout(this._clickTimer);
-      this._clickTimer = null;
+    playFromRow(event) {
+      if (this.preservesContentSelection(event)) {
+        this.clearClickTimer();
+        return;
+      }
+      this.clearClickTimer();
       this.$emit('play', this.episode);
     },
   },

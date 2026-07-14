@@ -12,7 +12,7 @@ function ensureStyle() {
   const s = document.createElement('style');
   s.id = 'v-tip-style';
   s.textContent =
-    '.v-tip-floater{position:fixed;z-index:10000;pointer-events:none;white-space:nowrap;' +
+    '.v-tip-floater{position:fixed;z-index:10000;pointer-events:none;white-space:nowrap;-webkit-user-select:none;user-select:none;' +
     'font-size:12px;font-weight:500;line-height:1;color:#fff;background:rgba(38,38,42,.94);' +
     'padding:6px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.2);' +
     'max-width:60vw;overflow:hidden;text-overflow:ellipsis;opacity:0;transform:translateY(-2px);' +
@@ -28,6 +28,7 @@ function getFloater() {
   if (floater) return floater;
   floater = document.createElement('div');
   floater.className = 'v-tip-floater';
+  floater.dataset.selection = 'ui';
   document.body.appendChild(floater);
   return floater;
 }

@@ -30,6 +30,7 @@
     "test:transcript-entry": "node scripts/transcript_entry_policy_smoke.js",
     "test:power-resume": "node scripts/power_resume_smoke.js",
     "test:subscription-updates": "node scripts/subscription_updates_rules_smoke.js",
+    "test:selection-intent": "node scripts/selection_intent_smoke.js",
     "prettier": "npx prettier --write ./src",
     "netease_api:run": "npx @neteaseapireborn/api"
   },

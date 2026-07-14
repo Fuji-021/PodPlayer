@@ -1,18 +1,19 @@
 <template>
-  <div class="favorites-page">
+  <div class="favorites-page" data-selection="ui">
     <h1>我的收藏</h1>
     <div v-if="!list.length" class="empty">还没有收藏的单集</div>
     <div
       v-for="item in list"
       :key="item.id"
       class="row"
-      @click="play(item)"
+      data-selection="ui"
+      @click="play(item, $event)"
       @contextmenu.prevent="openMenu($event, item)"
     >
       <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
       <div class="meta">
-        <div class="t">{{ item.title }}</div>
-        <div class="s">{{ item.podcastTitle }}</div>
+        <div class="t" data-selection="content">{{ item.title }}</div>
+        <div class="s" data-selection="content">{{ item.podcastTitle }}</div>
       </div>
       <!-- [B-33] 专属页：单集右边只显示「已收藏」状态按钮（点击取消收藏） -->
       <button v-tip="'取消收藏'" class="unfav" @click.stop="unfav(item)">
@@ -47,6 +48,7 @@
 <script>
 import { getAllFavorites } from '@/utils/podcast/db';
 import SvgIcon from '@/components/SvgIcon.vue';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 export default {
   name: 'FavoritesList',
@@ -123,7 +125,8 @@ export default {
       this.closeMenu();
       if (it) await this.unfav(it);
     },
-    play(item) {
+    play(item, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       const ep = {
         id: item.id,
         guid: item.id.split('::').pop(),

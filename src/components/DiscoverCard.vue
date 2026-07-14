@@ -4,7 +4,8 @@
   <div
     class="disc-card"
     :class="{ 'overlay-mode': overlayMode }"
-    @click="onCardClick"
+    data-selection="ui"
+    @click="onCardClick($event)"
     @mouseenter="onCardEnter"
     @mouseleave="onCardEnterCancel"
     @contextmenu.prevent="onContextMenu"
@@ -47,7 +48,7 @@
         </div>
       </div>
     </div>
-    <div class="card-name">
+    <div class="card-name" data-selection="content">
       <span class="cn-text">{{ podcast.name }}</span>
       <!-- [B-49] 已订阅绿点（少数派标记；封面仍零常驻状态，点在名字旁不在封面上） -->
       <span v-if="subbed" v-tip="'已订阅'" class="src-dot"></span>
@@ -59,7 +60,7 @@
       ></span>
     </div>
     <!-- [资源池] 无播放量(如 Apple 榜项 avgPlayCount=0)时只显类目，不显"· 0" -->
-    <div class="card-meta">
+    <div class="card-meta" data-selection="content">
       {{ podcast.primaryGenreName
       }}<template v-if="podcast.avgPlayCount">
         · {{ fmtCount(podcast.avgPlayCount) }}</template
@@ -78,6 +79,7 @@ import {
 } from '@/utils/podcast/discover';
 import { deletePodcast } from '@/utils/podcast/service';
 import { getPodcast, peekPodcast } from '@/utils/podcast/db';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 export default {
   name: 'DiscoverCard',
@@ -198,7 +200,8 @@ export default {
       clearTimeout(this._prefetchTimer);
     },
     // 左键：进节目详情。已订阅用本地 feedUrl 秒进；未订阅走"预览"(入库不订阅)再进，可试听
-    onCardClick() {
+    onCardClick(event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       if (this.overlayMode) {
         this.closeOverlay();
         return;

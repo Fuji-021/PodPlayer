@@ -1,5 +1,5 @@
 <template>
-  <div class="history-page">
+  <div class="history-page" data-selection="ui">
     <div class="head">
       <h1>收听历史</h1>
       <!-- [B-37] 只看已听完（参考小宇宙），舍弃转发/评论 -->
@@ -17,14 +17,15 @@
       v-for="item in shownList"
       :key="item.id"
       class="row"
-      @click="play(item)"
+      data-selection="ui"
+      @click="play(item, $event)"
       @contextmenu.prevent="openMenu($event, item)"
     >
       <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
       <div class="meta">
-        <div class="t">{{ item.title }}</div>
+        <div class="t" data-selection="content">{{ item.title }}</div>
         <div class="s">
-          <span>{{ item.podcastTitle }}</span>
+          <span data-selection="content">{{ item.podcastTitle }}</span>
           <span class="dot">·</span>
           <span :class="{ done: item.completed }">{{ remainText(item) }}</span>
           <span class="dot">·</span>
@@ -67,6 +68,7 @@
 <script>
 import { getRecentlyPlayed } from '@/utils/podcast/db';
 import SvgIcon from '@/components/SvgIcon.vue';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 export default {
   name: 'HistoryList',
@@ -116,7 +118,8 @@ export default {
       if (d < 30) return `${d} 天前`;
       return `${Math.floor(d / 30)} 个月前`;
     },
-    play(item) {
+    play(item, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       const ep = {
         id: item.id,
         guid: item.guid || item.id.split('::').pop(),

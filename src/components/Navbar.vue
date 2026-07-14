@@ -1,6 +1,9 @@
 <template>
   <div>
-    <nav :class="{ 'has-custom-titlebar': hasCustomTitlebar }">
+    <nav
+      data-selection="ui"
+      :class="{ 'has-custom-titlebar': hasCustomTitlebar }"
+    >
       <Win32Titlebar v-if="enableWin32Titlebar" />
       <LinuxTitlebar v-if="enableLinuxTitlebar" />
       <div class="navigation-buttons">

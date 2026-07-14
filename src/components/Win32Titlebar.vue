@@ -1,5 +1,5 @@
 <template>
-  <div class="win32-titlebar">
+  <div class="win32-titlebar" data-selection="ui">
     <!-- [播客改造 A-27] 软件名 → PodPlayer + on-air-square logo + @Fujii 署名 -->
     <div class="title">{{ playerTitle }}</div>
     <div class="brand">

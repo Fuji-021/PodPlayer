@@ -1,5 +1,5 @@
 <template>
-  <div v-show="episode" class="episode-detail-page">
+  <div v-show="episode" class="episode-detail-page" data-selection="ui">
     <div v-if="episode" class="ep-header">
       <!-- [B-63] 封面 hover 微动+光晕（复用首页设计） -->
       <div v-if="episode.coverUrl" class="cover-box">
@@ -16,10 +16,14 @@
         </div>
       </div>
       <div class="meta">
-        <div class="podcast-name" @click="goPodcast">
+        <div
+          class="podcast-name"
+          data-selection="content"
+          @click="goPodcast($event)"
+        >
           {{ podcast && podcast.title }}
         </div>
-        <h1 class="title">{{ episode.title }}</h1>
+        <h1 class="title" data-selection="content">{{ episode.title }}</h1>
         <div class="sub">
           <span>{{ formatDate(episode.pubDate) }}</span>
           <span v-if="episode.duration"
@@ -116,7 +120,13 @@
       </div>
     </div>
 
-    <div v-if="episode" class="notes" @click="onNotesClick">
+    <div
+      v-if="episode"
+      ref="notes"
+      class="notes"
+      data-selection="content"
+      @click="onNotesClick"
+    >
       <!-- sanitizeHtml 已清洗 RSS description（白名单 tag + 移除 on* + 强制 http 协议）；
            processedNotes 在其基础上把纯文本时间戳 HH:MM:SS/MM:SS 包成可点 .ts-seek（仅文本节点，不碰属性）。 -->
       <!-- [B-83] 小宇宙截断单集后台补全完整文稿期间显示占位，避免先闪截断版 -->
@@ -159,6 +169,7 @@ import {
 } from '@/utils/podcast/downloads';
 import { sanitizeHtml } from '@/utils/podcast/sanitizeHtml';
 import { getCoverColor } from '@/utils/podcast/coverColor';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import SvgIcon from '@/components/SvgIcon.vue';
 import TranscriptPanel from '@/components/TranscriptPanel.vue';
 
@@ -490,6 +501,7 @@ export default {
     },
     // [B-74] 点 show notes 里的时间戳 → seek 到对应秒（本集在播则原地 seek，否则从该处起播）
     onNotesClick(e) {
+      if (shouldPreserveSelection(e, this.$refs.notes)) return;
       const a = e.target && e.target.closest && e.target.closest('.ts-seek');
       if (!a) return;
       e.preventDefault();
@@ -604,7 +616,8 @@ export default {
       }
       if (el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth' });
     },
-    goPodcast() {
+    goPodcast(event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       this.$router.push({
         name: 'podcastDetail',
         params: { feedUrlEncoded: encodeURIComponent(this.feedUrl) },

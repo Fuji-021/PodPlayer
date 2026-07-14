@@ -1,6 +1,6 @@
 <template>
   <!-- [统计动画] --stat-k = 动画时长倍率：Dev 测试床版=2(慢放观察)，主线/dev-serve=1(不受影响) -->
-  <div class="stats-page" :style="{ '--stat-k': animK }">
+  <div class="stats-page" data-selection="ui" :style="{ '--stat-k': animK }">
     <!-- [B-38] 顶部：彩虹猫跑步彩蛋（替代火星天）。文案宽度 = 彩虹条长度，末端 nyancat 在跑 -->
     <div class="hero">
       <div class="run-line">
@@ -64,9 +64,9 @@
         <div
           class="label"
           :style="{ opacity: item._op == null ? 1 : item._op }"
-          @click="goPodcast(item)"
+          @click="goPodcast(item, $event)"
         >
-          <div class="name">{{ item.title }}</div>
+          <div class="name" data-selection="content">{{ item.title }}</div>
           <div class="dur">{{ fmtDur(item.wallSec) }}</div>
         </div>
       </div>
@@ -77,6 +77,7 @@
 <script>
 import { getListenStatsByPodcast } from '@/utils/podcast/listening';
 import { getCoverColor } from '@/utils/podcast/coverColor';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 export default {
   name: 'StatsPage',
@@ -419,7 +420,8 @@ export default {
       if (m > 0) return `${m} 分钟`;
       return `${sec} 秒`;
     },
-    goPodcast(item) {
+    goPodcast(item, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       if (!item.podcastId) return;
       this.$router.push({
         name: 'podcastDetail',

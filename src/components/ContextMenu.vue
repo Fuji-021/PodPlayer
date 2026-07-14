@@ -1,5 +1,5 @@
 <template>
-  <div ref="contextMenu" class="context-menu">
+  <div ref="contextMenu" class="context-menu" data-selection="ui">
     <div
       v-if="showMenu"
       ref="menu"
