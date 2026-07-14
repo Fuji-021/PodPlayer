@@ -13,6 +13,22 @@ function localTime(year, monthIndex, day, hour = 12) {
   return new Date(year, monthIndex, day, hour, 0, 0, 0).getTime();
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function waitFor(check, message) {
+  for (let index = 0; index < 30; index += 1) {
+    if (check()) return;
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.fail(message);
+}
+
 async function main() {
   try {
     const output = path.join(tempDir, 'rules.cjs');
@@ -39,10 +55,27 @@ async function main() {
     const { shouldYieldMainScrollKey } = require(guardOutput);
     const mockDbOutput = path.join(tempDir, 'mock-utils-db.js');
     const mockPodcastDbOutput = path.join(tempDir, 'mock-podcast-db.js');
-    fs.writeFileSync(mockDbOutput, 'export const db = {};\n');
+    fs.writeFileSync(
+      mockDbOutput,
+      `function rows(name) {
+  const source = global.__subscriptionSnapshotSmoke || {};
+  return Promise.resolve(source[name] || []);
+}
+function indexed(name) {
+  return { where() { return { anyOf() { return { toArray() { return rows(name); } }; } }; } };
+}
+export const db = {
+  episodes: indexed('episodes'),
+  episodeListenStats: { toArray() { return rows('stats'); } },
+  episodeProgress: { toArray() { return rows('progresses'); } },
+  favorites: indexed('favorites'),
+  transcripts: indexed('transcripts'),
+  episodeDownloads: indexed('downloads'),
+};\n`
+    );
     fs.writeFileSync(
       mockPodcastDbOutput,
-      'export async function getSubscribedPodcasts() { return []; }\n'
+      'export function getSubscribedPodcasts() { return global.__subscriptionSnapshotSmoke.next(); }\n'
     );
     const snapshotOutput = path.join(tempDir, 'snapshot.cjs');
     await esbuild.build({
@@ -131,6 +164,11 @@ async function main() {
     assert.strictEqual(
       rules.getUpdateDateBucket(localTime(2024, 11, 29), crossYearNow),
       'last-week'
+    );
+    assert.strictEqual(
+      rules.UPDATE_DATE_BUCKETS.find(bucket => bucket.id === 'last-month')
+        .label,
+      '上个月'
     );
 
     const sorted = rules.sortSubscriptionUpdates([
@@ -458,6 +496,83 @@ async function main() {
       elapsedMs < 2000,
       '10k pure update view took too long: ' + elapsedMs.toFixed(1) + 'ms'
     );
+    const tailIndex = rules.findFixedVirtualIndex(
+      syntheticView.metrics,
+      syntheticView.totalHeight
+    );
+    assert.strictEqual(tailIndex, syntheticView.metrics.length - 1);
+    const tailRange = rules.getStableVirtualRange({
+      itemCount: syntheticView.metrics.length,
+      firstVisible: tailIndex,
+      lastVisible: tailIndex,
+      currentStart: 0,
+      currentEnd: 0,
+      buffer: 12,
+      guard: 4,
+      force: true,
+    });
+    assert.strictEqual(tailRange.end, syntheticView.metrics.length);
+
+    const firstBuild = deferred();
+    const secondBuild = deferred();
+    let snapshotReadCount = 0;
+    global.__subscriptionSnapshotSmoke = {
+      episodes: [],
+      next() {
+        snapshotReadCount += 1;
+        return snapshotReadCount === 1
+          ? firstBuild.promise
+          : secondBuild.promise;
+      },
+    };
+    const dirtyDuringBuild = snapshots.getSubscriptionUpdatesSnapshot({
+      force: true,
+      now: crossYearNow,
+    });
+    snapshots.markSubscriptionUpdatesDirty();
+    firstBuild.resolve([]);
+    await waitFor(
+      () => snapshotReadCount === 2,
+      'dirty generation did not trigger a serial rebuild'
+    );
+    secondBuild.resolve([
+      { id: 'pod-after-dirty', title: 'Fresh podcast', updatedAt: 1 },
+    ]);
+    const dirtyResult = await dirtyDuringBuild;
+    assert.deepStrictEqual(
+      dirtyResult.podcasts.map(podcast => podcast.id),
+      ['pod-after-dirty']
+    );
+
+    const thirdBuild = deferred();
+    const fourthBuild = deferred();
+    snapshotReadCount = 0;
+    global.__subscriptionSnapshotSmoke.next = () => {
+      snapshotReadCount += 1;
+      return snapshotReadCount === 1 ? thirdBuild.promise : fourthBuild.promise;
+    };
+    const forceDuringBuild = snapshots.getSubscriptionUpdatesSnapshot({
+      force: true,
+      now: crossYearNow,
+    });
+    snapshots.getSubscriptionUpdatesSnapshot({
+      force: true,
+      now: crossYearNow,
+    });
+    thirdBuild.resolve([]);
+    await waitFor(
+      () => snapshotReadCount === 2,
+      'forced generation did not rebuild after the in-flight read'
+    );
+    fourthBuild.resolve([
+      { id: 'pod-after-force', title: 'Forced podcast', updatedAt: 2 },
+    ]);
+    const forceResult = await forceDuringBuild;
+    assert.deepStrictEqual(
+      forceResult.podcasts.map(podcast => podcast.id),
+      ['pod-after-force']
+    );
+    delete global.__subscriptionSnapshotSmoke;
 
     process.stdout.write(
       'subscription updates rules smoke: PASS (' +

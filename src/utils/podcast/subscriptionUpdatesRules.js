@@ -3,7 +3,7 @@ export const UPDATE_DATE_BUCKETS = [
   { id: 'yesterday', label: '昨天' },
   { id: 'this-week', label: '本周更早' },
   { id: 'last-week', label: '上周' },
-  { id: 'last-month', label: '近一个月' },
+  { id: 'last-month', label: '上个月' },
   { id: 'older', label: '更早' },
 ];
 
@@ -183,6 +183,22 @@ export function buildFixedUpdateMetrics(
     top += height;
     return metric;
   });
+}
+
+export function findFixedVirtualIndex(metrics, offset) {
+  const items = metrics || [];
+  if (!items.length) return 0;
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const metric = items[middle];
+    if (metric.top + metric.height <= offset) low = middle + 1;
+    else high = middle;
+  }
+  // Scroll containers can report an offset at or one pixel beyond totalHeight.
+  // Clamp it to the final real row so the tail never becomes an empty window.
+  return Math.min(items.length - 1, low);
 }
 
 export function createSubscriptionUpdateView(items, now = Date.now(), heights) {

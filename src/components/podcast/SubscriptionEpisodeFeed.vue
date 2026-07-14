@@ -51,22 +51,13 @@
 <script>
 import SvgIcon from '@/components/SvgIcon.vue';
 import SubscriptionEpisodeRow from './SubscriptionEpisodeRow.vue';
-import { getStableVirtualRange } from '@/utils/podcast/subscriptionUpdatesRules';
+import {
+  findFixedVirtualIndex,
+  getStableVirtualRange,
+} from '@/utils/podcast/subscriptionUpdatesRules';
 
 const VIRTUAL_BUFFER = 12;
 const VIRTUAL_GUARD = 4;
-
-function findVirtualIndex(metrics, offset) {
-  let low = 0;
-  let high = metrics.length;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    const metric = metrics[middle];
-    if (metric.top + metric.height <= offset) low = middle + 1;
-    else high = middle;
-  }
-  return low;
-}
 
 export default {
   name: 'SubscriptionEpisodeFeed',
@@ -230,8 +221,8 @@ export default {
         visibleStart,
         viewportStart + main.clientHeight
       );
-      const firstVisible = findVirtualIndex(metrics, visibleStart);
-      const lastVisible = findVirtualIndex(
+      const firstVisible = findFixedVirtualIndex(metrics, visibleStart);
+      const lastVisible = findFixedVirtualIndex(
         metrics,
         Math.max(visibleStart, visibleEnd - 1)
       );

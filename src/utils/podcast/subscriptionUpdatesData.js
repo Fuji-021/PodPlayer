@@ -13,6 +13,7 @@ const snapshotSession = {
   snapshot: null,
   inFlight: null,
   dirty: true,
+  revision: 0,
   version: 0,
   dayKey: '',
 };
@@ -176,11 +177,11 @@ async function readSparseStatusRows(episodeIdSet, podcastIds) {
   };
 }
 
-async function buildSnapshot(now) {
+async function buildSnapshot(now, version) {
   const subscribed = await getSubscribedPodcasts();
   if (!subscribed.length) {
     return createSubscriptionUpdateSnapshot({
-      version: snapshotSession.version + 1,
+      version,
       now,
     });
   }
@@ -279,12 +280,31 @@ async function buildSnapshot(now) {
       .filter(episode => episode.downloaded)
       .map(episode => episode.id),
     now,
-    version: snapshotSession.version + 1,
+    version,
   });
 }
 
 export function markSubscriptionUpdatesDirty() {
   snapshotSession.dirty = true;
+  snapshotSession.revision += 1;
+  return snapshotSession.revision;
+}
+
+async function buildLatestSnapshot(now) {
+  // A single in-flight loop serialises revisions. A mutation or forced read
+  // during a build invalidates that result and all waiters receive the newest
+  // stable generation instead of an old promise that happened to resolve late.
+  const buildRevision = snapshotSession.revision;
+  const snapshot = await buildSnapshot(now, snapshotSession.version + 1);
+  if (buildRevision !== snapshotSession.revision) {
+    return buildLatestSnapshot(now);
+  }
+
+  snapshotSession.snapshot = snapshot;
+  snapshotSession.version = snapshot.version;
+  snapshotSession.dayKey = snapshot.dayKey;
+  snapshotSession.dirty = false;
+  return snapshot;
 }
 
 export function getSubscriptionUpdateView(
@@ -310,6 +330,7 @@ export async function getSubscriptionUpdatesSnapshot(options = {}) {
     typeof options === 'number' ? { now: options } : options || {};
   const now = normalized.now || Date.now();
   const force = !!normalized.force;
+  if (force) markSubscriptionUpdatesDirty();
   if (!force && snapshotSession.snapshot && !snapshotSession.dirty) {
     const refreshed = rebuildSnapshotViews(snapshotSession.snapshot, now);
     snapshotSession.snapshot = refreshed;
@@ -318,17 +339,9 @@ export async function getSubscriptionUpdatesSnapshot(options = {}) {
   }
   if (snapshotSession.inFlight) return snapshotSession.inFlight;
 
-  snapshotSession.inFlight = buildSnapshot(now)
-    .then(snapshot => {
-      snapshotSession.snapshot = snapshot;
-      snapshotSession.version = snapshot.version;
-      snapshotSession.dayKey = snapshot.dayKey;
-      snapshotSession.dirty = false;
-      return snapshot;
-    })
-    .finally(() => {
-      snapshotSession.inFlight = null;
-    });
+  snapshotSession.inFlight = buildLatestSnapshot(now).finally(() => {
+    snapshotSession.inFlight = null;
+  });
   return snapshotSession.inFlight;
 }
 
