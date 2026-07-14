@@ -1,5 +1,9 @@
 <template>
-  <section class="subscription-program-rail" aria-label="节目快速选择">
+  <section
+    class="subscription-program-rail"
+    aria-label="节目快速选择"
+    data-selection="ui"
+  >
     <div ref="root" class="program-rail">
       <button
         v-tip="'向左浏览节目'"
@@ -127,29 +131,54 @@ export default {
   },
   mounted() {
     this._destroyed = false;
-    this.$nextTick(() => {
-      this.updateMetrics(true);
-      const selected = this.podcasts.find(
-        item => item.id === this.selectedPodcastId
-      );
-      if (selected) this.warmHalo(selected);
-    });
-    if (typeof ResizeObserver !== 'undefined') {
-      this._resizeObserver = new ResizeObserver(() => this.updateMetrics(true));
-      if (this.$refs.viewport)
-        this._resizeObserver.observe(this.$refs.viewport);
-      if (this.$refs.track) this._resizeObserver.observe(this.$refs.track);
-    }
+    this.activateRail();
+  },
+  activated() {
+    this._destroyed = false;
+    this.activateRail();
+  },
+  deactivated() {
+    this.deactivateRail();
   },
   beforeDestroy() {
     this._destroyed = true;
-    this.stopAnimation();
-    this.finishDrag();
-    if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
-    if (this._scrollStopTimer) clearTimeout(this._scrollStopTimer);
-    if (this._resizeObserver) this._resizeObserver.disconnect();
+    this.deactivateRail();
   },
   methods: {
+    activateRail() {
+      if (this._railActive) return;
+      this._railActive = true;
+      this.$nextTick(() => {
+        if (!this._railActive || this._destroyed) return;
+        if (typeof ResizeObserver !== 'undefined') {
+          this._resizeObserver = new ResizeObserver(() => this.updateMetrics());
+          if (this.$refs.viewport)
+            this._resizeObserver.observe(this.$refs.viewport);
+          if (this.$refs.track) this._resizeObserver.observe(this.$refs.track);
+        }
+        this.updateMetrics();
+        const selected = this.podcasts.find(
+          item => item.id === this.selectedPodcastId
+        );
+        if (selected) this.warmHalo(selected);
+      });
+    },
+    deactivateRail() {
+      this._railActive = false;
+      this._haloToken = (this._haloToken || 0) + 1;
+      this._railGoal = null;
+      this._controllerOwnsScroll = false;
+      this.stopAnimation();
+      this.finishDrag();
+      if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
+      this._scrollRaf = null;
+      if (this._scrollStopTimer) clearTimeout(this._scrollStopTimer);
+      this._scrollStopTimer = null;
+      if (this._resizeObserver) this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+      this.setMotionClass('is-moving', false);
+      this.setMotionClass('is-dragging', false);
+    },
     select(podcastId) {
       if (podcastId === this.selectedPodcastId) return;
       this.$emit('select', podcastId);
@@ -194,6 +223,7 @@ export default {
         'translate3d(' + geometry.travel * ratio + 'px, 0, 0)';
     },
     updateMetrics() {
+      if (!this._railActive || this._destroyed) return;
       const metrics = this.measure();
       this._metrics = metrics;
       this._thumbGeometry = this.getThumbGeometry(metrics);
@@ -211,6 +241,7 @@ export default {
       }
     },
     onScroll() {
+      if (!this._railActive) return;
       this.setMotionClass('is-moving', true);
       if (this._controllerOwnsScroll) {
         this.scheduleMotionStop();
@@ -279,10 +310,6 @@ export default {
       });
       this._controllerOwnsScroll = true;
       this.setMotionClass('is-moving', true);
-      if (this._animationRaf) {
-        this._animationStartedAt = 0;
-        this._animationStartLeft = viewport.scrollLeft;
-      }
       this.startAnimation();
     },
     startAnimation() {
@@ -293,7 +320,11 @@ export default {
         : 0;
       const tick = now => {
         const viewport = this.$refs.viewport;
-        if (!viewport || !Number.isFinite(this._railGoal)) {
+        if (
+          !this._railActive ||
+          !viewport ||
+          !Number.isFinite(this._railGoal)
+        ) {
           this._animationRaf = null;
           return;
         }
@@ -336,7 +367,7 @@ export default {
       else if (right > viewport.scrollLeft + viewport.clientWidth) {
         viewport.scrollLeft = right - viewport.clientWidth;
       }
-      this.updateMetrics();
+      if (this._railActive) this.updateMetrics();
     },
     focusRailEdge(last) {
       const items = this.$refs.items || [];
@@ -446,6 +477,7 @@ export default {
         !podcast.id ||
         !podcast.coverUrl ||
         this.haloMap[podcast.id] ||
+        !this._railActive ||
         this._isRailMoving ||
         this._isRailDragging
       ) {
@@ -514,7 +546,7 @@ export default {
 }
 
 .rail-viewport {
-  --rail-gap: 4px;
+  --rail-gap: 10px;
   display: flex;
   min-width: 0;
   gap: var(--rail-gap);
@@ -538,14 +570,14 @@ export default {
 .rail-item {
   position: relative;
   display: inline-flex;
-  flex: 0 0 116px;
-  width: 116px;
-  height: 116px;
+  flex: 0 0 96px;
+  width: 96px;
+  height: 96px;
   align-items: center;
   justify-content: center;
-  padding: 2px;
+  padding: 4px;
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--radius-cover);
   color: var(--color-text-secondary);
   background: transparent;
 
@@ -559,11 +591,11 @@ export default {
 .rail-all-icon {
   position: relative;
   display: inline-flex;
-  width: 112px;
-  height: 112px;
+  width: 88px;
+  height: 88px;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--radius-cover);
   transform: scale(1);
   transition: transform 180ms ease-out, box-shadow 180ms ease-out;
 }
@@ -592,17 +624,17 @@ export default {
 .rail-cover-image {
   position: relative;
   z-index: 1;
-  width: 112px;
-  height: 112px;
+  width: 88px;
+  height: 88px;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--radius-cover);
 }
 
 .rail-cover-halo {
   position: absolute;
   inset: 1px;
   z-index: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-cover);
   background-position: center;
   background-size: cover;
   filter: blur(6px);
@@ -624,9 +656,8 @@ export default {
 
 .rail-track {
   position: relative;
-  width: calc(100% - 92px);
   height: 16px;
-  margin: 6px auto 0;
+  margin: 6px 46px 0;
   contain: layout style;
 
   &::before {
@@ -691,7 +722,8 @@ export default {
   }
 
   .rail-track {
-    width: calc(100% - 76px);
+    margin-right: 38px;
+    margin-left: 38px;
   }
 }
 

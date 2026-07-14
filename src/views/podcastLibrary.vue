@@ -1,5 +1,5 @@
 <template>
-  <div class="podcast-library">
+  <div class="podcast-library" data-selection="ui">
     <div class="header">
       <!-- [B-33] 标题 + 紧贴"阅"字的"更多"按钮 → 点击弹排序下拉（选项文字外显，自带方向） -->
       <div class="title-row">
@@ -105,7 +105,10 @@
       class="podcast-grid"
       :class="{ resizing: isResizing, scrolling: isScrolling }"
     >
-      <div v-if="loaded && !sortedPodcasts.length" class="empty-tip">
+      <div v-if="!loaded" class="library-skeleton" aria-busy="true">
+        <div v-for="n in 12" :key="n" class="library-skeleton-card"></div>
+      </div>
+      <div v-else-if="!sortedPodcasts.length" class="empty-tip">
         还没有订阅。点击右上角 + 号添加 RSS 链接或导入文件。
       </div>
       <div
@@ -113,7 +116,8 @@
         :key="p.id"
         class="podcast-card"
         :class="{ 'unsub-mode': unsubModeId === p.id }"
-        @click="onCardClick(p)"
+        data-selection="ui"
+        @click="onCardClick(p, $event)"
         @mouseenter="onCardHover(p)"
         @mouseleave="onCardLeave"
         @contextmenu.prevent="onCardContextMenu($event, p)"
@@ -165,7 +169,7 @@
             <div v-if="p.newCount > 0" class="new-badge">有更新</div>
           </transition>
         </div>
-        <div class="title">
+        <div class="title" data-selection="content">
           {{ p.title || '(无标题)'
           }}<span
             v-if="p.source === 'discover'"
@@ -180,7 +184,7 @@
             ><svg-icon icon-class="wifi"
           /></span>
         </div>
-        <div class="author">{{ p.author || '' }}</div>
+        <div class="author" data-selection="content">{{ p.author || '' }}</div>
         <!-- [B-31] 按用户要求：累计听过时长不在卡片下显示，留待将来"统计"入口页 -->
       </div>
     </div>
@@ -288,6 +292,7 @@ import {
   consumeAllSubscriptionsEntryFromUpdates,
   onSubscriptionUpdatesChanged,
 } from '@/utils/podcast/subscriptionNavigation';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 // [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
@@ -306,21 +311,16 @@ async function getLatestEpisodeTime(podcast) {
   return t;
 }
 
+// The full enriched list is safe to reuse during one app session. Unlike the
+// old localStorage payload, it always contains every sort key before display.
+let sessionLibraryReadModel = null;
+
 export default {
   name: 'PodcastLibrary',
   components: { SvgIcon },
   data() {
     return {
-      // [B-51] 冷启动用 localStorage 缓存秒显，避免"第一次打开程序时订阅短暂全部消失"
-      podcasts: (() => {
-        try {
-          return JSON.parse(
-            localStorage.getItem('podcastLibrary.cache') || '[]'
-          );
-        } catch (e) {
-          return [];
-        }
-      })(),
+      podcasts: sessionLibraryReadModel ? sessionLibraryReadModel.items : [],
       showAddDialog: false,
       newFeedUrl: '',
       addError: '',
@@ -331,7 +331,7 @@ export default {
       // [NAS] "NAS 上有此节目"的归一化 feedUrl 集合（连上 NAS 才非空；空=不显示任何 wifi 标识）
       nasPodSet: new Set(),
       // [B-47 / 第3点] 是否已至少加载过一次（避免加载期间闪"还没有订阅"）
-      loaded: false,
+      loaded: !!sessionLibraryReadModel,
       // [播客改造 A-22] + 号弹窗开关
       plusMenuOpen: false,
       plusOutsideListener: null,
@@ -395,7 +395,9 @@ export default {
           if (la && lb) return lb - la;
           if (la && !lb) return -1;
           if (!la && lb) return 1;
-          return wall(b) - wall(a);
+          const wallDelta = wall(b) - wall(a);
+          if (wallDelta) return wallDelta;
+          return (a.libraryOrder || 0) - (b.libraryOrder || 0);
         });
         return arr;
       }
@@ -411,13 +413,18 @@ export default {
         const kb = getKey(b);
         if (ka < kb) return -1 * sign;
         if (ka > kb) return 1 * sign;
-        return 0;
+        return (a.libraryOrder || 0) - (b.libraryOrder || 0);
       });
       return arr;
     },
     // [B-80] 是否有"有更新"角标可清理（决定清理角标按钮是否可点 + 高亮态）
     hasBadges() {
       return this.podcasts.some(p => (p.newCount || 0) > 0);
+    },
+  },
+  watch: {
+    '$store.state.podcastListening.listenTick'() {
+      this.syncListeningReadModel();
     },
   },
   mounted() {
@@ -432,6 +439,8 @@ export default {
     }
   },
   beforeDestroy() {
+    this._loadToken = (this._loadToken || 0) + 1;
+    this._listenSyncToken = (this._listenSyncToken || 0) + 1;
     this.closePlusMenu();
     this.closeUnsubMode();
     this.closeSortMenu();
@@ -471,6 +480,8 @@ export default {
     this.handleUpdatesEntryAction();
   },
   created() {
+    this._loadToken = 0;
+    this._listenSyncToken = 0;
     this._subscriptionLibraryDirty = false;
     this._removeSubscriptionUpdatesChanged = onSubscriptionUpdatesChanged(
       () => {
@@ -564,6 +575,8 @@ export default {
       return Math.max(3, Math.min(99, (done / total) * 100));
     },
     async loadPodcasts() {
+      const loadToken = (this._loadToken || 0) + 1;
+      this._loadToken = loadToken;
       let list;
       try {
         list = await getSubscribedPodcasts();
@@ -579,6 +592,7 @@ export default {
           tries++;
         }
       } catch (e) {
+        if (loadToken !== this._loadToken) return;
         // 读库异常：保留旧列表，不清空 UI
         console.warn('[播客库] loadPodcasts 失败，保留旧数据', e);
         this.loaded = true;
@@ -593,25 +607,54 @@ export default {
         ),
         getLastListenedByPodcast().catch(() => ({})),
       ]);
-      this.podcasts = list.map((p, i) => ({
+      if (loadToken !== this._loadToken) return;
+      const items = list.map((p, i) => ({
         ...p,
         latestEpisodeTime: latest[i] || 0,
         listenSummary: summaries[i] || null,
         lastListenedAt: lastMap[p.id] || 0,
+        libraryOrder: i,
       }));
+      sessionLibraryReadModel = { items };
+      this.podcasts = items;
       this.loaded = true;
       this._subscriptionLibraryDirty = false;
       this.primeHalos(); // [B-71/H1] 后台把各封面降采样成光晕小图
-      // [B-51] 写缓存供下次冷启动秒显（避免第一次打开短暂空白）
-      try {
-        localStorage.setItem(
-          'podcastLibrary.cache',
-          JSON.stringify(this.podcasts)
-        );
-      } catch (e) {
-        // localStorage 满/序列化异常 → 忽略，不影响功能
-      }
       console.log('[播客库] loaded', this.podcasts.length, 'podcasts');
+    },
+    async syncListeningReadModel() {
+      const signal = this.$store.state.podcastListening || {};
+      const episodeId = String(signal.episodeId || '');
+      const splitAt = episodeId.indexOf('::');
+      if (splitAt <= 0) return;
+      const podcastId = episodeId.slice(0, splitAt);
+      const index = this.podcasts.findIndex(item => item.id === podcastId);
+      if (index < 0) return;
+
+      const token = (this._listenSyncToken || 0) + 1;
+      this._listenSyncToken = token;
+      const next = {
+        ...this.podcasts[index],
+        lastListenedAt: Date.now(),
+      };
+      this.$set(this.podcasts, index, next);
+      sessionLibraryReadModel = { items: this.podcasts };
+
+      try {
+        const listenSummary = await getPodcastListenSummary(podcastId);
+        if (token !== this._listenSyncToken) return;
+        const currentIndex = this.podcasts.findIndex(
+          item => item.id === podcastId
+        );
+        if (currentIndex < 0) return;
+        this.$set(this.podcasts, currentIndex, {
+          ...this.podcasts[currentIndex],
+          listenSummary: listenSummary || null,
+        });
+        sessionLibraryReadModel = { items: this.podcasts };
+      } catch (error) {
+        // Keep the optimistic recency marker; a later full read reconciles it.
+      }
     },
     // [B-80] 复用唯一后台刷新协调者：更新流和全部订阅页即使同时 keep-alive，
     //   也只会有一次 RSS 刷新在途；本页保留旧的角标与桌面通知呈现。
@@ -897,7 +940,8 @@ export default {
     },
     // [B-25] 右键封面卡片 → 弹小菜单"取消订阅"
     // [B-25 / bug-3] 卡片点击行为：unsub-overlay 模式时点卡片 = 关闭模式
-    onCardClick(p) {
+    onCardClick(p, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       if (this.unsubModeId === p.id) {
         this.closeUnsubMode();
         return;
@@ -1447,6 +1491,18 @@ export default {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 24px;
+}
+.library-skeleton {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 24px;
+}
+.library-skeleton-card {
+  min-height: 244px;
+  border-radius: var(--radius-cover);
+  background: var(--color-secondary-bg);
+  opacity: 0.5;
 }
 // [S 级 bug 修] 缩放期间禁用所有 transition，避免动画累积导致卡顿
 .podcast-grid.resizing,
