@@ -643,12 +643,8 @@ export default {
 
 .rail-item.active .rail-cover,
 .rail-item.active .rail-all-icon {
-  transform: translateY(0) scale(1.045);
-}
-
-.rail-item.active:hover .rail-cover,
-.rail-item.active:hover .rail-all-icon {
-  transform: translateY(-2px) scale(1.045);
+  // 选中态继承 hover 的抬起，再叠加轻微放大；移开指针后也保持。
+  transform: translateY(-3px) scale(1.045);
 }
 
 .rail-item.active .rail-all-icon {
