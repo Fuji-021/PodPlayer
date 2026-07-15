@@ -144,6 +144,8 @@ export default class {
     this._personalFMTrack = { id: 0 }; // 私人FM当前歌曲
     // [T15] 睡眠「本集结束」队列边界：Vue 层激活 end 模式时置 true；_nextTrackCallback 据此跳过自动续播
     this._sleepEndMode = false;
+    this._sleepEndCompletionHandler = null;
+    this._sleepEndCompletionToken = 0;
     this._personalFMNextTrack = {
       id: 0,
     }; // 私人FM下一首歌曲信息（为了快速加载下一首）
@@ -167,6 +169,12 @@ export default class {
     Object.defineProperty(this, '_currentAudioSource', { enumerable: false });
     Object.defineProperty(this, '_powerSuspendSnapshot', { enumerable: false });
     Object.defineProperty(this, '_handledPowerResumeToken', {
+      enumerable: false,
+    });
+    Object.defineProperty(this, '_sleepEndCompletionHandler', {
+      enumerable: false,
+    });
+    Object.defineProperty(this, '_sleepEndCompletionToken', {
       enumerable: false,
     });
 
@@ -1491,18 +1499,41 @@ export default class {
   setSleepEndMode(active) {
     this._sleepEndMode = !!active;
   }
+  // Vue 层只通过这个公开回调接收自然结束，不需要读取播放器内部睡眠标志。
+  setSleepEndCompletionHandler(handler) {
+    this._sleepEndCompletionHandler =
+      typeof handler === 'function' ? handler : null;
+  }
+  _emitSleepEndCompletion() {
+    const handler = this._sleepEndCompletionHandler;
+    if (!handler) return;
+    const payload = {
+      reason: 'natural-end',
+      token: ++this._sleepEndCompletionToken,
+      trackId:
+        (this._currentTrack &&
+          (this._currentTrack.podcastEpisodeId || this._currentTrack.id)) ||
+        null,
+    };
+    try {
+      handler(payload);
+    } catch (error) {
+      console.error('[player] sleep end completion handler failed', error);
+    }
+  }
   _nextTrackCallback() {
     // Howler 的 onend 不保证紧随最后一个 1s tick；先排空已有缓冲，
     // 再决定普通续播、单曲循环或睡眠“本集结束”的分支。
     this._flushListenBuf();
     this._invalidateListenCoverage();
     this._scrobble(this._currentTrack, 0, true);
-    // [T15] end 模式：自然播完后不续播队列，让 Vue 层的 1s interval 检测到 leftSec<=2 → fireSleep()
+    // [T15] end 模式：自然播完后不续播队列，并通知 Vue 层收口睡眠 UI。
     if (this._sleepEndMode) {
       this._sleepEndMode = false;
       this._setPlaying(false);
       store.commit('setAudioBuffering', false);
       setTitle(null);
+      this._emitSleepEndCompletion();
       return;
     }
     if (!this.isPersonalFM && this.repeatMode === 'one') {

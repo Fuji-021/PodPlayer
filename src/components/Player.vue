@@ -928,6 +928,11 @@ import { getCoverPalette } from '@/utils/podcast/coverPalette';
 // [沉浸页·文稿] 仅做轻量可用性检测(Dexie 索引)，决定文稿按钮/点封面是否能展开
 import { getTranscript } from '@/utils/podcast/transcripts';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
+import {
+  getSleepCompletionPlan,
+  shouldFinishSleepAtEnd,
+  shouldHandleNaturalSleepEnd,
+} from '@/utils/podcast/sleepEndPolicy';
 
 export default {
   name: 'Player',
@@ -1195,6 +1200,11 @@ export default {
     // [B-32] 单集名溢出检测：初次挂载 + 切歌 + 窗口缩放 都重新判断，
     // 溢出则 nameOverflow=true → .marquee 自动跑马灯（不再依赖 hover）。
     window.addEventListener('resize', this.checkNameOverflow);
+    if (this.player && this.player.setSleepEndCompletionHandler) {
+      this._sleepEndCompletionHandler = signal =>
+        this.handleNaturalSleepEnd(signal);
+      this.player.setSleepEndCompletionHandler(this._sleepEndCompletionHandler);
+    }
     this.$watch(
       () => this.currentTrack && this.currentTrack.name,
       () => this.checkNameOverflow()
@@ -1289,6 +1299,10 @@ export default {
     // [B-46] 卸载睡眠定时器的监听与计时器
     this.closeSleepMenu();
     this.clearSleep();
+    if (this.player && this.player.setSleepEndCompletionHandler) {
+      this.player.setSleepEndCompletionHandler(null);
+    }
+    this._sleepEndCompletionHandler = null;
     // [睡眠到点关机] 清理关机倒计时(防销毁后仍触发关机)
     this.clearShutdownTimer();
     // [进度条偶发消失·根治] 断开进度条宽度观察器
@@ -1736,7 +1750,14 @@ export default {
         const leftSec = dur > 0 ? Math.max(0, Math.round(dur - pos)) : 0;
         this.sleepRemainText = this.fmtClock(leftSec); // [B67-BUG-1] H:MM:SS 进位
         // 播放到接近结尾(≤2s)且确在播放时才暂停 → 既"本集结束后暂停"、又先于自动续播
-        if (dur > 0 && leftSec <= 2 && this.player.playing) {
+        if (
+          shouldFinishSleepAtEnd({
+            sleepMode: this.sleepMode,
+            duration: dur,
+            progress: pos,
+            playing: this.player && this.player.playing,
+          })
+        ) {
           this.fireSleep();
         }
         return;
@@ -1747,8 +1768,27 @@ export default {
       this.sleepRemainText = this.fmtClock(Math.round(left / 1000)); // [B67-BUG-1] H:MM:SS 进位
       if (left <= 0) this.fireSleep();
     },
+    handleNaturalSleepEnd(signal) {
+      if (
+        !shouldHandleNaturalSleepEnd({
+          sleepMode: this.sleepMode,
+          signal,
+        })
+      ) {
+        return;
+      }
+      this.completeSleep({ alreadyStopped: true });
+    },
     fireSleep() {
+      this.completeSleep({ alreadyStopped: false });
+    },
+    completeSleep({ alreadyStopped }) {
+      const plan = getSleepCompletionPlan({
+        alreadyStopped,
+        sleepShutdown: this.settings && this.settings.sleepShutdown,
+      });
       const wasPlaying =
+        plan.shouldPause &&
         this.player &&
         this.player.playing &&
         typeof this.player.pause === 'function';
@@ -1761,7 +1801,7 @@ export default {
       this.sleepRemainText = '';
       this.sleepSliderVal = 0;
       // [睡眠到点关机] 开了"到点关机"→暂停后启动可取消的关机倒计时；否则只暂停(原行为)。
-      if (this.settings && this.settings.sleepShutdown) {
+      if (plan.shouldStartShutdown) {
         this.showToast(wasPlaying ? '睡眠定时已到，已暂停' : '睡眠定时已到');
         this.startShutdownCountdown();
         return;
