@@ -53,22 +53,49 @@ export async function fetchAppleCharts(force = false) {
   }
 }
 
+// [资源池] Apple 与 xyzrank 会把同一节目写成不同的全半角/排版形式。只映射
+// 明确等价的引号与连字符；不移除或模糊匹配其它标点，避免把不同节目错误合并。
+const DISCOVER_EQUIVALENT_PUNCTUATION = {
+  '\u2018': "'",
+  '\u2019': "'",
+  '\u201b': "'",
+  '\u2032': "'",
+  '\u201c': '"',
+  '\u201d': '"',
+  '\u201f': '"',
+  '\u2033': '"',
+  '\u2010': '-',
+  '\u2011': '-',
+  '\u2012': '-',
+  '\u2013': '-',
+  '\u2014': '-',
+  '\u2212': '-',
+};
+
+export function normalizeDiscoverName(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(
+      /[\u2018\u2019\u201b\u2032\u201c\u201d\u201f\u2033\u2010-\u2014\u2212]/g,
+      char => {
+        return DISCOVER_EQUIVALENT_PUNCTUATION[char] || char;
+      }
+    )
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
 // [资源池] 按归一化名去重合并：base(优先，如 xyzrank 榜单序)在前，extra(如 Apple 榜)中名字未出现过的
 //   追加在后 → 热门 top 仍取 base 序、寻宝/为你推荐池扩大变丰富。
 export function mergeDiscoverByName(base, extra) {
-  const norm = s =>
-    String(s || '')
-      .trim()
-      .replace(/\s+/g, '')
-      .toLowerCase();
   const seen = new Set();
   (base || []).forEach(p => {
-    const n = norm(p && p.name);
+    const n = normalizeDiscoverName(p && p.name);
     if (n) seen.add(n);
   });
   const merged = (base || []).slice();
   (extra || []).forEach(p => {
-    const n = norm(p && p.name);
+    const n = normalizeDiscoverName(p && p.name);
     if (n && !seen.has(n)) {
       seen.add(n);
       merged.push(p);
