@@ -3,6 +3,7 @@ const esbuild = require('esbuild');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
 const tempDir = fs.mkdtempSync(
@@ -20,6 +21,34 @@ async function loadCoverage() {
     logLevel: 'silent',
   });
   return require(output);
+}
+
+function loadPlayerPrototype(events) {
+  let source = fs.readFileSync(path.join(root, 'src/utils/Player.js'), 'utf8');
+  source = source.replace(/^import[\s\S]*?;\r?\n/gm, '');
+  source = source.replace('export default class {', 'class Player {');
+  source += '\nmodule.exports = Player;';
+  const context = {
+    module: { exports: {} },
+    exports: {},
+    console,
+    document: { title: '' },
+    process: { env: {} },
+    setTimeout,
+    clearTimeout,
+    __store: {
+      state: { podcastQueue: [] },
+      commit: (...args) => events.push(['store.commit', ...args]),
+      dispatch: () => {},
+    },
+  };
+  vm.runInNewContext(
+    'const store = __store; const isCreateTray = false; const isCreateMpris = false;\n' +
+      source,
+    context,
+    { filename: 'Player.js' }
+  );
+  return context.module.exports;
 }
 
 function addAll(target, values) {
@@ -80,6 +109,57 @@ async function main() {
       assert.ok(result.contentDelta > 0, `${rate}x should retain content time`);
     });
 
+    [0.5, 1, 1.5, 2, 3].forEach(rate => {
+      [5, 30, 60].forEach(elapsedSec => {
+        const result = coverage.advanceListenCoverage(
+          coverage.createListenCoverageAnchor(10, 0),
+          {
+            position: 10 + elapsedSec * rate,
+            playbackRate: rate,
+            totalSec: 600,
+            now: elapsedSec * 1000,
+          }
+        );
+        assert.strictEqual(
+          result.continuous,
+          true,
+          `${rate}x ${elapsedSec}s delayed tick should remain continuous`
+        );
+        assert.strictEqual(result.wallDeltaSec, elapsedSec);
+        assert.strictEqual(result.contentDeltaSec, elapsedSec * rate);
+      });
+    });
+
+    const delayedForFlush = coverage.advanceListenCoverage(
+      coverage.createListenCoverageAnchor(10, 0),
+      {
+        position: 40,
+        playbackRate: 1,
+        totalSec: 600,
+        now: 30000,
+      }
+    );
+    const delayedBuffer = {
+      id: 'pod::delayed',
+      totalSec: 600,
+      secs: delayedForFlush.secs,
+      wall: delayedForFlush.wallDeltaSec,
+      content: delayedForFlush.contentDeltaSec,
+      count: 1,
+    };
+    assert.strictEqual(
+      coverage.shouldFlushListenBuffer(delayedBuffer, 5),
+      true,
+      'a delayed continuous tick should request an immediate batch flush'
+    );
+    const delayedPersisted = [];
+    await coverage.flushListenBuffer(delayedBuffer, (id, totalSec, payload) =>
+      delayedPersisted.push({ id, totalSec, payload })
+    ).promise;
+    assert.strictEqual(delayedPersisted.length, 1);
+    assert.strictEqual(delayedPersisted[0].payload.wallDeltaSec, 30);
+    assert.strictEqual(delayedPersisted[0].payload.contentDeltaSec, 30);
+
     let anchor = coverage.createListenCoverageAnchor(0, 0);
     const slowFirst = coverage.advanceListenCoverage(anchor, {
       position: 0.5,
@@ -117,7 +197,7 @@ async function main() {
     const stalled = coverage.advanceListenCoverage(
       coverage.createListenCoverageAnchor(10, 0),
       {
-        position: 20,
+        position: 10,
         playbackRate: 1,
         totalSec: 100,
         now: 5000,
@@ -125,6 +205,30 @@ async function main() {
     );
     assert.strictEqual(stalled.continuous, false);
     assert.deepStrictEqual(stalled.secs, []);
+
+    const delayedMismatch = coverage.advanceListenCoverage(
+      coverage.createListenCoverageAnchor(10, 0),
+      {
+        position: 20,
+        playbackRate: 1,
+        totalSec: 100,
+        now: 30000,
+      }
+    );
+    assert.strictEqual(delayedMismatch.continuous, false);
+    assert.strictEqual(delayedMismatch.reason, 'rate-mismatch');
+
+    const delayedJump = coverage.advanceListenCoverage(
+      coverage.createListenCoverageAnchor(10, 0),
+      {
+        position: 80,
+        playbackRate: 1,
+        totalSec: 100,
+        now: 1000,
+      }
+    );
+    assert.strictEqual(delayedJump.continuous, false);
+    assert.strictEqual(delayedJump.reason, 'rate-mismatch');
 
     const beforePause = coverage.createListenCoverageAnchor(5, 5000);
     const afterPause = coverage.advanceListenCoverage(null, {
@@ -196,6 +300,119 @@ async function main() {
     assert.strictEqual(replayBits.size, replay.heard.size);
     const resetReplayBits = new Set(replayAgain.heard);
     assert.strictEqual(resetReplayBits.size, replayAgain.heard.size);
+
+    const persisted = [];
+    const finalBatch = coverage.flushListenBuffer(
+      {
+        id: 'pod::episode',
+        totalSec: 120,
+        secs: [115, 116, 117],
+        wall: 3,
+        content: 4.5,
+        count: 3,
+      },
+      (id, totalSec, payload) => {
+        persisted.push({ id, totalSec, payload });
+        return { id, totalSec, completed: false };
+      }
+    );
+    assert.ok(finalBatch, 'a partial final buffer should flush');
+    await finalBatch.promise;
+    assert.deepStrictEqual(persisted, [
+      {
+        id: 'pod::episode',
+        totalSec: 120,
+        payload: {
+          secs: [115, 116, 117],
+          wallDeltaSec: 3,
+          contentDeltaSec: 4.5,
+        },
+      },
+    ]);
+    assert.strictEqual(finalBatch.nextBuffer.count, 0);
+
+    const endEvents = [];
+    const Player = loadPlayerPrototype(endEvents);
+    const endPersisted = [];
+    const sleepingPlayer = Object.create(Player.prototype);
+    sleepingPlayer._listenBuf = {
+      id: 'pod::end',
+      totalSec: 120,
+      secs: [118, 119],
+      wall: 2,
+      content: 2,
+      count: 2,
+    };
+    sleepingPlayer._flushListenBuf = () => {
+      const batch = coverage.flushListenBuffer(
+        sleepingPlayer._listenBuf,
+        (id, totalSec, payload) => endPersisted.push({ id, totalSec, payload })
+      );
+      sleepingPlayer._listenBuf = batch.nextBuffer;
+      endEvents.push(['flush']);
+      return batch.promise;
+    };
+    sleepingPlayer._invalidateListenCoverage = () =>
+      endEvents.push(['invalidate']);
+    sleepingPlayer._scrobble = () => endEvents.push(['scrobble']);
+    sleepingPlayer._setPlaying = value => endEvents.push(['setPlaying', value]);
+    sleepingPlayer._playNextTrack = () => endEvents.push(['next']);
+    sleepingPlayer._sleepEndMode = true;
+    sleepingPlayer._currentTrack = { id: 'end-track' };
+    sleepingPlayer.isPersonalFM = false;
+    sleepingPlayer.repeatMode = 'off';
+    sleepingPlayer._nextTrackCallback();
+    assert.deepStrictEqual(endPersisted, [
+      {
+        id: 'pod::end',
+        totalSec: 120,
+        payload: {
+          secs: [118, 119],
+          wallDeltaSec: 2,
+          contentDeltaSec: 2,
+        },
+      },
+    ]);
+    assert.ok(endEvents.some(([type]) => type === 'flush'));
+    assert.ok(endEvents.some(([type]) => type === 'invalidate'));
+    assert.ok(
+      endEvents.some(
+        ([type, value]) => type === 'setPlaying' && value === false
+      )
+    );
+    assert.ok(!endEvents.some(([type]) => type === 'next'));
+    assert.strictEqual(sleepingPlayer._sleepEndMode, false);
+
+    const normalEndEvents = [];
+    const normalPlayer = Object.create(Player.prototype);
+    normalPlayer._listenBuf = {
+      id: 'pod::normal-end',
+      totalSec: 120,
+      secs: [118],
+      wall: 1,
+      content: 1,
+      count: 1,
+    };
+    normalPlayer._flushListenBuf = () => {
+      const batch = coverage.flushListenBuffer(
+        normalPlayer._listenBuf,
+        () => {}
+      );
+      normalPlayer._listenBuf = batch.nextBuffer;
+      normalEndEvents.push(['flush']);
+      return batch.promise;
+    };
+    normalPlayer._invalidateListenCoverage = () =>
+      normalEndEvents.push(['invalidate']);
+    normalPlayer._scrobble = () => normalEndEvents.push(['scrobble']);
+    normalPlayer._playNextTrack = () => normalEndEvents.push(['next']);
+    normalPlayer._sleepEndMode = false;
+    normalPlayer._currentTrack = { id: 'normal-end-track' };
+    normalPlayer.isPersonalFM = false;
+    normalPlayer.repeatMode = 'off';
+    normalPlayer._nextTrackCallback();
+    assert.ok(normalEndEvents.some(([type]) => type === 'flush'));
+    assert.ok(normalEndEvents.some(([type]) => type === 'next'));
 
     const finalPayload = coverage.toListenBatchPayload({
       secs: [115, 116, 117],

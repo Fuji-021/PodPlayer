@@ -1,7 +1,10 @@
 // Player owns the anchor lifecycle. This module only decides which content
-// seconds were crossed without an explicit seek, source rebuild, or long gap.
+// seconds were crossed without an explicit seek, source rebuild, or playback
+// discontinuity. A delayed renderer tick is still continuous when media time
+// progressed at the expected playback rate.
 
-export const LISTEN_COVERAGE_MAX_TICK_GAP_MS = 3500;
+export const LISTEN_COVERAGE_RATIO_TOLERANCE = 0.12;
+export const LISTEN_COVERAGE_MIN_TOLERANCE_SEC = 0.35;
 
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
@@ -22,7 +25,7 @@ export function advanceListenCoverage(
     playbackRate = 1,
     totalSec = 0,
     now = Date.now(),
-    maxTickGapMs = LISTEN_COVERAGE_MAX_TICK_GAP_MS,
+    ratioTolerance = LISTEN_COVERAGE_RATIO_TOLERANCE,
   } = {}
 ) {
   const nextPosition = Math.max(0, finiteNumber(position));
@@ -45,23 +48,44 @@ export function advanceListenCoverage(
 
   const elapsedMs = nextNow - anchor.at;
   const rate = Math.max(0.5, Math.min(3, finiteNumber(playbackRate, 1)));
-  const expectedDelta = (elapsedMs / 1000) * rate;
+  const wallDeltaSec = elapsedMs / 1000;
+  const expectedDelta = wallDeltaSec * rate;
   const delta = nextPosition - anchor.position;
-  const minimumProgress = Math.max(0.03, expectedDelta * 0.2);
-  const maximumProgress = expectedDelta + Math.max(0.75, rate * 0.75);
+  const tolerance = Math.max(
+    LISTEN_COVERAGE_MIN_TOLERANCE_SEC,
+    expectedDelta * Math.max(0, finiteNumber(ratioTolerance))
+  );
 
-  if (
-    elapsedMs <= 0 ||
-    elapsedMs > maxTickGapMs ||
-    delta < minimumProgress ||
-    delta > maximumProgress
-  ) {
+  if (elapsedMs <= 0) {
     return {
       anchor: nextAnchor,
       secs: [],
+      wallDeltaSec: 0,
       contentDeltaSec: 0,
       continuous: false,
-      reason: 'discontinuous',
+      reason: 'invalid-clock',
+    };
+  }
+
+  if (delta <= 0.02) {
+    return {
+      anchor: nextAnchor,
+      secs: [],
+      wallDeltaSec: 0,
+      contentDeltaSec: 0,
+      continuous: false,
+      reason: delta < 0 ? 'position-reversed' : 'position-stalled',
+    };
+  }
+
+  if (Math.abs(delta - expectedDelta) > tolerance) {
+    return {
+      anchor: nextAnchor,
+      secs: [],
+      wallDeltaSec: 0,
+      contentDeltaSec: 0,
+      continuous: false,
+      reason: 'rate-mismatch',
     };
   }
 
@@ -76,7 +100,8 @@ export function advanceListenCoverage(
   return {
     anchor: nextAnchor,
     secs,
-    contentDeltaSec: rate,
+    wallDeltaSec,
+    contentDeltaSec: delta,
     continuous: true,
     reason: 'continuous',
   };
@@ -88,4 +113,37 @@ export function toListenBatchPayload(buffer) {
     wallDeltaSec: (buffer && buffer.wall) || 0,
     contentDeltaSec: (buffer && buffer.content) || 0,
   };
+}
+
+export function shouldFlushListenBuffer(buffer, flushAfterSec) {
+  return !!(
+    buffer &&
+    buffer.count &&
+    finiteNumber(buffer.wall) >= Math.max(0, finiteNumber(flushAfterSec))
+  );
+}
+
+// Keep the buffer hand-off testable: Player swaps in an empty buffer before
+// persistence starts, so a subsequent tick can never mutate the old batch.
+export function flushListenBuffer(buffer, persist) {
+  if (!buffer || !buffer.count || typeof persist !== 'function') return null;
+
+  const id = buffer.id;
+  const totalSec = buffer.totalSec;
+  const payload = toListenBatchPayload(buffer);
+  const nextBuffer = {
+    id,
+    totalSec,
+    secs: [],
+    wall: 0,
+    content: 0,
+    count: 0,
+  };
+  let promise;
+  try {
+    promise = Promise.resolve(persist(id, totalSec, payload));
+  } catch (error) {
+    promise = Promise.reject(error);
+  }
+  return { nextBuffer, promise };
 }

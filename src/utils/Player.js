@@ -31,7 +31,8 @@ import {
 import {
   advanceListenCoverage,
   createListenCoverageAnchor,
-  toListenBatchPayload,
+  flushListenBuffer,
+  shouldFlushListenBuffer,
 } from '@/utils/podcast/listenCoverage';
 import { removeDownload } from '@/utils/podcast/downloads';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
@@ -414,21 +415,12 @@ export default class {
   }
   // [B69-F5 降频] 把累积的收听窗口批量落盘 + 据返回 row 广播 5% 步进/完成给 UI（沿用原逐秒 bump 逻辑）。
   _flushListenBuf() {
-    const buf = this._listenBuf;
-    if (!buf || !buf.count) return Promise.resolve(); // [审P1-4] 返回 Promise 供退出前 await
-    const id = buf.id;
-    const totalSec = buf.totalSec;
-    const payload = toListenBatchPayload(buf);
+    const batch = flushListenBuffer(this._listenBuf, tickListenBatch);
+    if (!batch) return Promise.resolve(); // [审P1-4] 返回 Promise 供退出前 await
+    const { id } = batch.nextBuffer;
     // 同步取出后立即重置窗口(保留 id/totalSec)，防异步落盘期间新 tick 串改本批数据。
-    this._listenBuf = {
-      id,
-      totalSec,
-      secs: [],
-      wall: 0,
-      content: 0,
-      count: 0,
-    };
-    return tickListenBatch(id, totalSec, payload) // [审P1-4] 返回链供退出前 await commit
+    this._listenBuf = batch.nextBuffer;
+    return batch.promise // [审P1-4] 返回链供退出前 await commit
       .then(row => {
         if (!row) return;
         const stepNow = Math.floor(
@@ -684,25 +676,29 @@ export default class {
             // [B69-F5 降频] 不再每秒各开 2 个 Dexie rw 事务，改为内存累积本窗口
             //   (记 bit 的秒位置 + 墙钟/内容增量)，每 LISTEN_FLUSH_SEC 秒批量落盘(_flushListenBuf)。
             //   切集(id 变)在此 flush 旧集；暂停由 _setPlaying、退出由 beforeunload 兜底 flush。
-            let buf = this._listenBuf;
-            if (!buf || buf.id !== t.podcastEpisodeId) {
-              if (buf) this._flushListenBuf(); // 切集 → 先把上一集缓冲落盘
-              buf = this._listenBuf = {
-                id: t.podcastEpisodeId,
-                totalSec,
-                secs: [],
-                wall: 0,
-                content: 0,
-                count: 0,
-              };
+            if (coverage.continuous) {
+              let buf = this._listenBuf;
+              if (!buf || buf.id !== t.podcastEpisodeId) {
+                if (buf) this._flushListenBuf(); // 切集 → 先把上一集缓冲落盘
+                buf = this._listenBuf = {
+                  id: t.podcastEpisodeId,
+                  totalSec,
+                  secs: [],
+                  wall: 0,
+                  content: 0,
+                  count: 0,
+                };
+              }
+              buf.totalSec = totalSec; // dt 可能从 0(未知)变为已知
+              // 只记录连续播放实际跨过的内容秒；倍速时补齐中间整数秒。
+              if (coverage.secs.length) buf.secs.push(...coverage.secs);
+              buf.wall += coverage.wallDeltaSec;
+              buf.content += coverage.contentDeltaSec;
+              buf.count += 1;
+              // 后台延迟 tick 也按真实墙钟窗口及时落盘，不能等待更多回调。
+              if (shouldFlushListenBuffer(buf, LISTEN_FLUSH_SEC))
+                this._flushListenBuf();
             }
-            buf.totalSec = totalSec; // dt 可能从 0(未知)变为已知
-            // 只记录连续播放实际跨过的内容秒；倍速时补齐中间整数秒。
-            if (coverage.secs.length) buf.secs.push(...coverage.secs);
-            buf.wall += 1; // 真实流逝 1 秒
-            buf.content += coverage.contentDeltaSec;
-            buf.count += 1;
-            if (buf.count >= LISTEN_FLUSH_SEC) this._flushListenBuf();
           }
         }
       }
@@ -1496,10 +1492,17 @@ export default class {
     this._sleepEndMode = !!active;
   }
   _nextTrackCallback() {
+    // Howler 的 onend 不保证紧随最后一个 1s tick；先排空已有缓冲，
+    // 再决定普通续播、单曲循环或睡眠“本集结束”的分支。
+    this._flushListenBuf();
+    this._invalidateListenCoverage();
     this._scrobble(this._currentTrack, 0, true);
     // [T15] end 模式：自然播完后不续播队列，让 Vue 层的 1s interval 检测到 leftSec<=2 → fireSleep()
     if (this._sleepEndMode) {
       this._sleepEndMode = false;
+      this._setPlaying(false);
+      store.commit('setAudioBuffering', false);
+      setTitle(null);
       return;
     }
     if (!this.isPersonalFM && this.repeatMode === 'one') {
