@@ -45,7 +45,6 @@
           v-for="podcast in podcasts"
           :key="podcast.id"
           ref="items"
-          v-tip="podcast.title || '未命名节目'"
           ref-in-for
           class="rail-item"
           :class="{ active: selectedPodcastId === podcast.id }"
@@ -99,6 +98,8 @@ import {
   getRailArrowGoal,
   getRailMetrics,
   getRailMotionStep,
+  getRailPositionMetrics,
+  RAIL_EDGE_EPSILON,
   getRailThumbDragTarget,
   getRailThumbGeometry,
 } from '@/utils/podcast/subscriptionUpdatesRules';
@@ -171,6 +172,7 @@ export default {
       this._railActive = false;
       this._haloToken = (this._haloToken || 0) + 1;
       this._railGoal = null;
+      this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
       this.previewPodcastId = '';
       this.stopAnimation();
@@ -230,9 +232,18 @@ export default {
     updateMetrics() {
       if (!this._railActive || this._destroyed) return;
       const metrics = this.measure();
+      this.applyMetrics(metrics, { measureThumb: true });
+    },
+    applyMetrics(metrics, { measureThumb = false } = {}) {
+      if (!metrics) return;
       this._metrics = metrics;
-      this._thumbGeometry = this.getThumbGeometry(metrics);
+      if (measureThumb || !this._thumbGeometry) {
+        this._thumbGeometry = this.getThumbGeometry(metrics);
+      }
       this.syncThumb(metrics);
+      this.syncRailState(metrics);
+    },
+    syncRailState(metrics) {
       if (
         this.state.canScroll !== metrics.canScroll ||
         this.state.canPrev !== metrics.canPrev ||
@@ -269,16 +280,19 @@ export default {
     writeRailPosition(scrollLeft) {
       const viewport = this.$refs.viewport;
       if (!viewport || !this._metrics) return;
-      const next = Math.max(
-        0,
-        Math.min(this._metrics.maxScroll, Number(scrollLeft) || 0)
-      );
-      if (Math.abs(viewport.scrollLeft - next) < 0.01) return;
-      viewport.scrollLeft = next;
-      this.syncThumb(this._metrics, next);
+      const metrics = getRailPositionMetrics(this._metrics, scrollLeft);
+      this._metrics = metrics;
+      if (
+        Math.abs(viewport.scrollLeft - metrics.scrollLeft) >= RAIL_EDGE_EPSILON
+      ) {
+        viewport.scrollLeft = metrics.scrollLeft;
+      }
+      this.syncThumb(metrics, metrics.scrollLeft);
+      this.syncRailState(metrics);
     },
     interruptRailMotion() {
       this._railGoal = null;
+      this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
       this.stopAnimation();
     },
@@ -289,6 +303,7 @@ export default {
       const shiftWheel = event.shiftKey ? event.deltaY : 0;
       const delta = horizontal || shiftWheel;
       const metrics = this.measure();
+      this.applyMetrics(metrics, { measureThumb: true });
       if (!delta || !metrics.canScroll) return;
       const next = Math.max(
         0,
@@ -297,22 +312,24 @@ export default {
       if (next === viewport.scrollLeft) return;
       event.preventDefault();
       this.interruptRailMotion();
-      this.updateMetrics();
       this.writeRailPosition(next);
     },
     scrollRail(direction) {
       const viewport = this.$refs.viewport;
       if (!viewport) return;
       const metrics = this.measure();
-      this._metrics = metrics;
-      this._thumbGeometry = this.getThumbGeometry(metrics);
+      this.applyMetrics(metrics, { measureThumb: true });
+      if (!metrics.canScroll) return;
+      const normalizedDirection = direction < 0 ? -1 : 1;
       this._railGoal = getRailArrowGoal({
         scrollLeft: metrics.scrollLeft,
         goal: this._railGoal,
+        goalDirection: this._railGoalDirection,
         clientWidth: viewport.clientWidth,
         scrollWidth: viewport.scrollWidth,
-        direction,
+        direction: normalizedDirection,
       });
+      this._railGoalDirection = normalizedDirection;
       this._controllerOwnsScroll = true;
       this.setMotionClass('is-moving', true);
       this.startAnimation();
@@ -344,6 +361,7 @@ export default {
         if (next === this._railGoal) {
           this.writeRailPosition(this._railGoal);
           this._railGoal = null;
+          this._railGoalDirection = null;
           this._animationRaf = null;
           this._controllerOwnsScroll = false;
           this.updateMetrics();
@@ -366,11 +384,13 @@ export default {
       if (!viewport || !item) return;
       const left = item.offsetLeft;
       const right = left + item.offsetWidth;
-      if (left < viewport.scrollLeft) viewport.scrollLeft = left;
-      else if (right > viewport.scrollLeft + viewport.clientWidth) {
-        viewport.scrollLeft = right - viewport.clientWidth;
+      this.interruptRailMotion();
+      const metrics = this.measure();
+      this.applyMetrics(metrics, { measureThumb: true });
+      if (left < metrics.scrollLeft) this.writeRailPosition(left);
+      else if (right > metrics.scrollLeft + viewport.clientWidth) {
+        this.writeRailPosition(right - viewport.clientWidth);
       }
-      if (this._railActive) this.updateMetrics();
     },
     focusRailEdge(last) {
       const items = this.$refs.items || [];
@@ -407,8 +427,7 @@ export default {
       ) {
         return;
       }
-      this._metrics = metrics;
-      this._thumbGeometry = this.getThumbGeometry(metrics);
+      this.applyMetrics(metrics, { measureThumb: true });
       this.interruptRailMotion();
       this._controllerOwnsScroll = true;
       this.setMotionClass('is-dragging', true);
@@ -588,9 +607,10 @@ export default {
 .rail-item {
   --rail-cover-lift: 0px;
   --rail-cover-scale: 1;
-  --rail-cover-transition: 140ms;
+  --rail-cover-transition: 90ms;
   --rail-halo-opacity: 0;
   --rail-halo-scale: 0.9;
+  --rail-halo-transition: 80ms;
   position: relative;
   display: inline-flex;
   flex: 0 0 96px;
@@ -647,8 +667,9 @@ export default {
 .rail-item.active {
   // The selected state keeps the hover lift, then adds its small scale.
   --rail-cover-scale: 1.045;
-  --rail-cover-transition: 180ms;
+  --rail-cover-transition: 160ms;
   --rail-halo-scale: 0.98;
+  --rail-halo-transition: 160ms;
 }
 
 .rail-item:hover:not(.active) {
@@ -682,7 +703,8 @@ export default {
   filter: blur(12px) opacity(0.6);
   opacity: var(--rail-halo-opacity);
   transform: scale(var(--rail-halo-scale));
-  transition: opacity 180ms ease-out, transform 180ms ease-out;
+  transition: opacity var(--rail-halo-transition) ease-out,
+    transform var(--rail-halo-transition) ease-out;
 }
 
 .program-rail.is-moving .rail-cover-halo,

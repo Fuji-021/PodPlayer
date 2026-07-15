@@ -247,6 +247,29 @@ export function rankSubscriptionRail(podcasts, now = Date.now()) {
     .map(entry => entry.podcast);
 }
 
+export const RAIL_EDGE_EPSILON = 0.01;
+
+function clampRailPosition(scrollLeft, maxScroll) {
+  const max = Math.max(0, Number(maxScroll) || 0);
+  return Math.max(0, Math.min(max, Number(scrollLeft) || 0));
+}
+
+export function getRailPositionMetrics(
+  { maxScroll = 0, visibleRatio = 1 } = {},
+  scrollLeft = 0
+) {
+  const max = Math.max(0, Number(maxScroll) || 0);
+  const left = clampRailPosition(scrollLeft, max);
+  return {
+    scrollLeft: left,
+    maxScroll: max,
+    visibleRatio,
+    canScroll: max > RAIL_EDGE_EPSILON,
+    canPrev: left > RAIL_EDGE_EPSILON,
+    canNext: left < max - RAIL_EDGE_EPSILON,
+  };
+}
+
 export function getRailMetrics({
   scrollLeft = 0,
   clientWidth = 0,
@@ -255,16 +278,8 @@ export function getRailMetrics({
   const width = Math.max(0, Number(clientWidth) || 0);
   const content = Math.max(0, Number(scrollWidth) || 0);
   const maxScroll = Math.max(0, content - width);
-  const left = Math.max(0, Math.min(maxScroll, Number(scrollLeft) || 0));
   const visibleRatio = content > 0 ? Math.min(1, width / content) : 1;
-  return {
-    scrollLeft: left,
-    maxScroll,
-    visibleRatio,
-    canScroll: maxScroll > 1,
-    canPrev: left > 1,
-    canNext: left < maxScroll - 1,
-  };
+  return getRailPositionMetrics({ maxScroll, visibleRatio }, scrollLeft);
 }
 
 export function getRailThumbGeometry({
@@ -298,16 +313,21 @@ export function getRailArrowTarget({
 export function getRailArrowGoal({
   scrollLeft = 0,
   goal = null,
+  goalDirection = null,
   clientWidth = 0,
   scrollWidth = 0,
   direction = 1,
 } = {}) {
-  const base = Number.isFinite(goal) ? goal : scrollLeft;
+  const normalizedDirection = direction < 0 ? -1 : 1;
+  const canAccumulate =
+    Number.isFinite(goal) &&
+    (goalDirection == null || goalDirection === normalizedDirection);
+  const base = canAccumulate ? goal : scrollLeft;
   return getRailArrowTarget({
     scrollLeft: base,
     clientWidth,
     scrollWidth,
-    direction,
+    direction: normalizedDirection,
   });
 }
 

@@ -264,6 +264,59 @@ export const db = {
       canPrev: true,
       canNext: true,
     });
+    assert.deepStrictEqual(
+      rules.getRailPositionMetrics(metrics, 0),
+      {
+        scrollLeft: 0,
+        maxScroll: 600,
+        visibleRatio: 1 / 3,
+        canScroll: true,
+        canPrev: false,
+        canNext: true,
+      },
+      'the left edge starts with only the forward arrow enabled'
+    );
+    assert.deepStrictEqual(
+      rules.getRailPositionMetrics(metrics, 210),
+      {
+        scrollLeft: 210,
+        maxScroll: 600,
+        visibleRatio: 1 / 3,
+        canScroll: true,
+        canPrev: true,
+        canNext: true,
+      },
+      'moving right from the left edge enables the reverse arrow immediately'
+    );
+    assert.deepStrictEqual(
+      rules.getRailPositionMetrics(metrics, 600),
+      {
+        scrollLeft: 600,
+        maxScroll: 600,
+        visibleRatio: 1 / 3,
+        canScroll: true,
+        canPrev: true,
+        canNext: false,
+      },
+      'the right edge starts with only the reverse arrow enabled'
+    );
+    assert.strictEqual(
+      rules.getRailPositionMetrics(metrics, 390).canNext,
+      true,
+      'moving left from the right edge enables the forward arrow immediately'
+    );
+    assert.deepStrictEqual(
+      rules.getRailPositionMetrics({ maxScroll: 0, visibleRatio: 1 }, 0),
+      {
+        scrollLeft: 0,
+        maxScroll: 0,
+        visibleRatio: 1,
+        canScroll: false,
+        canPrev: false,
+        canNext: false,
+      },
+      'resize-to-fit clears both arrow states'
+    );
     assert.strictEqual(
       rules.getRailArrowTarget({
         scrollLeft: 500,
@@ -293,6 +346,30 @@ export const db = {
       }),
       400
     );
+    assert.strictEqual(
+      rules.getRailThumbDragTarget({
+        startScrollLeft: 100,
+        startPointerX: 10,
+        pointerX: -1000,
+        trackWidth: 300,
+        thumbWidth: 100,
+        maxScroll: 600,
+      }),
+      0,
+      'dragging the thumb past the left edge clamps and enables only forward'
+    );
+    assert.strictEqual(
+      rules.getRailThumbDragTarget({
+        startScrollLeft: 100,
+        startPointerX: 10,
+        pointerX: 1000,
+        trackWidth: 300,
+        thumbWidth: 100,
+        maxScroll: 600,
+      }),
+      600,
+      'dragging the thumb past the right edge clamps and enables only reverse'
+    );
     assert.deepStrictEqual(
       rules.getRailThumbGeometry({
         trackWidth: 1200,
@@ -313,11 +390,50 @@ export const db = {
       rules.getRailArrowGoal({
         scrollLeft: 100,
         goal: 310,
+        goalDirection: 1,
         clientWidth: 300,
         scrollWidth: 1200,
         direction: 1,
       }),
       520
+    );
+    assert.strictEqual(
+      rules.getRailArrowGoal({
+        scrollLeft: 220,
+        goal: 520,
+        goalDirection: 1,
+        clientWidth: 300,
+        scrollWidth: 1200,
+        direction: -1,
+      }),
+      10,
+      'a reverse click retargets from the visible position instead of the old goal'
+    );
+    let rapidGoal = rules.getRailArrowGoal({
+      scrollLeft: 220,
+      goal: 520,
+      goalDirection: 1,
+      clientWidth: 300,
+      scrollWidth: 1200,
+      direction: -1,
+    });
+    assert.strictEqual(rapidGoal, 10);
+    rapidGoal = rules.getRailArrowGoal({
+      scrollLeft: 170,
+      goal: rapidGoal,
+      goalDirection: -1,
+      clientWidth: 300,
+      scrollWidth: 1200,
+      direction: 1,
+    });
+    assert.strictEqual(rapidGoal, 380);
+    assert.strictEqual(
+      rules.getRailPositionMetrics(
+        { maxScroll: 900, visibleRatio: 0.25 },
+        rapidGoal
+      ).canPrev,
+      true,
+      'alternating targets keep a usable reverse arrow state'
     );
     const forwardRailStep = rules.getRailMotionStep({
       scrollLeft: 100,
