@@ -97,9 +97,11 @@ import { ensureTinyCover, peekTinyCover } from '@/utils/podcast/coverHalo';
 import {
   getRailArrowGoal,
   getRailMetrics,
+  getRailMotionDecision,
   getRailMotionStep,
   getRailPositionMetrics,
   RAIL_EDGE_EPSILON,
+  getRailSelectionContextTarget,
   getRailThumbDragTarget,
   getRailThumbGeometry,
 } from '@/utils/podcast/subscriptionUpdatesRules';
@@ -187,7 +189,10 @@ export default {
       this.setMotionClass('is-dragging', false);
     },
     select(podcastId) {
-      if (podcastId === this.selectedPodcastId) return;
+      if (podcastId === this.selectedPodcastId) {
+        if (podcastId) this.ensureSelectedVisible(podcastId);
+        return;
+      }
       this.$emit('select', podcastId);
     },
     measure() {
@@ -295,6 +300,7 @@ export default {
       this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
       this.stopAnimation();
+      this.setMotionClass('is-moving', false);
     },
     handleRailWheel(event) {
       const viewport = this.$refs.viewport;
@@ -321,7 +327,7 @@ export default {
       this.applyMetrics(metrics, { measureThumb: true });
       if (!metrics.canScroll) return;
       const normalizedDirection = direction < 0 ? -1 : 1;
-      this._railGoal = getRailArrowGoal({
+      const goal = getRailArrowGoal({
         scrollLeft: metrics.scrollLeft,
         goal: this._railGoal,
         goalDirection: this._railGoalDirection,
@@ -329,7 +335,39 @@ export default {
         scrollWidth: viewport.scrollWidth,
         direction: normalizedDirection,
       });
-      this._railGoalDirection = normalizedDirection;
+      this.retargetRailMotion(goal, { direction: normalizedDirection });
+    },
+    prefersReducedMotion() {
+      return !!(
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      );
+    },
+    finishRailMotion() {
+      this._railGoal = null;
+      this._railGoalDirection = null;
+      this._controllerOwnsScroll = false;
+      this.updateMetrics();
+      this.setMotionClass('is-moving', false);
+    },
+    retargetRailMotion(goal, { direction = null } = {}) {
+      const viewport = this.$refs.viewport;
+      if (!viewport || !this._metrics) return;
+      const decision = getRailMotionDecision({
+        scrollLeft: viewport.scrollLeft,
+        goal,
+        maxScroll: this._metrics.maxScroll,
+        reducedMotion: this.prefersReducedMotion(),
+      });
+      this._railGoalDirection = direction;
+      if (decision.immediate) {
+        this.stopAnimation();
+        this.writeRailPosition(decision.target);
+        this.finishRailMotion();
+        return;
+      }
+      this._railGoal = decision.target;
       this._controllerOwnsScroll = true;
       this.setMotionClass('is-moving', true);
       this.startAnimation();
@@ -360,12 +398,8 @@ export default {
         this.writeRailPosition(next);
         if (next === this._railGoal) {
           this.writeRailPosition(this._railGoal);
-          this._railGoal = null;
-          this._railGoalDirection = null;
           this._animationRaf = null;
-          this._controllerOwnsScroll = false;
-          this.updateMetrics();
-          this.setMotionClass('is-moving', false);
+          this.finishRailMotion();
           return;
         }
         this._animationRaf = requestAnimationFrame(tick);
@@ -382,15 +416,30 @@ export default {
       const items = this.$refs.items || [];
       const item = items.find(node => node.dataset.podcastId === podcastId);
       if (!viewport || !item) return;
-      const left = item.offsetLeft;
-      const right = left + item.offsetWidth;
-      this.interruptRailMotion();
       const metrics = this.measure();
       this.applyMetrics(metrics, { measureThumb: true });
-      if (left < metrics.scrollLeft) this.writeRailPosition(left);
-      else if (right > metrics.scrollLeft + viewport.clientWidth) {
-        this.writeRailPosition(right - viewport.clientWidth);
+      const allItem = this.$el.querySelector('.rail-all');
+      const railItems = [allItem, ...items].filter(Boolean);
+      const index = railItems.indexOf(item);
+      const previous = railItems[index - 1];
+      const next = railItems[index + 1];
+      let gap = 0;
+      if (previous) {
+        gap = item.offsetLeft - (previous.offsetLeft + previous.offsetWidth);
+      } else if (next) {
+        gap = next.offsetLeft - (item.offsetLeft + item.offsetWidth);
       }
+      const goal = getRailSelectionContextTarget({
+        scrollLeft: metrics.scrollLeft,
+        clientWidth: viewport.clientWidth,
+        scrollWidth: viewport.scrollWidth,
+        itemLeft: item.offsetLeft,
+        itemWidth: item.offsetWidth,
+        gap,
+        hasPrev: index > 0,
+        hasNext: index >= 0 && index < railItems.length - 1,
+      });
+      this.retargetRailMotion(goal);
     },
     focusRailEdge(last) {
       const items = this.$refs.items || [];
@@ -589,7 +638,9 @@ export default {
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
-  padding: 10px 0 16px;
+  // The bottom padding is deliberate drawing room for the cover's compact
+  // projection. The scroll container itself remains clipped and horizontal.
+  padding: 10px 0 30px;
   scrollbar-width: none;
   scroll-behavior: auto;
 
@@ -609,7 +660,8 @@ export default {
   --rail-cover-scale: 1;
   --rail-cover-transition: 90ms;
   --rail-halo-opacity: 0;
-  --rail-halo-scale: 0.9;
+  --rail-halo-scale-x: 0.82;
+  --rail-halo-scale-y: 0.5;
   --rail-halo-transition: 80ms;
   position: relative;
   display: inline-flex;
@@ -668,12 +720,14 @@ export default {
   // The selected state keeps the hover lift, then adds its small scale.
   --rail-cover-scale: 1.045;
   --rail-cover-transition: 160ms;
-  --rail-halo-scale: 0.98;
+  --rail-halo-scale-x: 0.9;
+  --rail-halo-scale-y: 0.62;
   --rail-halo-transition: 160ms;
 }
 
 .rail-item:hover:not(.active) {
-  --rail-halo-scale: 0.96;
+  --rail-halo-scale-x: 0.86;
+  --rail-halo-scale-y: 0.56;
 }
 
 .rail-item.active .rail-all-icon {
@@ -692,17 +746,19 @@ export default {
 
 .rail-cover-halo {
   position: absolute;
-  top: 8px;
-  right: 0;
-  left: 0;
-  height: 100%;
+  top: 64px;
+  right: 9px;
+  left: 9px;
+  height: 28px;
   z-index: 0;
-  border-radius: var(--radius-cover);
-  background-position: center;
-  background-size: cover;
-  filter: blur(12px) opacity(0.6);
+  border-radius: 50%;
+  background-position: center 78%;
+  background-size: 118px auto;
+  filter: blur(12px) saturate(1.1);
   opacity: var(--rail-halo-opacity);
-  transform: scale(var(--rail-halo-scale));
+  pointer-events: none;
+  transform: scaleX(var(--rail-halo-scale-x)) scaleY(var(--rail-halo-scale-y));
+  transform-origin: center;
   transition: opacity var(--rail-halo-transition) ease-out,
     transform var(--rail-halo-transition) ease-out;
 }
@@ -787,10 +843,23 @@ export default {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .rail-item,
+  .rail-item:hover,
+  .rail-item.active {
+    --rail-cover-lift: 0px;
+    --rail-cover-scale: 1;
+    --rail-halo-opacity: 0;
+  }
+
   .rail-cover,
   .rail-all-icon,
   .rail-cover-halo {
-    transition: none;
+    transition: none !important;
+  }
+
+  .rail-cover,
+  .rail-all-icon {
+    transform: none;
   }
 }
 </style>

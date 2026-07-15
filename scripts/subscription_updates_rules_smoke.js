@@ -453,6 +453,163 @@ export const db = {
       'rail retarget should reverse from the current position without a snap'
     );
 
+    const selectionContext = {
+      clientWidth: 300,
+      scrollWidth: 1000,
+      itemWidth: 80,
+      gap: 10,
+      hasPrev: true,
+      hasNext: true,
+    };
+    assert.strictEqual(
+      rules.getRailSelectionContextDistance(selectionContext),
+      90,
+      'selection context keeps one cover and one gap on either side'
+    );
+    const rightEdgeTarget = rules.getRailSelectionContextTarget({
+      ...selectionContext,
+      scrollLeft: 0,
+      itemLeft: 220,
+    });
+    const leftEdgeTarget = rules.getRailSelectionContextTarget({
+      ...selectionContext,
+      scrollLeft: 90,
+      itemLeft: 90,
+    });
+    assert.strictEqual(
+      rightEdgeTarget,
+      90,
+      'selecting the visible right edge reveals the full next cover'
+    );
+    assert.strictEqual(
+      leftEdgeTarget,
+      0,
+      'selecting the visible left edge reveals the full previous cover'
+    );
+    assert.strictEqual(
+      rightEdgeTarget,
+      90 - leftEdgeTarget,
+      'left and right edge selection use mirrored context distances'
+    );
+    assert.strictEqual(
+      rules.getRailSelectionContextTarget({
+        ...selectionContext,
+        scrollLeft: 100,
+        itemLeft: 220,
+      }),
+      100,
+      'selection inside the safe zone does not move the rail'
+    );
+    assert.strictEqual(
+      rules.getRailSelectionContextTarget({
+        ...selectionContext,
+        scrollLeft: 50,
+        itemLeft: 0,
+        hasPrev: false,
+      }),
+      0,
+      'the first item clamps to the real left edge without a blank gutter'
+    );
+    assert.strictEqual(
+      rules.getRailSelectionContextTarget({
+        ...selectionContext,
+        scrollLeft: 500,
+        itemLeft: 920,
+        hasNext: false,
+      }),
+      700,
+      'the last item clamps to the real right edge without a blank gutter'
+    );
+    assert.strictEqual(
+      rules.getRailSelectionContextDistance({
+        clientWidth: 120,
+        itemWidth: 80,
+        gap: 10,
+      }),
+      20,
+      'narrow rails shrink both safe zones by the same formula'
+    );
+    assert.strictEqual(
+      rules.getRailSelectionContextTarget({
+        clientWidth: 120,
+        scrollWidth: 500,
+        scrollLeft: 0,
+        itemLeft: 40,
+        itemWidth: 80,
+        gap: 10,
+        hasPrev: true,
+        hasNext: true,
+      }),
+      20,
+      'narrow rails still reveal symmetric context without overflowing'
+    );
+    assert.strictEqual(
+      rules.getRailSelectionContextTarget({
+        clientWidth: 550,
+        scrollWidth: 600,
+        scrollLeft: 0,
+        itemLeft: 520,
+        itemWidth: 80,
+        gap: 10,
+        hasPrev: true,
+        hasNext: false,
+      }),
+      50,
+      'a resize clamps a previously distant selection to its new max scroll'
+    );
+
+    const firstSelectionMotion = rules.getRailMotionDecision({
+      scrollLeft: 0,
+      goal: rightEdgeTarget,
+      maxScroll: 700,
+    });
+    assert.strictEqual(firstSelectionMotion.shouldAnimate, true);
+    const afterFirstSelection = rules.getRailMotionStep({
+      scrollLeft: 0,
+      goal: firstSelectionMotion.target,
+      maxScroll: 700,
+      deltaMs: 16,
+    });
+    const latestSelectionMotion = rules.getRailMotionDecision({
+      scrollLeft: afterFirstSelection,
+      goal: 420,
+      maxScroll: 700,
+    });
+    assert.strictEqual(
+      latestSelectionMotion.target,
+      420,
+      'rapid A -> B -> C retargeting retains only the newest selection goal'
+    );
+    assert.ok(
+      rules.getRailMotionStep({
+        scrollLeft: afterFirstSelection,
+        goal: latestSelectionMotion.target,
+        maxScroll: 700,
+        deltaMs: 16,
+      }) > afterFirstSelection,
+      'the latest target advances from the current visible position'
+    );
+    assert.deepStrictEqual(
+      rules.getRailMotionDecision({
+        scrollLeft: 164,
+        goal: 520,
+        maxScroll: 700,
+        interrupted: true,
+      }),
+      { target: 164, shouldAnimate: false, immediate: true },
+      'wheel or drag interruption discards the stale controller goal'
+    );
+    assert.deepStrictEqual(
+      rules.getRailMotionDecision({
+        scrollLeft: 164,
+        goal: 520,
+        maxScroll: 700,
+        reducedMotion: true,
+      }),
+      { target: 520, shouldAnimate: false, immediate: true },
+      'reduced motion directly applies the same clamped selection target'
+    );
+
     const alreadySorted = [
       { id: 'today', pubTime: crossYearNow },
       { id: 'yesterday', pubTime: localTime(2024, 11, 31) },

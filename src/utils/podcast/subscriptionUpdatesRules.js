@@ -332,6 +332,86 @@ export function getRailArrowGoal({
 }
 
 /**
+ * The amount of neighboring context we keep visible when selecting a rail
+ * item. It is intentionally mirrored on both sides: one cover plus its gap,
+ * capped to half of the remaining viewport so narrow rails stay usable.
+ */
+export function getRailSelectionContextDistance({
+  clientWidth = 0,
+  itemWidth = 0,
+  gap = 0,
+} = {}) {
+  const viewport = Math.max(0, Number(clientWidth) || 0);
+  const cover = Math.max(0, Number(itemWidth) || 0);
+  const spacing = Math.max(0, Number(gap) || 0);
+  return Math.max(0, Math.min(cover + spacing, (viewport - cover) / 2));
+}
+
+/**
+ * Returns the scroll position that keeps a selected item inside a symmetric
+ * safe zone and, where possible, fully reveals one neighboring cover. The
+ * DOM is measured only by the caller at selection time; rAF frames only use
+ * the result as a target.
+ */
+export function getRailSelectionContextTarget({
+  scrollLeft = 0,
+  clientWidth = 0,
+  scrollWidth = 0,
+  itemLeft = 0,
+  itemWidth = 0,
+  gap = 0,
+  hasPrev = false,
+  hasNext = false,
+  epsilon = RAIL_EDGE_EPSILON,
+} = {}) {
+  const metrics = getRailMetrics({ scrollLeft, clientWidth, scrollWidth });
+  const viewport = Math.max(0, Number(clientWidth) || 0);
+  const left = Math.max(0, Number(itemLeft) || 0);
+  const width = Math.max(0, Number(itemWidth) || 0);
+  const right = left + width;
+  const context = getRailSelectionContextDistance({
+    clientWidth: viewport,
+    itemWidth: width,
+    gap,
+  });
+  const tolerance = Math.max(0, Number(epsilon) || 0);
+  const safeLeft = metrics.scrollLeft + (hasPrev ? context : 0);
+  const safeRight = metrics.scrollLeft + viewport - (hasNext ? context : 0);
+  let target = metrics.scrollLeft;
+
+  if (left < safeLeft - tolerance) {
+    target = left - (hasPrev ? context : 0);
+  } else if (right > safeRight + tolerance) {
+    target = right - viewport + (hasNext ? context : 0);
+  }
+
+  return clampRailPosition(target, metrics.maxScroll);
+}
+
+/**
+ * Normalizes controller decisions so selection, arrow clicks and reduced
+ * motion all share the same target clamping and no stale goal survives an
+ * interruption.
+ */
+export function getRailMotionDecision({
+  scrollLeft = 0,
+  goal = 0,
+  maxScroll = 0,
+  reducedMotion = false,
+  interrupted = false,
+} = {}) {
+  const current = clampRailPosition(scrollLeft, maxScroll);
+  const target = interrupted ? current : clampRailPosition(goal, maxScroll);
+  const shouldAnimate =
+    !interrupted && !reducedMotion && Math.abs(target - current) >= 0.75;
+  return {
+    target,
+    shouldAnimate,
+    immediate: interrupted || reducedMotion || !shouldAnimate,
+  };
+}
+
+/**
  * Advances the rail toward its current target without retaining an obsolete
  * animation origin. A new arrow click can retarget from the exact visible
  * position instead of restarting an easing curve and jumping.
