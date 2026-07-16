@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'DevLauncher.Common.ps1')
 
+$source = $null
 try {
   $launcher = Assert-LauncherIntegrity -LauncherRoot $PSScriptRoot
   if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
@@ -114,6 +115,20 @@ try {
   Write-Host "[ready] Dev started from $($source.actualBranch)@$shortHead. Receipt: $receiptPath" -ForegroundColor Green
   exit 0
 } catch {
+  try {
+    $failure = [ordered]@{
+      status = 'failed'
+      failedAt = (Get-Date).ToUniversalTime().ToString('o')
+      launcherVersion = $script:DevLauncherVersion
+      error = $_.Exception.Message
+      selectedSourceRoot = if ($source) { $source.sourceRoot } else { $null }
+      selectedBranch = if ($source) { $source.actualBranch } else { $null }
+      selectedHead = if ($source) { $source.actualHead } else { $null }
+    }
+    Write-LauncherJsonAtomically -Path (Join-Path $PSScriptRoot 'last-start-error.json') -Value $failure
+  } catch {
+    # The original failure is still printed below if the audit write also fails.
+  }
   if ($_.Exception.Message) {
     Write-Host "[launcher-error] $($_.Exception.Message)" -ForegroundColor Red
   }

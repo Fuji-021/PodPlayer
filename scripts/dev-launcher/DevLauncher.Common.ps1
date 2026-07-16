@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-$script:DevLauncherVersion = '1.0.1'
+$script:DevLauncherVersion = '1.0.2'
 $script:DevProfile = 'dev'
 $script:DevPorts = @(20201, 10755, 27233)
 $script:DevUserData = 'D:\MyYesPlayerMusic\PodPlayerData\PodPlayerDev'
