@@ -106,12 +106,24 @@ function buildRailHarness(
       };
     },
   };
+  const rootAttributes = {};
   const root = {
     classList: {
       toggle(name, enabled) {
         if (enabled) rootClasses.add(name);
         else rootClasses.delete(name);
       },
+    },
+    setAttribute(name, value) {
+      rootAttributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(rootAttributes, name)
+        ? rootAttributes[name]
+        : null;
+    },
+    removeAttribute(name) {
+      delete rootAttributes[name];
     },
   };
   const track = {
@@ -169,6 +181,7 @@ function buildRailHarness(
   const items = Object.keys(positions)
     .filter(id => id !== 'all')
     .map(id => makeItem(id, positions[id]));
+  viewport.contains = target => target === allItem || items.includes(target);
   const emitted = [];
   const data = component.data.call({});
 
@@ -207,6 +220,7 @@ function buildRailHarness(
 
   return {
     vm,
+    root,
     viewport,
     track,
     thumb,
@@ -217,6 +231,7 @@ function buildRailHarness(
     rootClasses,
     emitted,
     items,
+    allItem,
     pageLeft,
     get scrollLeft() {
       return railLeft;
@@ -327,8 +342,17 @@ async function main() {
     const component = built.component;
     const source = built.source;
     activeHarness = buildRailHarness(component);
-    const { vm, viewport, track, thumb, raf, timerCalls, emitted } =
-      activeHarness;
+    const {
+      vm,
+      root,
+      viewport,
+      track,
+      thumb,
+      raf,
+      timerCalls,
+      emitted,
+      allItem,
+    } = activeHarness;
     vm.updateMetrics();
 
     // C is at the left edge while B is hidden. Its offsetParent is not the
@@ -379,9 +403,9 @@ async function main() {
       'pointer preparation should focus a rail item exactly once'
     );
     assert.strictEqual(
-      cItem.getAttribute('data-rail-pointer-focus'),
-      'true',
-      'pointer focus should be marked locally so it cannot show a keyboard outline'
+      root.getAttribute('data-rail-focus-origin'),
+      'pointer',
+      'pointer focus should be recorded on the stable rail root'
     );
     vm.select('C', { currentTarget: cItem });
     assert.strictEqual(
@@ -389,15 +413,43 @@ async function main() {
       1,
       'click selection must not repeat pointer focus'
     );
+    vm.handleRailFocusOut({ relatedTarget: allItem });
+    assert.strictEqual(
+      root.getAttribute('data-rail-focus-origin'),
+      'pointer',
+      'moving focus within the rail must retain the pointer origin'
+    );
+    vm.handleRailFocusOut({ relatedTarget: null });
+    assert.strictEqual(
+      root.getAttribute('data-rail-focus-origin'),
+      null,
+      'leaving the rail must clear the pointer focus origin'
+    );
+    vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
+    vm.handleRailFocusIn({ target: cItem });
+    assert.strictEqual(
+      root.getAttribute('data-rail-focus-origin'),
+      'pointer',
+      'the pointer-origin focus must survive its own focusin event'
+    );
     vm.handleRailKeyboardInput();
     assert.strictEqual(
-      cItem.getAttribute('data-rail-pointer-focus'),
+      root.getAttribute('data-rail-focus-origin'),
       null,
-      'keyboard input must restore normal focus-visible behavior'
+      'keyboard input inside the rail must restore its visible focus outline'
+    );
+    vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
+    vm.handleRailFocusIn({ target: allItem });
+    assert.strictEqual(
+      root.getAttribute('data-rail-focus-origin'),
+      null,
+      'keyboard focus entering another rail item must restore its outline'
     );
     assert.ok(
-      source.includes("&[data-rail-pointer-focus='true']:focus-visible"),
-      'only pointer-origin focus may suppress the local outline'
+      source.includes(
+        ".program-rail[data-rail-focus-origin='pointer'] .rail-item:focus-visible"
+      ),
+      'only a rail-level pointer origin may suppress the local outline'
     );
     assert.ok(
       source.includes('&:focus-visible'),

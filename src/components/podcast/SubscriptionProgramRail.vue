@@ -26,6 +26,8 @@
         @keydown.home.prevent="focusRailEdge(false)"
         @keydown.end.prevent="focusRailEdge(true)"
         @keydown.capture="handleRailKeyboardInput"
+        @focusin="handleRailFocusIn"
+        @focusout="handleRailFocusOut"
         @wheel="handleRailWheel"
         @pointerdown="interruptRailMotion"
         @scroll.passive="onScroll"
@@ -39,7 +41,6 @@
           aria-label="全部节目"
           role="option"
           @pointerdown="prepareRailItemFocus"
-          @blur="clearRailItemPointerFocus"
           @click="select('', $event)"
         >
           <span class="rail-all-icon"><svg-icon icon-class="list" /></span>
@@ -58,7 +59,6 @@
           role="option"
           @pointerenter="beginHaloHover(podcast, $event.currentTarget)"
           @pointerleave="endHaloHover(podcast, $event.currentTarget)"
-          @blur="clearRailItemPointerFocus"
           @pointerdown="prepareRailItemFocus"
           @click="select(podcast.id, $event)"
         >
@@ -234,24 +234,29 @@ export default {
     },
     markPointerFocus(target) {
       if (!target) return;
-      if (this._pointerFocusTarget && this._pointerFocusTarget !== target) {
-        this.clearPointerFocus();
-      }
-      if (target.setAttribute) {
-        target.setAttribute('data-rail-pointer-focus', 'true');
+      const root = this.$refs.root;
+      if (root && root.setAttribute) {
+        root.setAttribute('data-rail-focus-origin', 'pointer');
       }
       this._pointerFocusTarget = target;
     },
-    clearPointerFocus(target) {
-      const current = this._pointerFocusTarget;
-      if (!current || (target && current !== target)) return;
-      if (current.removeAttribute) {
-        current.removeAttribute('data-rail-pointer-focus');
+    clearPointerFocus() {
+      const root = this.$refs.root;
+      if (root && root.removeAttribute) {
+        root.removeAttribute('data-rail-focus-origin');
       }
       this._pointerFocusTarget = null;
     },
-    clearRailItemPointerFocus(event) {
-      this.clearPointerFocus(event && event.currentTarget);
+    handleRailFocusIn(event) {
+      const target = event && event.target;
+      if (target !== this._pointerFocusTarget) this.clearPointerFocus();
+    },
+    handleRailFocusOut(event) {
+      const viewport = this.$refs.viewport;
+      const nextTarget = event && event.relatedTarget;
+      if (!viewport || !nextTarget || !viewport.contains(nextTarget)) {
+        this.clearPointerFocus();
+      }
     },
     focusRailItem(target, { source = 'keyboard' } = {}) {
       if (!target || typeof target.focus !== 'function') return;
@@ -892,10 +897,10 @@ export default {
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;
   }
+}
 
-  &[data-rail-pointer-focus='true']:focus-visible {
-    outline: none;
-  }
+.program-rail[data-rail-focus-origin='pointer'] .rail-item:focus-visible {
+  outline: none;
 }
 
 .rail-cover,
