@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-$script:DevLauncherVersion = '1.0.3'
+$script:DevLauncherVersion = '1.0.4'
 $script:DevProfile = 'dev'
 $script:DevPorts = @(20201, 10755, 27233)
 $script:DevUserData = 'D:\MyYesPlayerMusic\PodPlayerData\PodPlayerDev'
@@ -370,7 +370,9 @@ function Stop-DevProfileProcesses {
 
   foreach ($root in @($roots)) {
     if (Get-Process -Id $root -ErrorAction SilentlyContinue) {
-      & taskkill.exe /F /T /PID $root 2>$null | Out-Null
+      # A previous /T can already have ended a child root. The port-release
+      # gate below remains authoritative, so this expected race is non-fatal.
+      & taskkill.exe /F /T /PID $root *> $null
     }
   }
 

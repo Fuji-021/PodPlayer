@@ -66,7 +66,7 @@ try {
   $launcherStartedAt = $launcherProcess.StartTime.ToUniversalTime().ToString('o')
 
   if (-not (Wait-DevPortsReady -TimeoutSeconds 90)) {
-    & taskkill.exe /F /T /PID $launcherProcess.Id 2>$null | Out-Null
+    & taskkill.exe /F /T /PID $launcherProcess.Id *> $null
     Write-LauncherFailure 'Dev ports did not become ready within 90 seconds. The new Dev process was stopped.'
   }
 
