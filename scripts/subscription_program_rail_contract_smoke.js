@@ -41,6 +41,13 @@ function createRafClock() {
       next[1](timestamp);
       return true;
     },
+    flushId(id, timestamp) {
+      const callback = callbacks.get(id);
+      if (!callback) return false;
+      callbacks.delete(id);
+      callback(timestamp);
+      return true;
+    },
     get size() {
       return callbacks.size;
     },
@@ -422,8 +429,32 @@ async function main() {
     vm.handleRailFocusOut({ relatedTarget: null });
     assert.strictEqual(
       root.getAttribute('data-rail-focus-origin'),
+      'pointer',
+      'a transient null relatedTarget must not clear pointer origin before focus settles'
+    );
+    const returnFocusFrame = vm._pointerFocusClearRaf;
+    assert.ok(returnFocusFrame, 'transient focusout must schedule a settle frame');
+    global.document.activeElement = cItem;
+    assert.ok(
+      raf.flushId(returnFocusFrame, 16),
+      'pointer focus settle frame should run'
+    );
+    assert.strictEqual(
+      root.getAttribute('data-rail-focus-origin'),
+      'pointer',
+      'focus returning to the rail in the same frame must keep the pointer origin'
+    );
+    global.document.activeElement = {};
+    vm.handleRailFocusOut({ relatedTarget: null });
+    const outsideFocusFrame = vm._pointerFocusClearRaf;
+    assert.ok(
+      raf.flushId(outsideFocusFrame, 32),
+      'outside focus settle frame should run'
+    );
+    assert.strictEqual(
+      root.getAttribute('data-rail-focus-origin'),
       null,
-      'leaving the rail must clear the pointer focus origin'
+      'leaving the rail after focus settles must clear the pointer focus origin'
     );
     vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
     vm.handleRailFocusIn({ target: cItem });
