@@ -37,7 +37,8 @@
           :tabindex="!selectedPodcastId ? 0 : -1"
           aria-label="全部节目"
           role="option"
-          @click="select('')"
+          @pointerdown="prepareRailItemFocus"
+          @click="select('', $event)"
         >
           <span class="rail-all-icon"><svg-icon icon-class="list" /></span>
         </button>
@@ -57,7 +58,8 @@
           @pointerleave="clearPreviewHalo(podcast)"
           @focus="previewHalo(podcast)"
           @blur="clearPreviewHalo(podcast)"
-          @click="select(podcast.id)"
+          @pointerdown="prepareRailItemFocus"
+          @click="select(podcast.id, $event)"
         >
           <span class="rail-cover">
             <span class="rail-cover-halo" :style="haloStyle(podcast)"></span>
@@ -129,8 +131,27 @@ export default {
       this.$nextTick(() => this.updateMetrics(true));
     },
     selectedPodcastId(value) {
+      const requestToken = this._selectionRequestToken || 0;
       this.$nextTick(() => {
-        if (value) this.ensureSelectedVisible(value);
+        if (
+          this._destroyed ||
+          requestToken !== (this._selectionRequestToken || 0)
+        ) {
+          return;
+        }
+        const pendingSelection = this._pendingUserSelection;
+        const selectionAlreadyPositioned =
+          pendingSelection &&
+          pendingSelection.token === requestToken &&
+          pendingSelection.id === value;
+        if (selectionAlreadyPositioned) {
+          this._pendingUserSelection = null;
+        } else {
+          if (pendingSelection && pendingSelection.token === requestToken) {
+            this._pendingUserSelection = null;
+          }
+          if (value) this.ensureSelectedVisible(value);
+        }
         const podcast = this.podcasts.find(item => item.id === value);
         if (podcast) this.warmHalo(podcast);
       });
@@ -176,32 +197,52 @@ export default {
       this._railGoal = null;
       this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
+      this._expectedProgrammaticScroll = null;
       this.previewPodcastId = '';
       this.stopAnimation();
       this.finishDrag();
-      if (this._scrollRaf) cancelAnimationFrame(this._scrollRaf);
-      this._scrollRaf = null;
-      if (this._scrollStopTimer) clearTimeout(this._scrollStopTimer);
-      this._scrollStopTimer = null;
+      this.cancelNativeRailFrame();
+      this.finishNativeRailMotion();
       if (this._resizeObserver) this._resizeObserver.disconnect();
       this._resizeObserver = null;
       this.setMotionClass('is-moving', false);
       this.setMotionClass('is-dragging', false);
     },
-    select(podcastId) {
+    select(podcastId, event) {
+      this.focusRailItem(event && event.currentTarget);
       if (podcastId === this.selectedPodcastId) {
         if (podcastId) this.ensureSelectedVisible(podcastId);
         return;
       }
+      const token = (this._selectionRequestToken || 0) + 1;
+      this._selectionRequestToken = token;
+      this._pendingUserSelection = podcastId ? { id: podcastId, token } : null;
+      if (podcastId) this.ensureSelectedVisible(podcastId);
       this.$emit('select', podcastId);
+    },
+    prepareRailItemFocus(event) {
+      this.focusRailItem(event && event.currentTarget);
+    },
+    focusRailItem(target) {
+      if (!target || typeof target.focus !== 'function') return;
+      try {
+        target.focus({ preventScroll: true });
+      } catch (error) {
+        target.focus();
+      }
     },
     measure() {
       const viewport = this.$refs.viewport;
       if (!viewport) return getRailMetrics();
+      const scrollLeft = viewport.scrollLeft;
+      const clientWidth = viewport.clientWidth;
+      const scrollWidth = viewport.scrollWidth;
+      this._railViewportWidth = clientWidth;
+      this._railScrollWidth = scrollWidth;
       return getRailMetrics({
-        scrollLeft: viewport.scrollLeft,
-        clientWidth: viewport.clientWidth,
-        scrollWidth: viewport.scrollWidth,
+        scrollLeft,
+        clientWidth,
+        scrollWidth,
       });
     },
     setMotionClass(name, active) {
@@ -223,7 +264,7 @@ export default {
     syncThumb(metrics, scrollLeft = metrics.scrollLeft) {
       const thumb = this.$refs.thumb;
       if (!thumb) return;
-      const geometry = this._thumbGeometry || this.getThumbGeometry(metrics);
+      const geometry = this._thumbGeometry || { width: 0, travel: 0 };
       if (!geometry.width) {
         thumb.style.width = '0px';
         thumb.style.transform = 'translate3d(0, 0, 0)';
@@ -237,16 +278,19 @@ export default {
     updateMetrics() {
       if (!this._railActive || this._destroyed) return;
       const metrics = this.measure();
-      this.applyMetrics(metrics, { measureThumb: true });
+      this.applyMeasuredMetrics(metrics);
     },
-    applyMetrics(metrics, { measureThumb = false } = {}) {
+    applyMeasuredMetrics(metrics) {
       if (!metrics) return;
       this._metrics = metrics;
-      if (measureThumb || !this._thumbGeometry) {
-        this._thumbGeometry = this.getThumbGeometry(metrics);
-      }
+      this._railPosition = metrics.scrollLeft;
+      this._thumbGeometry = this.getThumbGeometry(metrics);
       this.syncThumb(metrics);
       this.syncRailState(metrics);
+    },
+    captureRailLayout() {
+      this.updateMetrics();
+      return this._metrics;
     },
     syncRailState(metrics) {
       if (
@@ -261,46 +305,101 @@ export default {
         };
       }
     },
-    onScroll() {
-      if (!this._railActive) return;
-      this.setMotionClass('is-moving', true);
-      if (this._controllerOwnsScroll) {
-        this.scheduleMotionStop();
-        return;
-      }
-      if (!this._scrollRaf) {
-        this._scrollRaf = requestAnimationFrame(() => {
-          this._scrollRaf = null;
-          this.updateMetrics();
-        });
-      }
-      this.scheduleMotionStop();
-    },
-    scheduleMotionStop() {
-      if (this._scrollStopTimer) clearTimeout(this._scrollStopTimer);
-      this._scrollStopTimer = setTimeout(() => {
-        this.setMotionClass('is-moving', false);
-      }, 120);
-    },
-    writeRailPosition(scrollLeft) {
+    // Layout is refreshed at input and resize boundaries; frames consume only
+    // this controller position so the viewport and thumb cannot drift apart.
+    commitRailFrame(scrollLeft, { write = true } = {}) {
       const viewport = this.$refs.viewport;
       if (!viewport || !this._metrics) return;
       const metrics = getRailPositionMetrics(this._metrics, scrollLeft);
       this._metrics = metrics;
+      this._railPosition = metrics.scrollLeft;
       if (
+        write &&
         Math.abs(viewport.scrollLeft - metrics.scrollLeft) >= RAIL_EDGE_EPSILON
       ) {
+        this._expectedProgrammaticScroll = metrics.scrollLeft;
         viewport.scrollLeft = metrics.scrollLeft;
       }
       this.syncThumb(metrics, metrics.scrollLeft);
       this.syncRailState(metrics);
     },
+    onScroll() {
+      if (!this._railActive) return;
+      const viewport = this.$refs.viewport;
+      if (!viewport) return;
+      const actualPosition = viewport.scrollLeft;
+      if (this._controllerOwnsScroll) return;
+      if (
+        Number.isFinite(this._expectedProgrammaticScroll) &&
+        Math.abs(actualPosition - this._expectedProgrammaticScroll) <
+          RAIL_EDGE_EPSILON
+      ) {
+        this._expectedProgrammaticScroll = null;
+        return;
+      }
+      this._expectedProgrammaticScroll = null;
+      if (!this._metrics) {
+        this.captureRailLayout();
+      }
+      this.beginNativeRailMotion();
+      this.queueNativeRailPosition(actualPosition, { write: false });
+    },
+    beginNativeRailMotion() {
+      this._nativeInputActive = true;
+      this.setMotionClass('is-moving', true);
+      this.clearNativeMotionStop();
+    },
+    clearNativeMotionStop() {
+      if (this._nativeScrollStopTimer) {
+        clearTimeout(this._nativeScrollStopTimer);
+      }
+      this._nativeScrollStopTimer = null;
+    },
+    scheduleNativeMotionStop() {
+      this.clearNativeMotionStop();
+      this._nativeScrollStopTimer = setTimeout(() => {
+        this.finishNativeRailMotion();
+      }, 120);
+    },
+    finishNativeRailMotion() {
+      this.clearNativeMotionStop();
+      this._nativeInputActive = false;
+      if (!this._controllerOwnsScroll && !this._isRailDragging) {
+        this.setMotionClass('is-moving', false);
+      }
+    },
+    queueNativeRailPosition(position, { write = false } = {}) {
+      this._pendingNativeRailPosition = position;
+      this._pendingNativeRailWrite = !!write;
+      if (!this._nativeScrollRaf) {
+        this._nativeScrollRaf = requestAnimationFrame(() => {
+          this._nativeScrollRaf = null;
+          if (!this._railActive || this._destroyed) return;
+          const nextPosition = this._pendingNativeRailPosition;
+          const shouldWrite = this._pendingNativeRailWrite;
+          this._pendingNativeRailPosition = null;
+          this._pendingNativeRailWrite = false;
+          if (!Number.isFinite(nextPosition)) return;
+          this.commitRailFrame(nextPosition, { write: shouldWrite });
+        });
+      }
+      this.scheduleNativeMotionStop();
+    },
+    cancelNativeRailFrame() {
+      if (this._nativeScrollRaf) cancelAnimationFrame(this._nativeScrollRaf);
+      this._nativeScrollRaf = null;
+      this._pendingNativeRailPosition = null;
+      this._pendingNativeRailWrite = false;
+    },
     interruptRailMotion() {
+      if (this._drag) this.finishDrag();
       this._railGoal = null;
       this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
+      this._expectedProgrammaticScroll = null;
       this.stopAnimation();
-      this.setMotionClass('is-moving', false);
+      this.cancelNativeRailFrame();
+      this.finishNativeRailMotion();
     },
     handleRailWheel(event) {
       const viewport = this.$refs.viewport;
@@ -308,31 +407,40 @@ export default {
       const horizontal = Math.abs(event.deltaX) > 0.5 ? event.deltaX : 0;
       const shiftWheel = event.shiftKey ? event.deltaY : 0;
       const delta = horizontal || shiftWheel;
-      const metrics = this.measure();
-      this.applyMetrics(metrics, { measureThumb: true });
+      if (!delta) return;
+      const metrics =
+        this._nativeInputActive && this._metrics
+          ? this._metrics
+          : this.captureRailLayout();
       if (!delta || !metrics.canScroll) return;
+      const currentPosition = Number.isFinite(this._pendingNativeRailPosition)
+        ? this._pendingNativeRailPosition
+        : this._railPosition;
       const next = Math.max(
         0,
-        Math.min(metrics.maxScroll, viewport.scrollLeft + delta)
+        Math.min(metrics.maxScroll, currentPosition + delta)
       );
-      if (next === viewport.scrollLeft) return;
+      if (next === currentPosition) return;
       event.preventDefault();
       this.interruptRailMotion();
-      this.writeRailPosition(next);
+      this.beginNativeRailMotion();
+      this.queueNativeRailPosition(next, { write: true });
     },
     scrollRail(direction) {
       const viewport = this.$refs.viewport;
       if (!viewport) return;
-      const metrics = this.measure();
-      this.applyMetrics(metrics, { measureThumb: true });
+      const metrics =
+        this._controllerOwnsScroll && this._metrics
+          ? this._metrics
+          : this.captureRailLayout();
       if (!metrics.canScroll) return;
       const normalizedDirection = direction < 0 ? -1 : 1;
       const goal = getRailArrowGoal({
-        scrollLeft: metrics.scrollLeft,
+        scrollLeft: this._railPosition,
         goal: this._railGoal,
         goalDirection: this._railGoalDirection,
-        clientWidth: viewport.clientWidth,
-        scrollWidth: viewport.scrollWidth,
+        clientWidth: this._railViewportWidth,
+        scrollWidth: this._railScrollWidth,
         direction: normalizedDirection,
       });
       this.retargetRailMotion(goal, { direction: normalizedDirection });
@@ -348,22 +456,24 @@ export default {
       this._railGoal = null;
       this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
-      this.updateMetrics();
       this.setMotionClass('is-moving', false);
     },
     retargetRailMotion(goal, { direction = null } = {}) {
       const viewport = this.$refs.viewport;
       if (!viewport || !this._metrics) return;
+      if (this._drag) this.finishDrag();
       const decision = getRailMotionDecision({
-        scrollLeft: viewport.scrollLeft,
+        scrollLeft: this._railPosition,
         goal,
         maxScroll: this._metrics.maxScroll,
         reducedMotion: this.prefersReducedMotion(),
       });
+      this.cancelNativeRailFrame();
+      this.finishNativeRailMotion();
       this._railGoalDirection = direction;
       if (decision.immediate) {
         this.stopAnimation();
-        this.writeRailPosition(decision.target);
+        this.commitRailFrame(decision.target);
         this.finishRailMotion();
         return;
       }
@@ -390,14 +500,13 @@ export default {
           : 16;
         this._lastAnimationAt = now;
         const next = getRailMotionStep({
-          scrollLeft: viewport.scrollLeft,
+          scrollLeft: this._railPosition,
           goal: this._railGoal,
           maxScroll: this._metrics ? this._metrics.maxScroll : 0,
           deltaMs,
         });
-        this.writeRailPosition(next);
+        this.commitRailFrame(next);
         if (next === this._railGoal) {
-          this.writeRailPosition(this._railGoal);
           this._animationRaf = null;
           this.finishRailMotion();
           return;
@@ -416,26 +525,33 @@ export default {
       const items = this.$refs.items || [];
       const item = items.find(node => node.dataset.podcastId === podcastId);
       if (!viewport || !item) return;
-      const metrics = this.measure();
-      this.applyMetrics(metrics, { measureThumb: true });
+      const metrics = this.captureRailLayout();
       const allItem = this.$el.querySelector('.rail-all');
       const railItems = [allItem, ...items].filter(Boolean);
       const index = railItems.indexOf(item);
       const previous = railItems[index - 1];
       const next = railItems[index + 1];
+      const viewportRect = viewport.getBoundingClientRect();
+      const itemRect = item.getBoundingClientRect();
+      const itemLeft = itemRect.left - viewportRect.left + metrics.scrollLeft;
       let gap = 0;
       if (previous) {
-        gap = item.offsetLeft - (previous.offsetLeft + previous.offsetWidth);
+        const previousRect = previous.getBoundingClientRect();
+        const previousLeft =
+          previousRect.left - viewportRect.left + metrics.scrollLeft;
+        gap = itemLeft - (previousLeft + previous.offsetWidth);
       } else if (next) {
-        gap = next.offsetLeft - (item.offsetLeft + item.offsetWidth);
+        const nextRect = next.getBoundingClientRect();
+        const nextLeft = nextRect.left - viewportRect.left + metrics.scrollLeft;
+        gap = nextLeft - (itemLeft + item.offsetWidth);
       }
       const goal = getRailSelectionContextTarget({
         scrollLeft: metrics.scrollLeft,
-        clientWidth: viewport.clientWidth,
-        scrollWidth: viewport.scrollWidth,
-        itemLeft: item.offsetLeft,
+        clientWidth: this._railViewportWidth,
+        scrollWidth: this._railScrollWidth,
+        itemLeft,
         itemWidth: item.offsetWidth,
-        gap,
+        gap: Math.max(0, gap),
         hasPrev: index > 0,
         hasNext: index >= 0 && index < railItems.length - 1,
       });
@@ -446,7 +562,7 @@ export default {
       const target = last
         ? items[items.length - 1]
         : this.$el.querySelector('.rail-all');
-      if (target && typeof target.focus === 'function') target.focus();
+      this.focusRailItem(target);
     },
     moveRailFocus(direction) {
       const all = this.$el.querySelector('.rail-all');
@@ -460,7 +576,7 @@ export default {
         Math.min(items.length - 1, base + (direction < 0 ? -1 : 1))
       );
       const target = items[nextIndex];
-      if (target && typeof target.focus === 'function') target.focus();
+      this.focusRailItem(target);
     },
     startDrag(event) {
       const viewport = this.$refs.viewport;
@@ -476,7 +592,7 @@ export default {
       ) {
         return;
       }
-      this.applyMetrics(metrics, { measureThumb: true });
+      this.applyMeasuredMetrics(metrics);
       this.interruptRailMotion();
       this._controllerOwnsScroll = true;
       this.setMotionClass('is-dragging', true);
@@ -513,7 +629,7 @@ export default {
         this._dragRaf = null;
         const viewport = this.$refs.viewport;
         if (!viewport || !this._drag) return;
-        this.writeRailPosition(this._drag.nextScrollLeft);
+        this.commitRailFrame(this._drag.nextScrollLeft);
       });
     },
     finishDrag(event) {
