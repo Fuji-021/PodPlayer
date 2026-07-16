@@ -234,13 +234,21 @@ export default {
     },
     markPointerFocus(target) {
       if (!target) return;
+      this.cancelPointerFocusClear();
       const root = this.$refs.root;
       if (root && root.setAttribute) {
         root.setAttribute('data-rail-focus-origin', 'pointer');
       }
       this._pointerFocusTarget = target;
     },
+    cancelPointerFocusClear() {
+      if (this._pointerFocusClearRaf) {
+        cancelAnimationFrame(this._pointerFocusClearRaf);
+        this._pointerFocusClearRaf = null;
+      }
+    },
     clearPointerFocus() {
+      this.cancelPointerFocusClear();
       const root = this.$refs.root;
       if (root && root.removeAttribute) {
         root.removeAttribute('data-rail-focus-origin');
@@ -249,13 +257,33 @@ export default {
     },
     handleRailFocusIn(event) {
       const target = event && event.target;
-      if (target !== this._pointerFocusTarget) this.clearPointerFocus();
+      if (target === this._pointerFocusTarget) {
+        this.cancelPointerFocusClear();
+        return;
+      }
+      this.clearPointerFocus();
+    },
+    schedulePointerFocusClear() {
+      this.cancelPointerFocusClear();
+      if (typeof requestAnimationFrame !== 'function') {
+        this.clearPointerFocus();
+        return;
+      }
+      this._pointerFocusClearRaf = requestAnimationFrame(() => {
+        this._pointerFocusClearRaf = null;
+        const viewport = this.$refs.viewport;
+        const activeElement =
+          typeof document !== 'undefined' ? document.activeElement : null;
+        if (!viewport || !activeElement || !viewport.contains(activeElement)) {
+          this.clearPointerFocus();
+        }
+      });
     },
     handleRailFocusOut(event) {
       const viewport = this.$refs.viewport;
       const nextTarget = event && event.relatedTarget;
       if (!viewport || !nextTarget || !viewport.contains(nextTarget)) {
-        this.clearPointerFocus();
+        this.schedulePointerFocusClear();
       }
     },
     focusRailItem(target, { source = 'keyboard' } = {}) {
