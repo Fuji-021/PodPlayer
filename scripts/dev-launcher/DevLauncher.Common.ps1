@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-$script:DevLauncherVersion = '1.0.0'
+$script:DevLauncherVersion = '1.0.1'
 $script:DevProfile = 'dev'
 $script:DevPorts = @(20201, 10755, 27233)
 $script:DevUserData = 'D:\MyYesPlayerMusic\PodPlayerData\PodPlayerDev'
@@ -313,7 +313,13 @@ function Get-DevPortOwners {
 function Get-DevProcessTree {
   param([Parameter(Mandatory = $true)][int]$RootPid)
 
-  $allProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  try {
+    $allProcesses = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+  } catch {
+    # WMI metadata is audit-only. A denied query must not make a running Dev
+    # process lose its receipt or mask the verified source identity.
+    return @($RootPid)
+  }
   $result = New-Object System.Collections.Generic.List[int]
   $pending = New-Object System.Collections.Generic.Queue[int]
   $pending.Enqueue($RootPid)
@@ -400,14 +406,29 @@ function Wait-DevPortsReady {
 function Get-ProcessAudit {
   param([Parameter(Mandatory = $true)][int[]]$Pids)
 
-  $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
-  return @($all | Where-Object { $Pids -contains [int]$_.ProcessId } | ForEach-Object {
-    [pscustomobject]@{
-      pid = [int]$_.ProcessId
-      parentPid = [int]$_.ParentProcessId
-      name = $_.Name
-      executablePath = $_.ExecutablePath
-      commandLine = $_.CommandLine
-    }
-  })
+  try {
+    $all = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    return @($all | Where-Object { $Pids -contains [int]$_.ProcessId } | ForEach-Object {
+      [pscustomobject]@{
+        pid = [int]$_.ProcessId
+        parentPid = [int]$_.ParentProcessId
+        name = $_.Name
+        executablePath = $_.ExecutablePath
+        commandLine = $_.CommandLine
+      }
+    })
+  } catch {
+    return @($Pids | ForEach-Object {
+      $process = Get-Process -Id $_ -ErrorAction SilentlyContinue
+      if ($process) {
+        [pscustomobject]@{
+          pid = [int]$process.Id
+          parentPid = $null
+          name = $process.ProcessName
+          executablePath = $null
+          commandLine = $null
+        }
+      }
+    } | Where-Object { $_ })
+  }
 }

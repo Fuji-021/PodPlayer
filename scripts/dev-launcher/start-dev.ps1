@@ -62,16 +62,25 @@ try {
   $escapedSource = $source.sourceRoot.Replace('"', '""')
   $command = "title $title & echo SOURCE ROOT: $escapedSource & echo BRANCH: $($source.actualBranch) & echo HEAD: $($source.actualHead) & echo PROFILE: dev & call yarn.cmd --cwd `"$escapedSource`" electron:serve"
   $launcherProcess = Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/c', $command) -WorkingDirectory $source.sourceRoot -PassThru
+  $launcherStartedAt = $launcherProcess.StartTime.ToUniversalTime().ToString('o')
 
   if (-not (Wait-DevPortsReady -TimeoutSeconds 90)) {
     & taskkill.exe /F /T /PID $launcherProcess.Id 2>$null | Out-Null
     Write-LauncherFailure 'Dev ports did not become ready within 90 seconds. The new Dev process was stopped.'
   }
 
-  $treePids = Get-DevProcessTree -RootPid $launcherProcess.Id
   $portOwners = Get-DevPortOwners
+  $liveLauncher = Get-Process -Id $launcherProcess.Id -ErrorAction SilentlyContinue
+  $relevantProcess = $liveLauncher
+  if ($null -eq $relevantProcess) {
+    $relevantProcess = $portOwners | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+  }
+  if ($null -eq $relevantProcess) {
+    Write-LauncherFailure 'Dev ports are listening but no owning process can be audited for the runtime receipt.'
+  }
+  $relevantStartedAt = $relevantProcess.StartTime.ToUniversalTime().ToString('o')
+  $treePids = Get-DevProcessTree -RootPid $relevantProcess.Id
   $audit = Get-ProcessAudit -Pids ($treePids + $portOwners | Sort-Object -Unique)
-  $launcherStartedAt = (Get-Process -Id $launcherProcess.Id -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
   $electronProcess = $audit | Where-Object { $_.name -ieq 'electron.exe' } | Select-Object -First 1
   $webpackProcess = $audit | Where-Object { $_.commandLine -match 'vue-cli-service|webpack' } | Select-Object -First 1
 
@@ -87,8 +96,10 @@ try {
     launcherVersion = $script:DevLauncherVersion
     launcherSourceHash = $launcher.launcherSourceHash
     launcherRoot = $launcher.root
-    relevantPid = $launcherProcess.Id
-    relevantProcessStartedAt = $launcherStartedAt
+    relevantPid = $relevantProcess.Id
+    relevantProcessStartedAt = $relevantStartedAt
+    launchWrapperPid = $launcherProcess.Id
+    launchWrapperStartedAt = $launcherStartedAt
     launchToken = $launchToken
     dependencyMode = $dependency.mode
     dependencyTarget = $dependency.target
