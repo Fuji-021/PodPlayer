@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-$script:DevLauncherVersion = '1.0.2'
+$script:DevLauncherVersion = '1.0.3'
 $script:DevProfile = 'dev'
 $script:DevPorts = @(20201, 10755, 27233)
 $script:DevUserData = 'D:\MyYesPlayerMusic\PodPlayerData\PodPlayerDev'
@@ -324,10 +324,10 @@ function Get-DevProcessTree {
   $pending = New-Object System.Collections.Generic.Queue[int]
   $pending.Enqueue($RootPid)
   while ($pending.Count -gt 0) {
-    $pid = $pending.Dequeue()
-    if ($result.Contains($pid)) { continue }
-    $result.Add($pid)
-    foreach ($child in $allProcesses | Where-Object { [int]$_.ParentProcessId -eq $pid }) {
+    $currentPid = $pending.Dequeue()
+    if ($result.Contains($currentPid)) { continue }
+    $result.Add($currentPid)
+    foreach ($child in $allProcesses | Where-Object { [int]$_.ParentProcessId -eq $currentPid }) {
       $pending.Enqueue([int]$child.ProcessId)
     }
   }
