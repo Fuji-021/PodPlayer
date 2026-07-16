@@ -124,26 +124,47 @@ function buildRailHarness(
     },
   };
   const thumb = { offsetWidth: 64, style: {} };
-  const makeItem = (id, contentLeft) => ({
-    dataset: { podcastId: id },
-    offsetParent: { id: 'page-positioned-parent' },
-    // Deliberately page-relative: this is the real regression shape.
-    offsetLeft: pageLeft + contentLeft,
-    offsetWidth: itemWidth,
-    focusOptions: null,
-    focus(options) {
-      this.focusOptions = options || null;
-      global.document.activeElement = this;
-    },
-    getBoundingClientRect() {
-      layoutReads.item += 1;
-      return {
-        left: pageLeft + contentLeft - viewport.scrollLeft,
-        right: pageLeft + contentLeft - viewport.scrollLeft + itemWidth,
-        width: itemWidth,
-      };
-    },
-  });
+  const makeItem = (id, contentLeft) => {
+    const attributes = {};
+    const halo = { style: {} };
+    return {
+      dataset: { podcastId: id },
+      offsetParent: { id: 'page-positioned-parent' },
+      // Deliberately page-relative: this is the real regression shape.
+      offsetLeft: pageLeft + contentLeft,
+      offsetWidth: itemWidth,
+      focusOptions: null,
+      focusCalls: 0,
+      halo,
+      focus(options) {
+        this.focusCalls += 1;
+        this.focusOptions = options || null;
+        global.document.activeElement = this;
+      },
+      setAttribute(name, value) {
+        attributes[name] = String(value);
+      },
+      getAttribute(name) {
+        return Object.prototype.hasOwnProperty.call(attributes, name)
+          ? attributes[name]
+          : null;
+      },
+      removeAttribute(name) {
+        delete attributes[name];
+      },
+      querySelector(selector) {
+        return selector === '.rail-cover-halo' ? halo : null;
+      },
+      getBoundingClientRect() {
+        layoutReads.item += 1;
+        return {
+          left: pageLeft + contentLeft - viewport.scrollLeft,
+          right: pageLeft + contentLeft - viewport.scrollLeft + itemWidth,
+          width: itemWidth,
+        };
+      },
+    };
+  };
   const allItem = makeItem('all', positions.all);
   const items = Object.keys(positions)
     .filter(id => id !== 'all')
@@ -153,7 +174,10 @@ function buildRailHarness(
 
   vm = {
     ...data,
-    podcasts: items.map(item => ({ id: item.dataset.podcastId, coverUrl: '' })),
+    podcasts: items.map(item => ({
+      id: item.dataset.podcastId,
+      coverUrl: 'https://covers.test/' + item.dataset.podcastId + '.jpg',
+    })),
     selectedPodcastId: '',
     $refs: { root, viewport, track, thumb, items },
     $el: {
@@ -223,7 +247,7 @@ async function buildComponent() {
   fs.writeFileSync(svgIcon, 'export default {};\n');
   fs.writeFileSync(
     coverHalo,
-    'export function ensureTinyCover() { return Promise.resolve(\'\'); }\nexport function peekTinyCover() { return ""; }\n'
+    'export function ensureTinyCover() { return Promise.resolve("tiny-cover"); }\nexport function peekTinyCover() { return "tiny-cover"; }\n'
   );
   await esbuild.build({
     entryPoints: [entry],
@@ -258,7 +282,7 @@ async function buildComponent() {
       },
     ],
   });
-  return require(output).default;
+  return { component: require(output).default, source };
 }
 
 async function main() {
@@ -299,7 +323,9 @@ async function main() {
   global.clearTimeout = () => {};
 
   try {
-    const component = await buildComponent();
+    const built = await buildComponent();
+    const component = built.component;
+    const source = built.source;
     activeHarness = buildRailHarness(component);
     const { vm, viewport, track, thumb, raf, timerCalls, emitted } =
       activeHarness;
@@ -341,11 +367,53 @@ async function main() {
     const cItem = activeHarness.items.find(
       item => item.dataset.podcastId === 'C'
     );
-    vm.prepareRailItemFocus({ currentTarget: cItem });
+    vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
     assert.deepStrictEqual(
       cItem.focusOptions,
       { preventScroll: true },
       'rail item focus must not compete with contextual rail scrolling'
+    );
+    assert.strictEqual(
+      cItem.focusCalls,
+      1,
+      'pointer preparation should focus a rail item exactly once'
+    );
+    assert.strictEqual(
+      cItem.getAttribute('data-rail-pointer-focus'),
+      'true',
+      'pointer focus should be marked locally so it cannot show a keyboard outline'
+    );
+    vm.select('C', { currentTarget: cItem });
+    assert.strictEqual(
+      cItem.focusCalls,
+      1,
+      'click selection must not repeat pointer focus'
+    );
+    vm.handleRailKeyboardInput();
+    assert.strictEqual(
+      cItem.getAttribute('data-rail-pointer-focus'),
+      null,
+      'keyboard input must restore normal focus-visible behavior'
+    );
+    assert.ok(
+      source.includes("&[data-rail-pointer-focus='true']:focus-visible"),
+      'only pointer-origin focus may suppress the local outline'
+    );
+    assert.ok(
+      source.includes('&:focus-visible'),
+      'keyboard focus-visible outline must remain in the component'
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(vm, 'previewPodcastId') &&
+        !Object.prototype.hasOwnProperty.call(vm, 'haloMap') &&
+        !source.includes('@pointerenter="previewHalo'),
+      'hover must not write a reactive full-rail preview state'
+    );
+    assert.ok(
+      source.includes('--rail-cover-lift: -6px;') &&
+        source.includes('--rail-cover-scale: 1.055;') &&
+        source.includes('.rail-item:active,'),
+      'hover and pointer-active cover feedback must use the documented compositor values'
     );
 
     // A controller frame owns both native position and thumb transform. The
@@ -528,6 +596,24 @@ async function main() {
     activeHarness.vm.retargetRailMotion(320);
     assert.strictEqual(activeHarness.viewport.scrollLeft, 320);
     assert.strictEqual(activeHarness.raf.size, 0);
+
+    const hoverVm = activeHarness.vm;
+    const hoverItem = activeHarness.items.find(
+      item => item.dataset.podcastId === 'C'
+    );
+    const hoverPodcast = hoverVm.podcasts.find(item => item.id === 'C');
+    hoverVm.beginHaloHover(hoverPodcast, hoverItem);
+    assert.strictEqual(
+      hoverItem.halo.style.backgroundImage,
+      'url("tiny-cover")',
+      'hover halo should update only the hovered DOM item without a Vue preview state'
+    );
+    hoverVm.endHaloHover(hoverPodcast, hoverItem);
+    assert.strictEqual(
+      hoverItem.halo.style.backgroundImage,
+      '',
+      'unselected hover must release its halo image after pointer leave'
+    );
 
     console.log('subscription program rail component contract smoke passed');
   } finally {

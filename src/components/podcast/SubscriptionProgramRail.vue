@@ -25,6 +25,7 @@
         @keydown.right.prevent="moveRailFocus(1)"
         @keydown.home.prevent="focusRailEdge(false)"
         @keydown.end.prevent="focusRailEdge(true)"
+        @keydown.capture="handleRailKeyboardInput"
         @wheel="handleRailWheel"
         @pointerdown="interruptRailMotion"
         @scroll.passive="onScroll"
@@ -38,6 +39,7 @@
           aria-label="全部节目"
           role="option"
           @pointerdown="prepareRailItemFocus"
+          @blur="clearRailItemPointerFocus"
           @click="select('', $event)"
         >
           <span class="rail-all-icon"><svg-icon icon-class="list" /></span>
@@ -54,15 +56,14 @@
           :aria-label="podcast.title || '未命名节目'"
           :data-podcast-id="podcast.id"
           role="option"
-          @pointerenter="previewHalo(podcast)"
-          @pointerleave="clearPreviewHalo(podcast)"
-          @focus="previewHalo(podcast)"
-          @blur="clearPreviewHalo(podcast)"
+          @pointerenter="beginHaloHover(podcast, $event.currentTarget)"
+          @pointerleave="endHaloHover(podcast, $event.currentTarget)"
+          @blur="clearRailItemPointerFocus"
           @pointerdown="prepareRailItemFocus"
           @click="select(podcast.id, $event)"
         >
           <span class="rail-cover">
-            <span class="rail-cover-halo" :style="haloStyle(podcast)"></span>
+            <span class="rail-cover-halo"></span>
             <PodImage class="rail-cover-image" :src="podcast.coverUrl" />
           </span>
         </button>
@@ -122,8 +123,6 @@ export default {
         canPrev: false,
         canNext: false,
       },
-      haloMap: {},
-      previewPodcastId: '',
     };
   },
   watch: {
@@ -153,7 +152,7 @@ export default {
           if (value) this.ensureSelectedVisible(value);
         }
         const podcast = this.podcasts.find(item => item.id === value);
-        if (podcast) this.warmHalo(podcast);
+        this.syncSelectedHalo(podcast);
       });
     },
   },
@@ -188,17 +187,25 @@ export default {
         const selected = this.podcasts.find(
           item => item.id === this.selectedPodcastId
         );
-        if (selected) this.warmHalo(selected);
+        this.syncSelectedHalo(selected);
       });
     },
     deactivateRail() {
       this._railActive = false;
-      this._haloToken = (this._haloToken || 0) + 1;
+      if (
+        this._hoverHaloTarget &&
+        this._hoverHaloTarget !== this._selectedHaloTarget
+      ) {
+        this.clearHalo(this._hoverHaloTarget);
+      }
       this._railGoal = null;
       this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
       this._expectedProgrammaticScroll = null;
-      this.previewPodcastId = '';
+      this._hoverHaloTarget = null;
+      this._hoverHaloPodcast = null;
+      this._selectedHaloTarget = null;
+      this.clearPointerFocus();
       this.stopAnimation();
       this.finishDrag();
       this.cancelNativeRailFrame();
@@ -208,8 +215,7 @@ export default {
       this.setMotionClass('is-moving', false);
       this.setMotionClass('is-dragging', false);
     },
-    select(podcastId, event) {
-      this.focusRailItem(event && event.currentTarget);
+    select(podcastId) {
       if (podcastId === this.selectedPodcastId) {
         if (podcastId) this.ensureSelectedVisible(podcastId);
         return;
@@ -221,10 +227,42 @@ export default {
       this.$emit('select', podcastId);
     },
     prepareRailItemFocus(event) {
-      this.focusRailItem(event && event.currentTarget);
+      this.focusRailItem(event && event.currentTarget, { source: 'pointer' });
     },
-    focusRailItem(target) {
+    handleRailKeyboardInput() {
+      this.clearPointerFocus();
+    },
+    markPointerFocus(target) {
+      if (!target) return;
+      if (this._pointerFocusTarget && this._pointerFocusTarget !== target) {
+        this.clearPointerFocus();
+      }
+      if (target.setAttribute) {
+        target.setAttribute('data-rail-pointer-focus', 'true');
+      }
+      this._pointerFocusTarget = target;
+    },
+    clearPointerFocus(target) {
+      const current = this._pointerFocusTarget;
+      if (!current || (target && current !== target)) return;
+      if (current.removeAttribute) {
+        current.removeAttribute('data-rail-pointer-focus');
+      }
+      this._pointerFocusTarget = null;
+    },
+    clearRailItemPointerFocus(event) {
+      this.clearPointerFocus(event && event.currentTarget);
+    },
+    focusRailItem(target, { source = 'keyboard' } = {}) {
       if (!target || typeof target.focus !== 'function') return;
+      if (source === 'pointer') this.markPointerFocus(target);
+      else this.clearPointerFocus();
+      if (
+        typeof document !== 'undefined' &&
+        document.activeElement === target
+      ) {
+        return;
+      }
       try {
         target.focus({ preventScroll: true });
       } catch (error) {
@@ -366,6 +404,7 @@ export default {
       this._nativeInputActive = false;
       if (!this._controllerOwnsScroll && !this._isRailDragging) {
         this.setMotionClass('is-moving', false);
+        this.refreshRetainedHalos();
       }
     },
     queueNativeRailPosition(position, { write = false } = {}) {
@@ -457,6 +496,7 @@ export default {
       this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
       this.setMotionClass('is-moving', false);
+      this.refreshRetainedHalos();
     },
     retargetRailMotion(goal, { direction = null } = {}) {
       const viewport = this.$refs.viewport;
@@ -654,52 +694,101 @@ export default {
       this.setMotionClass('is-dragging', false);
       this.setMotionClass('is-moving', false);
       this.updateMetrics();
+      this.refreshRetainedHalos();
       document.removeEventListener('pointermove', this.onDragMove);
       document.removeEventListener('pointerup', this.finishDrag);
       document.removeEventListener('pointercancel', this.finishDrag);
     },
-    previewHalo(podcast) {
-      if (!podcast || !podcast.id) return;
-      this.previewPodcastId = podcast.id;
-      this.warmHalo(podcast);
+    getRailItem(podcastId) {
+      if (!podcastId) return null;
+      return (this.$refs.items || []).find(
+        node => node.dataset.podcastId === podcastId
+      );
     },
-    clearPreviewHalo(podcast) {
-      if (podcast && this.previewPodcastId === podcast.id) {
-        this.previewPodcastId = '';
+    getRailHalo(target) {
+      if (!target || !target.querySelector) return null;
+      return target.querySelector('.rail-cover-halo');
+    },
+    clearHalo(target) {
+      const halo = this.getRailHalo(target);
+      if (!halo || !halo.style) return;
+      halo.style.backgroundImage = '';
+      halo._railHaloToken = (halo._railHaloToken || 0) + 1;
+    },
+    beginHaloHover(podcast, target) {
+      if (!podcast || !podcast.id || !target) return;
+      this._hoverHaloPodcast = podcast;
+      this._hoverHaloTarget = target;
+      this.warmHalo(podcast, target);
+    },
+    endHaloHover(podcast, target) {
+      if (target && this._hoverHaloTarget === target) {
+        this._hoverHaloTarget = null;
+        this._hoverHaloPodcast = null;
+      }
+      if (podcast && podcast.id === this.selectedPodcastId) return;
+      this.clearHalo(target);
+    },
+    syncSelectedHalo(podcast) {
+      const nextTarget = podcast ? this.getRailItem(podcast.id) : null;
+      const previousTarget = this._selectedHaloTarget;
+      this._selectedHaloTarget = nextTarget || null;
+      if (previousTarget && previousTarget !== nextTarget) {
+        const keepForHover = previousTarget === this._hoverHaloTarget;
+        if (!keepForHover) this.clearHalo(previousTarget);
+      }
+      if (podcast && nextTarget) this.warmHalo(podcast, nextTarget);
+    },
+    refreshRetainedHalos() {
+      const selected = this.podcasts.find(
+        item => item.id === this.selectedPodcastId
+      );
+      if (selected && this._selectedHaloTarget) {
+        this.warmHalo(selected, this._selectedHaloTarget);
+      }
+      if (this._hoverHaloPodcast && this._hoverHaloTarget) {
+        this.warmHalo(this._hoverHaloPodcast, this._hoverHaloTarget);
       }
     },
-    warmHalo(podcast) {
+    shouldKeepHalo(podcast, target) {
+      return !!(
+        podcast &&
+        target &&
+        (podcast.id === this.selectedPodcastId ||
+          target === this._hoverHaloTarget)
+      );
+    },
+    warmHalo(podcast, target) {
       if (
         !podcast ||
         !podcast.id ||
         !podcast.coverUrl ||
-        this.haloMap[podcast.id] ||
         !this._railActive ||
         this._isRailMoving ||
-        this._isRailDragging
+        this._isRailDragging ||
+        !target
       ) {
         return;
       }
+      const halo = this.getRailHalo(target);
+      if (!halo || !halo.style) return;
       const cached = peekTinyCover(podcast.coverUrl);
       if (cached) {
-        this.$set(this.haloMap, podcast.id, cached);
+        halo.style.backgroundImage = 'url("' + cached + '")';
         return;
       }
-      const token = (this._haloToken || 0) + 1;
-      this._haloToken = token;
+      const token = (halo._railHaloToken || 0) + 1;
+      halo._railHaloToken = token;
       ensureTinyCover(podcast.coverUrl).then(url => {
-        if (!this._destroyed && token === this._haloToken && url) {
-          this.$set(this.haloMap, podcast.id, url);
+        if (
+          !this._destroyed &&
+          halo._railHaloToken === token &&
+          url &&
+          this.shouldKeepHalo(podcast, target)
+        ) {
+          halo.style.backgroundImage = 'url("' + url + '")';
         }
       });
-    },
-    haloStyle(podcast) {
-      if (!podcast || !podcast.id) return {};
-      const isVisible =
-        this.previewPodcastId === podcast.id ||
-        this.selectedPodcastId === podcast.id;
-      const url = isVisible ? this.haloMap[podcast.id] || podcast.coverUrl : '';
-      return url ? { backgroundImage: 'url("' + url + '")' } : {};
     },
   },
 };
@@ -774,11 +863,12 @@ export default {
 .rail-item {
   --rail-cover-lift: 0px;
   --rail-cover-scale: 1;
-  --rail-cover-transition: 90ms;
+  --rail-cover-transition: 120ms;
+  --rail-cover-easing: cubic-bezier(0.2, 0.8, 0.2, 1);
   --rail-halo-opacity: 0;
   --rail-halo-scale-x: 0.82;
   --rail-halo-scale-y: 0.5;
-  --rail-halo-transition: 80ms;
+  --rail-halo-transition: 120ms;
   position: relative;
   display: inline-flex;
   flex: 0 0 96px;
@@ -793,6 +883,7 @@ export default {
   background: transparent;
 
   &:hover,
+  &:active,
   &.active {
     z-index: 1;
   }
@@ -800,6 +891,10 @@ export default {
   &:focus-visible {
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;
+  }
+
+  &[data-rail-pointer-focus='true']:focus-visible {
+    outline: none;
   }
 }
 
@@ -813,7 +908,7 @@ export default {
   justify-content: center;
   border-radius: var(--radius-cover);
   transform: translateY(var(--rail-cover-lift)) scale(var(--rail-cover-scale));
-  transition: transform var(--rail-cover-transition) ease-out;
+  transition: transform var(--rail-cover-transition) var(--rail-cover-easing);
 }
 
 .rail-all-icon {
@@ -827,21 +922,25 @@ export default {
 }
 
 .rail-item:hover,
+.rail-item:active,
 .rail-item.active {
-  --rail-cover-lift: -3px;
+  --rail-cover-lift: -6px;
   --rail-halo-opacity: 1;
 }
 
+.rail-item:active,
 .rail-item.active {
-  // The selected state keeps the hover lift, then adds its small scale.
-  --rail-cover-scale: 1.045;
-  --rail-cover-transition: 160ms;
+  // Pointer active bridges the click until selectedPodcastId returns from parent.
+  --rail-cover-scale: 1.055;
+  --rail-cover-transition: 140ms;
   --rail-halo-scale-x: 0.9;
   --rail-halo-scale-y: 0.62;
-  --rail-halo-transition: 160ms;
+  --rail-halo-transition: 140ms;
 }
 
 .rail-item:hover:not(.active) {
+  --rail-cover-transition: 110ms;
+  --rail-halo-transition: 110ms;
   --rail-halo-scale-x: 0.86;
   --rail-halo-scale-y: 0.56;
 }
@@ -875,8 +974,8 @@ export default {
   pointer-events: none;
   transform: scaleX(var(--rail-halo-scale-x)) scaleY(var(--rail-halo-scale-y));
   transform-origin: center;
-  transition: opacity var(--rail-halo-transition) ease-out,
-    transform var(--rail-halo-transition) ease-out;
+  transition: opacity var(--rail-halo-transition) var(--rail-cover-easing),
+    transform var(--rail-halo-transition) var(--rail-cover-easing);
 }
 
 .program-rail.is-moving .rail-cover-halo,
@@ -961,6 +1060,7 @@ export default {
 @media (prefers-reduced-motion: reduce) {
   .rail-item,
   .rail-item:hover,
+  .rail-item:active,
   .rail-item.active {
     --rail-cover-lift: 0px;
     --rail-cover-scale: 1;
