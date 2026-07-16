@@ -49,20 +49,20 @@
       <div class="updates-tools">
         <div class="updates-segmented" role="tablist" aria-label="更新筛选">
           <button
-            :class="{ active: !unfinishedOnly }"
-            :aria-selected="!unfinishedOnly"
+            :class="{ active: listenFilter === 'all' }"
+            :aria-selected="listenFilter === 'all'"
             role="tab"
-            @click="setUnfinishedOnly(false)"
+            @click="setListenFilter('all')"
           >
             全部
           </button>
           <button
-            :class="{ active: unfinishedOnly }"
-            :aria-selected="unfinishedOnly"
+            :class="{ active: listenFilter === 'completed' }"
+            :aria-selected="listenFilter === 'completed'"
             role="tab"
-            @click="setUnfinishedOnly(true)"
+            @click="setListenFilter('completed')"
           >
-            未听完
+            已听完
           </button>
         </div>
         <span v-if="currentView.episodes.length" class="updates-count">
@@ -239,7 +239,7 @@ export default {
       pendingNewCount: 0,
       refreshFailures: [],
       selectedPodcastId: '',
-      unfinishedOnly: false,
+      listenFilter: 'all',
       loaded: false,
       loadingError: '',
       listNow: Date.now(),
@@ -263,7 +263,7 @@ export default {
       return (
         getSubscriptionUpdateView(this.snapshot, {
           podcastId: this.selectedPodcastId,
-          unfinishedOnly: this.unfinishedOnly,
+          listenFilter: this.listenFilter,
           now: this.listNow,
         }) || EMPTY_VIEW
       );
@@ -305,12 +305,12 @@ export default {
     },
     emptyFilterTitle() {
       if (this.selectedPodcastId) {
-        return this.unfinishedOnly
-          ? '这个节目暂时没有未听完的单集'
+        return this.listenFilter === 'completed'
+          ? '这个节目还没有已听完的单集'
           : '这个节目暂时没有单集';
       }
-      return this.unfinishedOnly
-        ? '已听完当前订阅中的所有单集'
+      return this.listenFilter === 'completed'
+        ? '当前订阅中还没有已听完的单集'
         : '当前筛选没有单集';
     },
   },
@@ -474,9 +474,10 @@ export default {
       this.selectedPodcastId = podcastId;
       this.$nextTick(() => this.$refs.episodeFeed?.resetToTop());
     },
-    setUnfinishedOnly(value) {
-      if (this.unfinishedOnly === value) return;
-      this.unfinishedOnly = value;
+    setListenFilter(value) {
+      const nextFilter = value === 'completed' ? 'completed' : 'all';
+      if (this.listenFilter === nextFilter) return;
+      this.listenFilter = nextFilter;
       this.$nextTick(() => this.$refs.episodeFeed?.resetToTop());
     },
     goAllSubscriptions(action) {

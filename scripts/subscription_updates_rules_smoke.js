@@ -183,23 +183,52 @@ export const db = {
       ['new', 'same-a', 'same-b', 'invalid-a', 'invalid-b']
     );
 
-    const filtered = rules.filterSubscriptionUpdates(
-      [
-        { id: 'sub-unplayed', podcastId: 'a', completed: false },
-        { id: 'sub-playing', podcastId: 'a', completed: false },
-        { id: 'sub-done', podcastId: 'a', completed: true },
-        {
-          id: 'unsubscribed',
-          podcastId: 'b',
-          completed: false,
-          podcastSubscribed: false,
-        },
-      ],
-      { podcastId: 'a', unfinishedOnly: true }
-    );
+    const filterCandidates = [
+      { id: 'sub-unplayed', podcastId: 'a', completed: false },
+      { id: 'sub-playing', podcastId: 'a', completed: false },
+      { id: 'sub-done', podcastId: 'a', completed: true },
+      { id: 'sub-missing', podcastId: 'a' },
+      { id: 'sub-string', podcastId: 'a', completed: 'true' },
+      {
+        id: 'unsubscribed',
+        podcastId: 'b',
+        completed: true,
+        podcastSubscribed: false,
+      },
+    ];
+    const filtered = rules.filterSubscriptionUpdates(filterCandidates, {
+      podcastId: 'a',
+      listenFilter: 'completed',
+    });
     assert.deepStrictEqual(
       filtered.map(item => item.id),
-      ['sub-unplayed', 'sub-playing']
+      ['sub-done']
+    );
+    assert.deepStrictEqual(
+      rules
+        .filterSubscriptionUpdates(filterCandidates, {
+          podcastId: 'a',
+          listenFilter: 'all',
+        })
+        .map(item => item.id),
+      ['sub-unplayed', 'sub-playing', 'sub-done', 'sub-missing', 'sub-string']
+    );
+    assert.deepStrictEqual(
+      rules
+        .filterSubscriptionUpdates(filterCandidates, {
+          podcastId: 'a',
+          listenFilter: 'unknown-filter',
+        })
+        .map(item => item.id),
+      ['sub-unplayed', 'sub-playing', 'sub-done', 'sub-missing', 'sub-string']
+    );
+    assert.strictEqual(
+      rules.normalizeSubscriptionListenFilter('completed'),
+      'completed'
+    );
+    assert.strictEqual(
+      rules.normalizeSubscriptionListenFilter('anything-else'),
+      'all'
     );
     assert.strictEqual(
       rules.resolveSubscriptionSelection([{ id: 'kept' }], 'removed'),
@@ -703,38 +732,78 @@ export const db = {
     const allView = snapshots.getSubscriptionUpdateView(snapshot, {
       now: crossYearNow,
     });
-    const unfinishedView = snapshots.getSubscriptionUpdateView(snapshot, {
-      unfinishedOnly: true,
+    const completedView = snapshots.getSubscriptionUpdateView(snapshot, {
+      listenFilter: 'completed',
       now: crossYearNow,
     });
-    const unaffectedPodcastView = snapshots.getSubscriptionUpdateView(
+    const unaffectedPodcastAllView = snapshots.getSubscriptionUpdateView(
       snapshot,
       {
         podcastId: 'pod-b',
         now: crossYearNow,
       }
     );
+    const unaffectedPodcastCompletedView = snapshots.getSubscriptionUpdateView(
+      snapshot,
+      {
+        podcastId: 'pod-b',
+        listenFilter: 'completed',
+        now: crossYearNow,
+      }
+    );
     assert.strictEqual(allView.episodes.length, 3);
-    assert.strictEqual(unfinishedView.episodes.length, 2);
+    assert.deepStrictEqual(
+      completedView.episodes.map(item => item.id),
+      ['a-done']
+    );
+    assert.strictEqual(unaffectedPodcastCompletedView.episodes.length, 0);
     const completedSnapshot = snapshots.applySubscriptionUpdateCompletion(
       snapshot,
       'a-new',
       true,
       crossYearNow
     );
-    assert.strictEqual(
-      snapshots.getSubscriptionUpdateView(completedSnapshot, {
-        unfinishedOnly: true,
+    const completedAfterTransition = snapshots.getSubscriptionUpdateView(
+      completedSnapshot,
+      {
+        listenFilter: 'completed',
         now: crossYearNow,
-      }).episodes.length,
-      1
+      }
+    );
+    assert.deepStrictEqual(
+      completedAfterTransition.episodes.map(item => item.id),
+      ['a-new', 'a-done']
+    );
+    assert.notStrictEqual(completedAfterTransition, completedView);
+    assert.strictEqual(
+      snapshots
+        .getSubscriptionUpdateView(completedSnapshot, { now: crossYearNow })
+        .episodes.find(item => item.id === 'a-new').completed,
+      true
     );
     assert.strictEqual(
       snapshots.getSubscriptionUpdateView(completedSnapshot, {
         podcastId: 'pod-b',
         now: crossYearNow,
       }),
-      unaffectedPodcastView
+      unaffectedPodcastAllView
+    );
+    assert.strictEqual(
+      snapshots.getSubscriptionUpdateView(completedSnapshot, {
+        podcastId: 'pod-b',
+        listenFilter: 'completed',
+        now: crossYearNow,
+      }),
+      unaffectedPodcastCompletedView
+    );
+    assert.strictEqual(
+      snapshots.applySubscriptionUpdateCompletion(
+        completedSnapshot,
+        'a-new',
+        true,
+        crossYearNow
+      ),
+      completedSnapshot
     );
     const restoredSnapshot = snapshots.applySubscriptionUpdateCompletion(
       completedSnapshot,
@@ -745,11 +814,20 @@ export const db = {
     assert.deepStrictEqual(
       snapshots
         .getSubscriptionUpdateView(restoredSnapshot, {
-          unfinishedOnly: true,
+          listenFilter: 'completed',
           now: crossYearNow,
         })
         .episodes.map(item => item.id),
-      ['a-new', 'b-mid']
+      ['a-done']
+    );
+    assert.strictEqual(
+      snapshots.applySubscriptionUpdateCompletion(
+        restoredSnapshot,
+        'a-new',
+        'true',
+        crossYearNow
+      ),
+      restoredSnapshot
     );
 
     assert.strictEqual(shouldYieldMainScrollKey({ tagName: 'INPUT' }), true);
@@ -802,6 +880,48 @@ export const db = {
       force: true,
     });
     assert.strictEqual(tailRange.end, syntheticView.metrics.length);
+
+    const snapshotPerfStartedAt = process.hrtime.bigint();
+    const indexedSyntheticSnapshot = snapshots.createSubscriptionUpdateSnapshot(
+      {
+        podcasts: Array.from({ length: 32 }, (_, index) => ({
+          id: 'pod-' + index,
+          title: 'Podcast ' + index,
+        })),
+        episodes: synthetic,
+        now: crossYearNow,
+        version: 2,
+      }
+    );
+    const indexedCompletedView = snapshots.getSubscriptionUpdateView(
+      indexedSyntheticSnapshot,
+      {
+        listenFilter: 'completed',
+        now: crossYearNow,
+      }
+    );
+    assert.strictEqual(indexedCompletedView.episodes.length, 3334);
+    const indexedTransition = snapshots.applySubscriptionUpdateCompletion(
+      indexedSyntheticSnapshot,
+      'synthetic-1',
+      true,
+      crossYearNow
+    );
+    assert.strictEqual(
+      snapshots.getSubscriptionUpdateView(indexedTransition, {
+        listenFilter: 'completed',
+        now: crossYearNow,
+      }).episodes.length,
+      3335
+    );
+    const snapshotElapsedMs =
+      Number(process.hrtime.bigint() - snapshotPerfStartedAt) / 1e6;
+    assert.ok(
+      snapshotElapsedMs < 2000,
+      '10k completed index update took too long: ' +
+        snapshotElapsedMs.toFixed(1) +
+        'ms'
+    );
 
     const firstBuild = deferred();
     const secondBuild = deferred();
@@ -867,7 +987,9 @@ export const db = {
     process.stdout.write(
       'subscription updates rules smoke: PASS (' +
         elapsedMs.toFixed(1) +
-        'ms / 10k)\n'
+        'ms view, ' +
+        snapshotElapsedMs.toFixed(1) +
+        'ms index / 10k)\n'
     );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

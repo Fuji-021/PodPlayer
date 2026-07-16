@@ -99,14 +99,29 @@ export function sortSubscriptionUpdates(items) {
     .map(entry => entry.item);
 }
 
+export const SUBSCRIPTION_LISTEN_FILTERS = Object.freeze({
+  ALL: 'all',
+  COMPLETED: 'completed',
+});
+
+export function normalizeSubscriptionListenFilter(value) {
+  return value === SUBSCRIPTION_LISTEN_FILTERS.COMPLETED
+    ? SUBSCRIPTION_LISTEN_FILTERS.COMPLETED
+    : SUBSCRIPTION_LISTEN_FILTERS.ALL;
+}
+
 export function filterSubscriptionUpdates(
   items,
-  { podcastId = '', unfinishedOnly = false } = {}
+  { podcastId = '', listenFilter = SUBSCRIPTION_LISTEN_FILTERS.ALL } = {}
 ) {
+  const normalizedFilter = normalizeSubscriptionListenFilter(listenFilter);
   return (items || []).filter(item => {
     if (!item || item.podcastSubscribed === false) return false;
     if (podcastId && item.podcastId !== podcastId) return false;
-    return !unfinishedOnly || item.completed !== true;
+    return (
+      normalizedFilter !== SUBSCRIPTION_LISTEN_FILTERS.COMPLETED ||
+      item.completed === true
+    );
   });
 }
 

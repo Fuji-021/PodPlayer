@@ -3,6 +3,7 @@ import { getSubscribedPodcasts } from './db';
 import {
   createSubscriptionUpdateView,
   getLocalDayKey,
+  normalizeSubscriptionListenFilter,
   rankSubscriptionRail,
   sortSubscriptionUpdates,
 } from './subscriptionUpdatesRules';
@@ -44,39 +45,40 @@ function subscriptionOrder(podcasts) {
     }, new Map());
 }
 
-function viewKey(podcastId, unfinishedOnly) {
-  return (podcastId || 'all') + ':' + (unfinishedOnly ? 'unfinished' : 'all');
+function viewKey(podcastId, listenFilter) {
+  const filter = normalizeSubscriptionListenFilter(listenFilter);
+  return (podcastId || 'all') + ':' + filter;
 }
 
 function createViewIndex(episodes, podcastIds) {
   const allByPodcast = new Map();
-  const unfinishedByPodcast = new Map();
+  const completedByPodcast = new Map();
   podcastIds.forEach(id => {
     allByPodcast.set(id, []);
-    unfinishedByPodcast.set(id, []);
+    completedByPodcast.set(id, []);
   });
 
   const all = [];
-  const unfinished = [];
+  const completed = [];
   episodes.forEach(episode => {
     all.push(episode);
     if (allByPodcast.has(episode.podcastId)) {
       allByPodcast.get(episode.podcastId).push(episode);
     }
-    if (!episode.completed) {
-      unfinished.push(episode);
-      if (unfinishedByPodcast.has(episode.podcastId)) {
-        unfinishedByPodcast.get(episode.podcastId).push(episode);
+    if (episode.completed === true) {
+      completed.push(episode);
+      if (completedByPodcast.has(episode.podcastId)) {
+        completedByPodcast.get(episode.podcastId).push(episode);
       }
     }
   });
 
   const index = new Map();
-  index.set(viewKey('', false), freezeList(all));
-  index.set(viewKey('', true), freezeList(unfinished));
+  index.set(viewKey('', 'all'), freezeList(all));
+  index.set(viewKey('', 'completed'), freezeList(completed));
   podcastIds.forEach(id => {
-    index.set(viewKey(id, false), freezeList(allByPodcast.get(id)));
-    index.set(viewKey(id, true), freezeList(unfinishedByPodcast.get(id)));
+    index.set(viewKey(id, 'all'), freezeList(allByPodcast.get(id)));
+    index.set(viewKey(id, 'completed'), freezeList(completedByPodcast.get(id)));
   });
   return index;
 }
@@ -309,13 +311,14 @@ async function buildLatestSnapshot(now) {
 
 export function getSubscriptionUpdateView(
   snapshot,
-  { podcastId = '', unfinishedOnly = false, now = Date.now() } = {}
+  { podcastId = '', listenFilter = 'all', now = Date.now() } = {}
 ) {
   if (!snapshot || !snapshot._viewCache) return null;
-  const requestedKey = viewKey(podcastId, unfinishedOnly);
+  const normalizedFilter = normalizeSubscriptionListenFilter(listenFilter);
+  const requestedKey = viewKey(podcastId, normalizedFilter);
   const key = snapshot._viewIndex.has(requestedKey)
     ? requestedKey
-    : viewKey('', unfinishedOnly);
+    : viewKey('', normalizedFilter);
   const cached = snapshot._viewCache.get(key);
   if (cached) return cached;
   const items = snapshot._viewIndex.get(key);
@@ -352,18 +355,19 @@ export function applySubscriptionUpdateCompletion(
   now = Date.now()
 ) {
   if (!snapshot || !episodeId) return snapshot;
+  const nextCompleted = completed === true;
   const index = snapshot.episodes.findIndex(
     episode => episode.id === episodeId
   );
-  if (index < 0 || snapshot.episodes[index].completed === !!completed) {
+  if (index < 0 || snapshot.episodes[index].completed === nextCompleted) {
     return snapshot;
   }
   const oldEpisode = snapshot.episodes[index];
   const nextEpisode = Object.freeze({
     ...oldEpisode,
-    completed: !!completed,
+    completed: nextCompleted,
     listenStats: oldEpisode.listenStats
-      ? { ...oldEpisode.listenStats, completed: !!completed }
+      ? { ...oldEpisode.listenStats, completed: nextCompleted }
       : null,
   });
   const replaceEpisode = items => {
@@ -402,40 +406,40 @@ export function applySubscriptionUpdateCompletion(
     ]);
   };
   const nextIndex = new Map(snapshot._viewIndex);
-  const allKey = viewKey('', false);
-  const podcastAllKey = viewKey(oldEpisode.podcastId, false);
-  const unfinishedKey = viewKey('', true);
-  const podcastUnfinishedKey = viewKey(oldEpisode.podcastId, true);
+  const allKey = viewKey('', 'all');
+  const podcastAllKey = viewKey(oldEpisode.podcastId, 'all');
+  const completedKey = viewKey('', 'completed');
+  const podcastCompletedKey = viewKey(oldEpisode.podcastId, 'completed');
   nextIndex.set(allKey, replaceEpisode(nextIndex.get(allKey) || EMPTY_LIST));
   nextIndex.set(
     podcastAllKey,
     replaceEpisode(nextIndex.get(podcastAllKey) || EMPTY_LIST)
   );
-  const addBackToUnfinished = oldEpisode.completed && !completed;
-  const removeFromUnfinished = !oldEpisode.completed && completed;
-  if (addBackToUnfinished) {
+  const addToCompleted = oldEpisode.completed !== true && nextCompleted;
+  const removeFromCompleted = oldEpisode.completed === true && !nextCompleted;
+  if (addToCompleted) {
     nextIndex.set(
-      unfinishedKey,
-      insertEpisodeByOrder(nextIndex.get(unfinishedKey) || EMPTY_LIST)
+      completedKey,
+      insertEpisodeByOrder(nextIndex.get(completedKey) || EMPTY_LIST)
     );
     nextIndex.set(
-      podcastUnfinishedKey,
-      insertEpisodeByOrder(nextIndex.get(podcastUnfinishedKey) || EMPTY_LIST)
+      podcastCompletedKey,
+      insertEpisodeByOrder(nextIndex.get(podcastCompletedKey) || EMPTY_LIST)
     );
-  } else if (removeFromUnfinished) {
+  } else if (removeFromCompleted) {
     nextIndex.set(
-      unfinishedKey,
-      removeEpisode(nextIndex.get(unfinishedKey) || EMPTY_LIST)
+      completedKey,
+      removeEpisode(nextIndex.get(completedKey) || EMPTY_LIST)
     );
     nextIndex.set(
-      podcastUnfinishedKey,
-      removeEpisode(nextIndex.get(podcastUnfinishedKey) || EMPTY_LIST)
+      podcastCompletedKey,
+      removeEpisode(nextIndex.get(podcastCompletedKey) || EMPTY_LIST)
     );
   }
   const nextDayKey = getLocalDayKey(now);
   const nextCache =
     snapshot.dayKey === nextDayKey ? new Map(snapshot._viewCache) : new Map();
-  [allKey, podcastAllKey, unfinishedKey, podcastUnfinishedKey].forEach(key =>
+  [allKey, podcastAllKey, completedKey, podcastCompletedKey].forEach(key =>
     nextCache.delete(key)
   );
   const next = Object.freeze({
