@@ -1,5 +1,5 @@
 <template>
-  <div class="imm-transcript">
+  <div class="imm-transcript" data-selection="ui">
     <!-- 载入中 / 空：极简文字，不做框(背景式) -->
     <div v-if="loading" class="immt-state">载入文字稿…</div>
     <div v-else-if="!lines.length" class="immt-state">（本集暂无文字稿）</div>
@@ -8,6 +8,7 @@
       v-else
       ref="list"
       class="immt-list"
+      data-selection="content"
       @scroll.passive="onScroll"
       @wheel.passive="onUserInputScroll"
       @pointerdown.passive="onUserInputScroll"
@@ -23,7 +24,7 @@
           active: w.i === curIdx,
           past: w.i < curIdx,
         }"
-        @click="onLineClick(w)"
+        @click="onLineClick(w, $event)"
         ><span class="immt-line-text">{{ w.text }}</span></div
       >
       <div class="immt-spacer" :style="{ height: botPad + 'px' }"></div>
@@ -51,6 +52,7 @@ import {
   buildReplacer,
   classifySegment,
 } from '@/utils/podcast/transcriptPostprocess';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 const BUF = 10; // 窗口上下缓冲行数(大一点 → 滚动时窗口少变、少重渲染)
 const PROCESS_CHUNK_SIZE = 80;
@@ -593,8 +595,9 @@ export default {
       this.winEnd = Math.min(this.lines.length, 40);
       if (this.active) this.$nextTick(() => this.recalcWindow());
     },
-    onLineClick(w) {
+    onLineClick(w, event) {
       if (!w) return;
+      if (shouldPreserveSelection(event, this.$refs.list)) return;
       this.scrollPauseUntil = 0; // 点句即恢复跟随
       this.curIdx = w.i;
       this._lastSec = w.start || 0;

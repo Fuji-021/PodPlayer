@@ -1,5 +1,5 @@
 <template>
-  <div class="linux-titlebar">
+  <div class="linux-titlebar" data-selection="ui">
     <div class="logo">
       <img src="img/logos/yesplaymusic-white24x24.png" />
     </div>

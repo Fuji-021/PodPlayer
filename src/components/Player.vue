@@ -2,7 +2,7 @@
   <!-- [沉浸式播放页 P0] display:contents 包一层：原 .player bar 的盒子/定位/层叠完全不变(零回归)，
        只是多出一个全屏 overlay 兄弟节点。沉浸页是「叠加皮肤」——复用本组件全部播放状态与方法
        (同一 howler 实例、同一份 Vuex)，严禁另起播放逻辑或复制状态。详见 docs/沉浸式播放页方案.md。 -->
-  <div class="player-root">
+  <div class="player-root" data-selection="ui">
     <!-- [睡眠到点关机] 可取消的关机倒计时浮层(全屏最高层)：到 0 才真请求关机，期间随时"取消关机"，绝不误关 -->
     <transition name="fade">
       <div v-if="shutdownCountdown > 0" class="shutdown-overlay">
@@ -113,7 +113,8 @@
                     marquee: nameOverflow,
                   },
                 ]"
-                @click.stop="onClickName"
+                data-selection="content"
+                @click.stop="onClickName($event)"
                 @mouseenter="checkNameOverflow"
               >
                 <span ref="nameText" class="name-text">{{
@@ -128,7 +129,8 @@
                   <span
                     v-for="(ar, index) in currentTrack.ar"
                     :key="ar.id"
-                    @click.stop="onClickArtist(ar)"
+                    data-selection="content"
+                    @click.stop="onClickArtist(ar, $event)"
                   >
                     <span :class="{ ar: ar.id || isPodcastTrack }">
                       {{ ar.name }} </span
@@ -297,24 +299,33 @@
                       :key="item.id"
                       class="qp-item"
                       :class="{ 'drag-over': dragOverIdx === idx }"
-                      draggable="true"
-                      @click="playFromQueue(item)"
-                      @dragstart="onQueueDragStart($event, idx)"
+                      data-selection="ui"
+                      @click="playFromQueue(item, $event)"
                       @dragover.prevent="onQueueDragOver(idx)"
                       @dragleave="onQueueDragLeave(idx)"
                       @drop="onQueueDrop(idx)"
                       @dragend="onQueueDragEnd"
                     >
                       <!-- [A-24 拖动] 左侧拖动点 -->
-                      <div class="qp-handle">⋮⋮</div>
+                      <div
+                        class="qp-handle"
+                        draggable="true"
+                        @dragstart.stop="onQueueDragStart($event, idx)"
+                      >
+                        ⋮⋮
+                      </div>
                       <PodImage
                         v-if="item.coverUrl"
                         class="qp-cover"
                         :src="item.coverUrl"
                       />
                       <div class="qp-meta">
-                        <div class="qp-title">{{ item.title }}</div>
-                        <div class="qp-sub">{{ item.podcastTitle }}</div>
+                        <div class="qp-title" data-selection="content">
+                          {{ item.title }}
+                        </div>
+                        <div class="qp-sub" data-selection="content">
+                          {{ item.podcastTitle }}
+                        </div>
                       </div>
                       <button
                         class="qp-del"
@@ -501,12 +512,13 @@
             </div>
 
             <!-- 节目名+单集名(整行可点击跳详情)；收藏已移到下方控制行右组 -->
-            <div class="imm-meta">
+            <div class="imm-meta" data-selection="ui">
               <div class="imm-text">
                 <div
                   v-tip="currentTrack.name"
                   class="imm-ep"
-                  @click="immClickTitle"
+                  data-selection="content"
+                  @click="immClickTitle($event)"
                 >
                   {{ currentTrack.name }}
                 </div>
@@ -514,7 +526,8 @@
                   v-if="podcastName"
                   v-tip="podcastName"
                   class="imm-pod"
-                  @click="immClickPodcast"
+                  data-selection="content"
+                  @click="immClickPodcast($event)"
                 >
                   {{ podcastName }}
                 </div>
@@ -680,23 +693,32 @@
                           :key="item.id"
                           class="qp-item"
                           :class="{ 'drag-over': dragOverIdx === idx }"
-                          draggable="true"
-                          @click="playFromQueue(item)"
-                          @dragstart="onQueueDragStart($event, idx)"
+                          data-selection="ui"
+                          @click="playFromQueue(item, $event)"
                           @dragover.prevent="onQueueDragOver(idx)"
                           @dragleave="onQueueDragLeave(idx)"
                           @drop="onQueueDrop(idx)"
                           @dragend="onQueueDragEnd"
                         >
-                          <div class="qp-handle">⋮⋮</div>
+                          <div
+                            class="qp-handle"
+                            draggable="true"
+                            @dragstart.stop="onQueueDragStart($event, idx)"
+                          >
+                            ⋮⋮
+                          </div>
                           <PodImage
                             v-if="item.coverUrl"
                             class="qp-cover"
                             :src="item.coverUrl"
                           />
                           <div class="qp-meta">
-                            <div class="qp-title">{{ item.title }}</div>
-                            <div class="qp-sub">{{ item.podcastTitle }}</div>
+                            <div class="qp-title" data-selection="content">
+                              {{ item.title }}
+                            </div>
+                            <div class="qp-sub" data-selection="content">
+                              {{ item.podcastTitle }}
+                            </div>
                           </div>
                           <button
                             class="qp-del"
@@ -905,6 +927,7 @@ import { getCoverColor } from '@/utils/podcast/coverColor';
 import { getCoverPalette } from '@/utils/podcast/coverPalette';
 // [沉浸页·文稿] 仅做轻量可用性检测(Dexie 索引)，决定文稿按钮/点封面是否能展开
 import { getTranscript } from '@/utils/podcast/transcripts';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 export default {
   name: 'Player',
@@ -1886,7 +1909,8 @@ export default {
         this.queueOutsideListener = null;
       }
     },
-    playFromQueue(item) {
+    playFromQueue(item, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       // 点击就立即播放该集；从队列里删它（避免重复）
       this.$store.commit('removeFromQueue', item.id);
       this.player.playPodcastEpisode(
@@ -1966,14 +1990,16 @@ export default {
       this.$router.push({ path: '/artist/' + id });
     },
     // [B-31] 点击播放栏：单集名 / 节目名 / 封面 — 播客优先
-    onClickName() {
+    onClickName(event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       if (this.isPodcastTrack) {
         this.goToEpisodeDetail();
         return;
       }
       if (this.hasList()) this.goToList();
     },
-    onClickArtist(ar) {
+    onClickArtist(ar, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       if (this.isPodcastTrack) {
         this.goToPodcastDetail();
         return;
@@ -2187,13 +2213,15 @@ export default {
       this.closeImmersive();
     },
     // 点单集名 → 单集详情(播客) / 列表(网易云)，并收起沉浸页(方案决策5)
-    immClickTitle() {
+    immClickTitle(event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       if (this.isPodcastTrack) this.goToEpisodeDetail();
       else if (this.hasList()) this.goToList();
       this.closeImmersive();
     },
     // 点节目名 → 节目详情，并收起沉浸页
-    immClickPodcast() {
+    immClickPodcast(event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       if (this.isPodcastTrack) this.goToPodcastDetail();
       this.closeImmersive();
     },
@@ -3132,6 +3160,10 @@ export default {
   ::v-deep .button-icon:hover {
     background: rgba(127, 127, 127, 0.16); // 中性 hover 底，深浅色都可见
   }
+}
+.immersive [data-selection='content'] {
+  -webkit-user-select: text;
+  user-select: text;
 }
 // [2026-06-16 用户拍板] 沉浸页**固定深色表现**：原 TODO3 的浅色覆盖(浅磨砂 --imm-frost rgba(236,238,243,.62)
 //   把背景洗发白 + 近黑字)被用户否(浅色模式背景"非常不满意");深色那套(深磨砂压暗 + 近白字)用户非常满意。

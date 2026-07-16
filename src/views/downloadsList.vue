@@ -1,5 +1,5 @@
 <template>
-  <div class="downloads-page">
+  <div class="downloads-page" data-selection="ui">
     <!-- [下载页改版] 表头：标题 + 批量管理（多选删除） -->
     <div class="head">
       <h1>
@@ -44,19 +44,21 @@
       :key="item.id"
       class="row"
       :class="{ selecting: selectMode, selected: isSelected(item) }"
-      @click="onRowClick(item)"
-      @dblclick="onRowDblClick(item)"
+      data-selection="ui"
+      @click="onRowClick(item, $event)"
+      @dblclick="onRowDblClick(item, $event)"
       @contextmenu.prevent="openMenu($event, item)"
     >
       <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
       <div class="meta">
         <!-- [下载页改版] 单击进单集详情、双击播放(整行)；节目名单击进节目详情、双击仍播放 -->
-        <div class="t">{{ item.title }}</div>
+        <div class="t" data-selection="content">{{ item.title }}</div>
         <div class="s">
           <span
             class="link"
-            @click.stop="onSubtitleClick(item)"
-            @dblclick.stop="onRowDblClick(item)"
+            data-selection="content"
+            @click.stop="onSubtitleClick(item, $event)"
+            @dblclick.stop="onRowDblClick(item, $event)"
             >{{ item.podcastTitle }}</span
           >
         </div>
@@ -91,8 +93,8 @@
         ></div>
         <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
         <div class="meta">
-          <div class="t">{{ item.title }}</div>
-          <div class="s"
+          <div class="t" data-selection="content">{{ item.title }}</div>
+          <div class="s" data-selection="content"
             >{{ item.podcastTitle }} · {{ dlPercentText(item) }}</div
           >
         </div>
@@ -174,6 +176,7 @@ import {
   removeDownload,
 } from '@/utils/podcast/downloads';
 import SvgIcon from '@/components/SvgIcon.vue';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 
 export default {
   name: 'DownloadsList',
@@ -283,7 +286,11 @@ export default {
     // [下载页改版] 行点击：选择模式=切换选中；否则单击延迟 250ms 进单集详情(留窗口给双击拦截)
     //   口径与 podcastDetail onRowClick 一致(单击进详情、双击播放)。250ms：150ms 太短，双击两下间隔稍大就
     //   会在第二下之前触发单击导航(变成"双击却进了详情")；250ms 才能稳定抓住双击=播放。
-    onRowClick(item) {
+    onRowClick(item, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) {
+        this._cancelPendingNav();
+        return;
+      }
       if (this.selectMode) {
         this.toggleSelect(item);
         return;
@@ -295,13 +302,21 @@ export default {
       }, 250);
     },
     // [下载页改版] 双击行 → 取消挂起的"进详情"，直接播放
-    onRowDblClick(item) {
+    onRowDblClick(item, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) {
+        this._cancelPendingNav();
+        return;
+      }
       if (this.selectMode) return;
       this._cancelPendingNav();
       this.play(item);
     },
     // [下载页改版] 节目名点击：选择模式=切换选中；否则延迟进节目详情(同样让位双击播放)
-    onSubtitleClick(item) {
+    onSubtitleClick(item, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) {
+        this._cancelPendingNav();
+        return;
+      }
       if (this.selectMode) {
         this.toggleSelect(item);
         return;

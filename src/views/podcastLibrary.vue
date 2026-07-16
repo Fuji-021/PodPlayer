@@ -1,9 +1,13 @@
 <template>
-  <div class="podcast-library">
+  <div class="podcast-library" data-selection="ui">
     <div class="header">
       <!-- [B-33] 标题 + 紧贴"阅"字的"更多"按钮 → 点击弹排序下拉（选项文字外显，自带方向） -->
       <div class="title-row">
-        <h1>我的订阅</h1>
+        <button v-tip="'返回更新'" class="return-updates" @click="goUpdates">
+          <svg-icon icon-class="arrow-left" />
+          <span>返回更新</span>
+        </button>
+        <h1>全部订阅</h1>
         <div ref="sortControl" class="sort-control">
           <button
             class="more-btn"
@@ -101,7 +105,10 @@
       class="podcast-grid"
       :class="{ resizing: isResizing, scrolling: isScrolling }"
     >
-      <div v-if="loaded && !sortedPodcasts.length" class="empty-tip">
+      <div v-if="!loaded" class="library-skeleton" aria-busy="true">
+        <div v-for="n in 12" :key="n" class="library-skeleton-card"></div>
+      </div>
+      <div v-else-if="!sortedPodcasts.length" class="empty-tip">
         还没有订阅。点击右上角 + 号添加 RSS 链接或导入文件。
       </div>
       <div
@@ -109,7 +116,8 @@
         :key="p.id"
         class="podcast-card"
         :class="{ 'unsub-mode': unsubModeId === p.id }"
-        @click="onCardClick(p)"
+        data-selection="ui"
+        @click="onCardClick(p, $event)"
         @mouseenter="onCardHover(p)"
         @mouseleave="onCardLeave"
         @contextmenu.prevent="onCardContextMenu($event, p)"
@@ -161,7 +169,7 @@
             <div v-if="p.newCount > 0" class="new-badge">有更新</div>
           </transition>
         </div>
-        <div class="title">
+        <div class="title" data-selection="content">
           {{ p.title || '(无标题)'
           }}<span
             v-if="p.source === 'discover'"
@@ -176,7 +184,7 @@
             ><svg-icon icon-class="wifi"
           /></span>
         </div>
-        <div class="author">{{ p.author || '' }}</div>
+        <div class="author" data-selection="content">{{ p.author || '' }}</div>
         <!-- [B-31] 按用户要求：累计听过时长不在卡片下显示，留待将来"统计"入口页 -->
       </div>
     </div>
@@ -267,7 +275,6 @@ import {
   getSubscribedPodcasts,
   deletePodcast,
   getEpisodesByPodcast,
-  refreshAllSubscriptions,
   exportSubscriptionsOpml,
 } from '@/utils/podcast/service';
 import { getPodcastListenSummary } from '@/utils/podcast/listening';
@@ -280,6 +287,12 @@ import {
 import { ensureTinyCover } from '@/utils/podcast/coverHalo';
 import { prefetchDetail } from '@/utils/podcast/detailPrefetch';
 import { showNotification } from '@/utils/podcast/notify';
+import { refreshSubscribedPodcasts } from '@/utils/podcast/subscriptionRefresh';
+import {
+  consumeAllSubscriptionsEntryFromUpdates,
+  onSubscriptionUpdatesChanged,
+} from '@/utils/podcast/subscriptionNavigation';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 // [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
@@ -298,21 +311,16 @@ async function getLatestEpisodeTime(podcast) {
   return t;
 }
 
+// The full enriched list is safe to reuse during one app session. Unlike the
+// old localStorage payload, it always contains every sort key before display.
+let sessionLibraryReadModel = null;
+
 export default {
   name: 'PodcastLibrary',
   components: { SvgIcon },
   data() {
     return {
-      // [B-51] 冷启动用 localStorage 缓存秒显，避免"第一次打开程序时订阅短暂全部消失"
-      podcasts: (() => {
-        try {
-          return JSON.parse(
-            localStorage.getItem('podcastLibrary.cache') || '[]'
-          );
-        } catch (e) {
-          return [];
-        }
-      })(),
+      podcasts: sessionLibraryReadModel ? sessionLibraryReadModel.items : [],
       showAddDialog: false,
       newFeedUrl: '',
       addError: '',
@@ -323,7 +331,7 @@ export default {
       // [NAS] "NAS 上有此节目"的归一化 feedUrl 集合（连上 NAS 才非空；空=不显示任何 wifi 标识）
       nasPodSet: new Set(),
       // [B-47 / 第3点] 是否已至少加载过一次（避免加载期间闪"还没有订阅"）
-      loaded: false,
+      loaded: !!sessionLibraryReadModel,
       // [播客改造 A-22] + 号弹窗开关
       plusMenuOpen: false,
       plusOutsideListener: null,
@@ -387,7 +395,9 @@ export default {
           if (la && lb) return lb - la;
           if (la && !lb) return -1;
           if (!la && lb) return 1;
-          return wall(b) - wall(a);
+          const wallDelta = wall(b) - wall(a);
+          if (wallDelta) return wallDelta;
+          return (a.libraryOrder || 0) - (b.libraryOrder || 0);
         });
         return arr;
       }
@@ -403,13 +413,18 @@ export default {
         const kb = getKey(b);
         if (ka < kb) return -1 * sign;
         if (ka > kb) return 1 * sign;
-        return 0;
+        return (a.libraryOrder || 0) - (b.libraryOrder || 0);
       });
       return arr;
     },
     // [B-80] 是否有"有更新"角标可清理（决定清理角标按钮是否可点 + 高亮态）
     hasBadges() {
       return this.podcasts.some(p => (p.newCount || 0) > 0);
+    },
+  },
+  watch: {
+    '$store.state.podcastListening.listenTick'() {
+      this.syncListeningReadModel();
     },
   },
   mounted() {
@@ -424,6 +439,8 @@ export default {
     }
   },
   beforeDestroy() {
+    this._loadToken = (this._loadToken || 0) + 1;
+    this._listenSyncToken = (this._listenSyncToken || 0) + 1;
     this.closePlusMenu();
     this.closeUnsubMode();
     this.closeSortMenu();
@@ -436,23 +453,58 @@ export default {
     clearTimeout(this._cleanTimer); // [B-80]
     clearTimeout(this._sinkTimer);
     clearTimeout(this._nasHoverTimer); // [NAS] hover 预取防抖定时器
+    if (this._removeSubscriptionUpdatesChanged) {
+      this._removeSubscriptionUpdatesChanged();
+      this._removeSubscriptionUpdatesChanged = null;
+    }
   },
   activated() {
-    // [滚动位修复] 返回订阅页时恢复离开时的滚动位置(Scrollbar 按路由名 'library' 已存)。
+    // [滚动位修复] 从更新页进入管理页必须从顶部开始；从详情返回仍恢复本页位置。
     //   原先缺此调用 → 详情页未命中缓存时 _presentEpisodes 把共享 <main>.scrollTop 归 0，返回就停在
     //   顶部(命中缓存不归 0 时恰好原地，故"有概率")。此刻 keep-alive 缓存的旧 DOM 高度完整、
     //   loadPodcasts 末尾才整体赋值不清空列表 → 同步 restore 不会因高度塌缩被夹到顶部。
-    this.$parent?.$refs?.scrollbar?.restorePosition();
-    this.loadPodcasts();
-    this.autoRefresh(); // [B-80] 进页后台静默刷新订阅(10 分钟节流，无打扰)
-    this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合(未连上则空、无标识)
+    if (consumeAllSubscriptionsEntryFromUpdates()) {
+      const main = this.$el && this.$el.closest('main');
+      if (main) main.scrollTop = 0;
+    } else {
+      this.$parent?.$refs?.scrollbar?.restorePosition();
+    }
+    if (this._wasActivated && this._subscriptionLibraryDirty) {
+      this.loadPodcasts();
+      this.refreshNasSet(); // 只有订阅数据变更时才重读 NAS 标识。
+    }
+    if (this._wasActivated) {
+      this.autoRefresh(); // [B-80] 进页后台静默刷新订阅(10 分钟节流，无打扰)
+    }
+    this._wasActivated = true;
+    this.handleUpdatesEntryAction();
   },
   created() {
+    this._loadToken = 0;
+    this._listenSyncToken = 0;
+    this._subscriptionLibraryDirty = false;
+    this._removeSubscriptionUpdatesChanged = onSubscriptionUpdatesChanged(
+      () => {
+        this._subscriptionLibraryDirty = true;
+      }
+    );
     this.loadPodcasts();
     this.autoRefresh(); // [B-80] 启动即后台静默刷新一次(节流保护)
     this.refreshNasSet(); // [NAS] 刷新"哪些节目 NAS 上有"集合
   },
   methods: {
+    goUpdates() {
+      this.$router.push({ name: 'library' });
+    },
+    handleUpdatesEntryAction() {
+      const action = this.$route.query && this.$route.query.action;
+      if (action !== 'add' && action !== 'import') return;
+      this.$router.replace({ name: 'subscriptionLibrary' });
+      this.$nextTick(() => {
+        if (action === 'add') this.openAddDialog();
+        else this.openImportOpml();
+      });
+    },
     // [NAS] 拉取"NAS 上有哪些节目"集合(未连上/未启用则空集)；失败静默。
     async refreshNasSet() {
       try {
@@ -523,6 +575,8 @@ export default {
       return Math.max(3, Math.min(99, (done / total) * 100));
     },
     async loadPodcasts() {
+      const loadToken = (this._loadToken || 0) + 1;
+      this._loadToken = loadToken;
       let list;
       try {
         list = await getSubscribedPodcasts();
@@ -538,6 +592,7 @@ export default {
           tries++;
         }
       } catch (e) {
+        if (loadToken !== this._loadToken) return;
         // 读库异常：保留旧列表，不清空 UI
         console.warn('[播客库] loadPodcasts 失败，保留旧数据', e);
         this.loaded = true;
@@ -552,42 +607,69 @@ export default {
         ),
         getLastListenedByPodcast().catch(() => ({})),
       ]);
-      this.podcasts = list.map((p, i) => ({
+      if (loadToken !== this._loadToken) return;
+      const items = list.map((p, i) => ({
         ...p,
         latestEpisodeTime: latest[i] || 0,
         listenSummary: summaries[i] || null,
         lastListenedAt: lastMap[p.id] || 0,
+        libraryOrder: i,
       }));
+      sessionLibraryReadModel = { items };
+      this.podcasts = items;
       this.loaded = true;
+      this._subscriptionLibraryDirty = false;
       this.primeHalos(); // [B-71/H1] 后台把各封面降采样成光晕小图
-      // [B-51] 写缓存供下次冷启动秒显（避免第一次打开短暂空白）
-      try {
-        localStorage.setItem(
-          'podcastLibrary.cache',
-          JSON.stringify(this.podcasts)
-        );
-      } catch (e) {
-        // localStorage 满/序列化异常 → 忽略，不影响功能
-      }
       console.log('[播客库] loaded', this.podcasts.length, 'podcasts');
     },
-    // [B-80] 后台静默自动刷新订阅(无打扰)：并发重抓所有 RSS，diff 新单集入库→更新角标。
-    //   10 分钟节流(每次进页都跑会狂抓)；无 toast、无转圈，发现新集只让卡片角标静静出现。
+    async syncListeningReadModel() {
+      const signal = this.$store.state.podcastListening || {};
+      const episodeId = String(signal.episodeId || '');
+      const splitAt = episodeId.indexOf('::');
+      if (splitAt <= 0) return;
+      const podcastId = episodeId.slice(0, splitAt);
+      const index = this.podcasts.findIndex(item => item.id === podcastId);
+      if (index < 0) return;
+
+      const token = (this._listenSyncToken || 0) + 1;
+      this._listenSyncToken = token;
+      const next = {
+        ...this.podcasts[index],
+        lastListenedAt: Date.now(),
+      };
+      this.$set(this.podcasts, index, next);
+      sessionLibraryReadModel = { items: this.podcasts };
+
+      try {
+        const listenSummary = await getPodcastListenSummary(podcastId);
+        if (token !== this._listenSyncToken) return;
+        const currentIndex = this.podcasts.findIndex(
+          item => item.id === podcastId
+        );
+        if (currentIndex < 0) return;
+        this.$set(this.podcasts, currentIndex, {
+          ...this.podcasts[currentIndex],
+          listenSummary: listenSummary || null,
+        });
+        sessionLibraryReadModel = { items: this.podcasts };
+      } catch (error) {
+        // Keep the optimistic recency marker; a later full read reconciles it.
+      }
+    },
+    // [B-80] 复用唯一后台刷新协调者：更新流和全部订阅页即使同时 keep-alive，
+    //   也只会有一次 RSS 刷新在途；本页保留旧的角标与桌面通知呈现。
     // [T3] 有基线(列表非空)时对比刷新前后 newCount 合计差，差值>0 则弹桌面通知。
     async autoRefresh() {
-      const KEY = 'podcastLibrary.lastAutoRefresh';
-      const last = Number(localStorage.getItem(KEY) || 0);
-      if (Date.now() - last < 10 * 60 * 1000) return; // 节流
       if (this._autoRefreshing) return;
       this._autoRefreshing = true;
-      localStorage.setItem(KEY, String(Date.now()));
       const countBefore = this.podcasts.length
         ? this.podcasts.reduce(function (s, p) {
             return s + (p.newCount || 0);
           }, 0)
         : -1; // 列表为空 → 无基线，跳过通知
       try {
-        await refreshAllSubscriptions();
+        const result = await refreshSubscribedPodcasts();
+        if (result && result.skipped) return;
         await this.loadPodcasts(); // 重读，含更新后的 newCount → 角标自动出现
         if (countBefore >= 0) {
           const countAfter = this.podcasts.reduce(function (s, p) {
@@ -858,7 +940,8 @@ export default {
     },
     // [B-25] 右键封面卡片 → 弹小菜单"取消订阅"
     // [B-25 / bug-3] 卡片点击行为：unsub-overlay 模式时点卡片 = 关闭模式
-    onCardClick(p) {
+    onCardClick(p, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) return;
       if (this.unsubModeId === p.id) {
         this.closeUnsubMode();
         return;
@@ -996,6 +1079,29 @@ export default {
     font-weight: 700;
     line-height: 1;
     margin: 0;
+  }
+}
+.return-updates {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  font-size: 13px;
+  cursor: pointer;
+
+  .svg-icon {
+    width: 15px;
+    height: 15px;
+  }
+
+  &:hover {
+    color: var(--color-primary);
+    background: var(--color-primary-bg-for-transparent);
   }
 }
 .actions {
@@ -1385,6 +1491,18 @@ export default {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 24px;
+}
+.library-skeleton {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 24px;
+}
+.library-skeleton-card {
+  min-height: 244px;
+  border-radius: var(--radius-cover);
+  background: var(--color-secondary-bg);
+  opacity: 0.5;
 }
 // [S 级 bug 修] 缩放期间禁用所有 transition，避免动画累积导致卡顿
 .podcast-grid.resizing,

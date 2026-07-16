@@ -12,7 +12,11 @@
            导致的「切 keepAlive↔非keepAlive 时旧页(如首页)一闪」(点首页节目进详情 100% 复现)。
            keep-alive 仅缓存 include 列出的页(=原 meta.keepAlive 那批，按组件 name)，其余正常创建/销毁；
            :key=$route.name 让同为 keepAlive 的菜单互切(首页↔我的订阅↔探索)也触发过渡。 -->
-      <transition name="page" mode="out-in" @before-enter="resetMainScroll">
+      <transition
+        :name="routeTransitionName"
+        :mode="routeTransitionName === 'page' ? 'out-in' : ''"
+        @before-enter="resetMainScroll"
+      >
         <keep-alive :include="keepAliveComponents">
           <router-view :key="$route.name"></router-view>
         </keep-alive>
@@ -39,6 +43,7 @@ import Player from './components/Player.vue';
 import Toast from './components/Toast.vue';
 import { ipcRenderer } from './electron/ipcRenderer';
 import { isAccountLoggedIn, isLooseLoggedIn } from '@/utils/auth';
+import { shouldYieldMainScrollKey } from '@/utils/mainScrollInputGuard';
 import Lyrics from './views/lyrics.vue';
 import { mapState } from 'vuex';
 import { installAudioOutputDeviceMonitor } from '@/utils/audioOutputDevices';
@@ -58,7 +63,8 @@ export default {
     return {
       isElectron: process.env.IS_ELECTRON, // true || undefined
       userSelectNone: false,
-      // [路由过渡·单 RV] keep-alive 缓存的页面(组件 name)= 原 router meta.keepAlive 的 8 个路由。
+      routeTransitionName: 'page',
+      // [路由过渡·单 RV] keep-alive 缓存的页面(组件 name)必须与 router meta.keepAlive 同步。
       //   ⚠️ 增删 keepAlive 页时这里必须同步(否则该页不被缓存 → 丢 activated/滚动恢复/分页返回不变等)。
       keepAliveComponents: [
         'Home',
@@ -67,6 +73,7 @@ export default {
         'ArtistMV',
         'Next',
         'Search',
+        'SubscriptionUpdates',
         'PodcastLibrary',
         'DiscoverList',
       ],
@@ -96,6 +103,15 @@ export default {
     },
   },
   created() {
+    this._removeRouteTransitionGuard = this.$router.beforeEach(
+      (to, from, next) => {
+        const subscriptionSibling =
+          ['library', 'subscriptionLibrary'].includes(to.name) &&
+          ['library', 'subscriptionLibrary'].includes(from.name);
+        this.routeTransitionName = subscriptionSibling ? 'page-inline' : 'page';
+        next();
+      }
+    );
     if (this.isElectron) {
       this._disposeIpcPowerEvents = ipcRenderer(this);
       this._disposeOutputDeviceMonitor = installAudioOutputDeviceMonitor(
@@ -109,6 +125,7 @@ export default {
     this.fetchData();
   },
   beforeDestroy() {
+    if (this._removeRouteTransitionGuard) this._removeRouteTransitionGuard();
     if (this._disposeIpcPowerEvents) this._disposeIpcPowerEvents();
     if (this._disposeOutputDeviceMonitor) this._disposeOutputDeviceMonitor();
     window.removeEventListener('keydown', this.handleKeydown);
@@ -139,27 +156,22 @@ export default {
       let dir = 0;
       if (code === 'ArrowUp' || code === 'PageUp') dir = -1;
       else if (code === 'ArrowDown' || code === 'PageDown') dir = 1;
-      else return;
+      const isEdgeKey = code === 'Home' || code === 'End';
+      if (!dir && !isEdgeKey) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (this.$route.name === 'mv') return;
       if (this.showLyrics) return;
       if (!this.enableScrolling) return;
-      const t = e.target;
-      if (t) {
-        const tag = t.tagName;
-        if (
-          tag === 'INPUT' ||
-          tag === 'TEXTAREA' ||
-          tag === 'SELECT' ||
-          t.isContentEditable
-        ) {
-          return;
-        }
-        if (typeof t.closest === 'function' && t.closest('.vue-slider')) return;
-      }
+      if (shouldYieldMainScrollKey(e.target)) return;
       const main = this.$refs.main;
       if (!main) return;
       e.preventDefault(); // 顶掉系统默认滚动，避免与 rAF 双滚
+      if (isEdgeKey) {
+        this.stopKbScroll();
+        main.scrollTop =
+          code === 'Home' ? 0 : main.scrollHeight - main.clientHeight;
+        return;
+      }
       const isPage = code === 'PageUp' || code === 'PageDown';
       // 目标速度(px/s)：方向键平稳、翻页键约 3.2 屏/秒(随视口高自适应)。连续 rAF 滚，
       //   手感不受系统按键重复频率影响 = 长按不再一顿一顿。
@@ -309,6 +321,14 @@ main::-webkit-scrollbar {
 }
 .page-leave-active {
   transition: opacity 0.05s ease;
+}
+.page-inline-enter-active,
+.page-inline-leave-active {
+  transition: opacity 0.06s ease;
+}
+.page-inline-enter,
+.page-inline-leave-to {
+  opacity: 0;
 }
 .page-enter {
   opacity: 0;

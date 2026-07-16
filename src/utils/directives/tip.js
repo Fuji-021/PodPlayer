@@ -12,7 +12,7 @@ function ensureStyle() {
   const s = document.createElement('style');
   s.id = 'v-tip-style';
   s.textContent =
-    '.v-tip-floater{position:fixed;z-index:10000;pointer-events:none;white-space:nowrap;' +
+    '.v-tip-floater{position:fixed;z-index:10000;pointer-events:none;white-space:nowrap;-webkit-user-select:none;user-select:none;' +
     'font-size:12px;font-weight:500;line-height:1;color:#fff;background:rgba(38,38,42,.94);' +
     'padding:6px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.2);' +
     'max-width:60vw;overflow:hidden;text-overflow:ellipsis;opacity:0;transform:translateY(-2px);' +
@@ -28,6 +28,7 @@ function getFloater() {
   if (floater) return floater;
   floater = document.createElement('div');
   floater.className = 'v-tip-floater';
+  floater.dataset.selection = 'ui';
   document.body.appendChild(floater);
   return floater;
 }
@@ -63,9 +64,15 @@ export default {
         show(el, el.__vTip__.text, el.__vTip__.placement);
       },
       leave: hide,
+      dismiss: hide,
     };
     el.addEventListener('mouseenter', el.__vTip__.enter);
     el.addEventListener('mouseleave', el.__vTip__.leave);
+    // Router navigation can replace the target before a mouseleave fires.
+    // Dismiss on the initiating interaction so the singleton floater cannot
+    // remain pinned over the next page.
+    el.addEventListener('pointerdown', el.__vTip__.dismiss);
+    el.addEventListener('click', el.__vTip__.dismiss);
   },
   update(el, binding) {
     if (el.__vTip__) {
@@ -77,6 +84,8 @@ export default {
     if (el.__vTip__) {
       el.removeEventListener('mouseenter', el.__vTip__.enter);
       el.removeEventListener('mouseleave', el.__vTip__.leave);
+      el.removeEventListener('pointerdown', el.__vTip__.dismiss);
+      el.removeEventListener('click', el.__vTip__.dismiss);
       hide(); // 防"宿主已卸载但浮层还亮着"
       delete el.__vTip__;
     }

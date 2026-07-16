@@ -7,7 +7,7 @@
     class="pod-img"
     :class="{ 'pod-img-loaded': loaded }"
     :src="displaySrc"
-    loading="lazy"
+    :loading="imageLoading"
     decoding="async"
     @load="onLoad"
     @error="onError"
@@ -40,12 +40,16 @@ export default {
   name: 'PodImage',
   props: {
     src: { type: String, default: '' },
+    loading: { type: String, default: 'lazy' },
   },
   data() {
     // displaySrc = 实际喂给 <img> 的地址：优先本地缓存 dataURL，否则归一化后的远程 url。
     return { loaded: false, failed: false, displaySrc: '' };
   },
   computed: {
+    imageLoading() {
+      return this.loading === 'eager' ? 'eager' : 'lazy';
+    },
     // [修] R13：http:// 统一升 https://，减少混合内容被浏览器拦截致空白；其余 url 原样返回。
     //   同时作为封面缓存的统一 key（http/https 归一为同一条缓存）。
     normalizedSrc() {

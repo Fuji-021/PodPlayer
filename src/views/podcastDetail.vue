@@ -1,5 +1,5 @@
 <template>
-  <div v-show="podcast" class="podcast-detail-page">
+  <div v-show="podcast" class="podcast-detail-page" data-selection="ui">
     <div v-if="podcast" class="podcast-detail">
       <!-- [B-34] 右键封面弹菜单浮层：批量下载（左）/ 取消订阅（右）。点外部关闭。 -->
       <!-- [B-63] 封面 hover 微动+光晕（复用首页 cover-box/cover-shadow 设计） -->
@@ -39,8 +39,8 @@
         </div>
       </div>
       <div class="meta">
-        <div class="t">{{ podcast.title }}</div>
-        <div class="a">{{ podcast.author }}</div>
+        <div class="t" data-selection="content">{{ podcast.title }}</div>
+        <div class="a" data-selection="content">{{ podcast.author }}</div>
         <!-- [B-50] 预览(未订阅)节目：点卡片进来=试听浏览，未自动订阅 → 显示订阅按钮 -->
         <!-- [B67-BUG-2] 骨架载入态(_loading)先不显示订阅按钮(此时 feedUrl 还是哨兵) -->
         <button
@@ -56,7 +56,7 @@
         >
           <svg-icon icon-class="square-plus" />订阅到我的
         </button>
-        <div class="d">{{ cleanDescription }}</div>
+        <div class="d" data-selection="content">{{ cleanDescription }}</div>
       </div>
     </div>
 
@@ -91,8 +91,9 @@
             selected: isSelected(ep),
             'is-downloaded': selectMode && isDownloaded(ep),
           }"
-          @click="onRowClick(ep)"
-          @dblclick="onRowDblClick(ep)"
+          data-selection="ui"
+          @click="onRowClick(ep, $event)"
+          @dblclick="onRowDblClick(ep, $event)"
           @contextmenu.prevent="openEpisodeMenu($event, ep)"
         >
           <!-- [B-34] 多选框：已下载的显示绿勾禁用；未下载可勾选 -->
@@ -113,7 +114,7 @@
             :style="{ width: Math.max(2, downloadPercent(ep)) + '%' }"
           ></div>
           <div class="ep-main">
-            <div class="ep-title">
+            <div class="ep-title" data-selection="content">
               {{ ep.title
               }}<span
                 v-if="nasEpOn(ep)"
@@ -182,7 +183,7 @@
           <!-- 播放 + 更多 -->
           <button
             v-if="!selectMode"
-            class="ep-play-btn"
+            class="ep-play-btn podcast-episode-action"
             @click.stop="playEpisode(ep)"
             @dblclick.stop
           >
@@ -190,7 +191,7 @@
           </button>
           <button
             v-if="!selectMode"
-            class="ep-menu-btn"
+            class="ep-menu-btn podcast-episode-action"
             @click.stop="openEpisodeMenu($event, ep)"
             @dblclick.stop
           >
@@ -312,6 +313,7 @@ import {
 } from '@/utils/podcast/service';
 // [B67-BUG-2] 缓存优先：未订阅节目的后台预览抓取在详情页内做
 import { previewPodcast } from '@/utils/podcast/discover';
+import { notifySubscriptionUpdatesChanged } from '@/utils/podcast/subscriptionNavigation';
 import { getEpisodeProgressBulk } from '@/utils/podcast/db';
 import {
   getListenStats,
@@ -330,6 +332,7 @@ import {
 } from '@/utils/podcast/transcripts';
 import { stripHtmlToText } from '@/utils/podcast/sanitizeHtml';
 import { getCoverColor } from '@/utils/podcast/coverColor';
+import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import { getEpisodeCache, setEpisodeCache } from '@/utils/podcast/episodeCache';
 import { prefetchShownotesForEpisodes } from '@/utils/podcast/shownotesEnrich';
 import {
@@ -550,6 +553,12 @@ export default {
     if (this._winRaf) cancelAnimationFrame(this._winRaf);
     if (this._rowClickTimer) clearTimeout(this._rowClickTimer); // [TODO4] 清挂起的单击定时器
   },
+  deactivated() {
+    if (this._rowClickTimer) {
+      clearTimeout(this._rowClickTimer);
+      this._rowClickTimer = null;
+    }
+  },
   methods: {
     // [F1·方案C 2026-06-21·根治 B-74] 固定行高窗口虚拟化：监听外层 <main> 滚动 → rAF 节流重算
     //   可视窗口 [winStart,winEnd) 一段。top/bottom spacer 撑出 n×rowH 的恒定总高 →
@@ -763,7 +772,9 @@ export default {
       }
       // [B-46 / D-3] 进详情即视为"已看过新单集"，清掉我的订阅页该卡片的新单集角标
       if (podcast.newCount) {
-        updatePodcast(feedUrl, { newCount: 0 }).catch(() => {});
+        updatePodcast(feedUrl, { newCount: 0 })
+          .then(() => notifySubscriptionUpdatesChanged())
+          .catch(() => {});
       }
       const eps = await getEpisodesByPodcast(feedUrl);
       if (feedUrl !== this.feedUrl) return;
@@ -1070,7 +1081,14 @@ export default {
     // [TODO4] 单击进详情、双击直接播放：单击先挂起 ~250ms；这期间来 dblclick 则取消导航、改播放。
     //   250ms：150ms 太短，双击两下间隔稍大就会在第二下之前触发单击导航(变成"双击却进了详情")，
     //   250ms 才能稳定抓住双击=播放(双击=只播放、单击=进详情)。
-    onRowClick(ep) {
+    onRowClick(ep, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) {
+        if (this._rowClickTimer) {
+          clearTimeout(this._rowClickTimer);
+          this._rowClickTimer = null;
+        }
+        return;
+      }
       if (this.selectMode) {
         this.toggleSelect(ep);
         return;
@@ -1082,7 +1100,14 @@ export default {
       }, 250);
     },
     // [TODO4] 双击单集行 → 取消挂起的"进详情"，直接播放
-    onRowDblClick(ep) {
+    onRowDblClick(ep, event) {
+      if (shouldPreserveSelection(event, event && event.currentTarget)) {
+        if (this._rowClickTimer) {
+          clearTimeout(this._rowClickTimer);
+          this._rowClickTimer = null;
+        }
+        return;
+      }
       if (this.selectMode) return; // 多选模式不播放(与单击语义一致:只勾选)
       if (this._rowClickTimer) {
         clearTimeout(this._rowClickTimer);
@@ -1239,6 +1264,7 @@ export default {
       if (!this.podcast) return;
       try {
         await updatePodcast(this.feedUrl, { subscribed: true });
+        notifySubscriptionUpdatesChanged();
         this.podcast = { ...this.podcast, subscribed: true };
         this.$store.commit('addSubscribedPodcast', {
           name: this.podcast.title,
@@ -1800,30 +1826,6 @@ export default {
       color: #27ae60; // 绿
       opacity: 1;
       font-weight: 600;
-    }
-  }
-  // [S-3] play-circle + 三点冒号两按钮共用样式
-  .ep-play-btn,
-  .ep-menu-btn {
-    background: transparent;
-    color: var(--color-text);
-    opacity: 0.4;
-    padding: 8px;
-    border-radius: 50%;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: 0.15s;
-    flex-shrink: 0;
-    .svg-icon {
-      width: 18px;
-      height: 18px;
-    }
-    &:hover {
-      opacity: 1;
-      background: var(--color-secondary-bg-for-transparent);
-      color: var(--color-primary);
     }
   }
 }

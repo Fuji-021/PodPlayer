@@ -1,5 +1,5 @@
 <template>
-  <div v-show="show" class="shade" @click="clickOutside">
+  <div v-show="show" class="shade" data-selection="ui" @click="clickOutside">
     <div class="modal" :style="modalStyles" @click.stop>
       <div class="header">
         <div class="title">{{ title }}</div>
@@ -22,7 +22,10 @@ export default {
   name: 'Modal',
   props: {
     show: Boolean,
-    close: Function,
+    close: {
+      type: Function,
+      default: () => {},
+    },
     title: {
       type: String,
       default: 'Title',
