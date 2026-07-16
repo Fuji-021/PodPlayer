@@ -1,0 +1,10 @@
+{
+  "canonicalRepo": null,
+  "sourceRoot": null,
+  "branch": null,
+  "expectedHead": null,
+  "requireClean": true,
+  "selectedAt": null,
+  "selectedBy": null,
+  "purpose": "No source selected. Run select-dev-source.ps1 first."
+}
