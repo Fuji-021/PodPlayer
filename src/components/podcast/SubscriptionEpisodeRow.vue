@@ -13,11 +13,7 @@
       @click.stop="$emit('open-episode', episode)"
       @dblclick.stop
     >
-      <PodImage
-        class="update-cover"
-        :src="episode.podcastCoverUrl || episode.episodeCoverUrl"
-        loading="eager"
-      />
+      <SubscriptionEpisodeCover class="update-cover" :episode="episode" />
     </button>
     <div class="update-episode-main">
       <div class="update-episode-meta">
@@ -82,9 +78,9 @@
 </template>
 
 <script>
-import PodImage from '@/components/PodImage.vue';
 import SvgIcon from '@/components/SvgIcon.vue';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
+import SubscriptionEpisodeCover from './SubscriptionEpisodeCover.vue';
 
 function formatDuration(value) {
   const total = Math.max(0, Number(value) || 0);
@@ -114,7 +110,7 @@ function formatPublished(value) {
 
 export default {
   name: 'SubscriptionEpisodeRow',
-  components: { PodImage, SvgIcon },
+  components: { SubscriptionEpisodeCover, SvgIcon },
   props: {
     episode: { type: Object, required: true },
     getEpisodeState: { type: Function, required: true },
