@@ -56,12 +56,53 @@ function createIdleHarness(reducedMotion = false) {
         .filter(([id]) => !requested || requested.has(id))
         .map(([, item]) => item.callback);
     },
-    runAll() {
-      const queued = Array.from(callbacks.values());
-      callbacks.clear();
-      queued.forEach(({ callback }) => {
-        callback({ didTimeout: false, timeRemaining: () => 50 });
+    runNext({ didTimeout = false } = {}) {
+      const next = callbacks.entries().next();
+      if (next.done) return false;
+      const [id, item] = next.value;
+      callbacks.delete(id);
+      item.callback({
+        didTimeout,
+        timeRemaining: () => (didTimeout ? 0 : 50),
       });
+      return true;
+    },
+    runAll(options) {
+      let count = 0;
+      while (this.runNext(options)) {
+        count += 1;
+        if (count > 200) throw new Error('idle harness did not drain');
+      }
+      return count;
+    },
+  };
+}
+
+function createSchedulerHarness(type) {
+  let nextId = 0;
+  const callbacks = new Map();
+  return {
+    schedule(callback) {
+      const id = ++nextId;
+      callbacks.set(id, callback);
+      return { type, id };
+    },
+    cancel(handle) {
+      if (handle) callbacks.delete(handle.id);
+    },
+    pendingCount() {
+      return callbacks.size;
+    },
+    runNext({ didTimeout = false } = {}) {
+      const next = callbacks.entries().next();
+      if (next.done) return false;
+      const [id, callback] = next.value;
+      callbacks.delete(id);
+      callback({
+        didTimeout,
+        timeRemaining: () => (didTimeout ? 0 : 50),
+      });
+      return true;
     },
   };
 }
@@ -164,10 +205,165 @@ export function cacheCoverFromImg(url, image) {
   return require(output).default;
 }
 
+async function buildPersistenceScheduler() {
+  const output = path.join(tempDir, 'persistence.cjs');
+  await esbuild.build({
+    entryPoints: [
+      path.join(
+        root,
+        'src/utils/podcast/subscriptionEpisodeCoverPersistence.js'
+      ),
+    ],
+    outfile: output,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    logLevel: 'silent',
+  });
+  return require(output);
+}
+
+function runPersistenceSchedulerSmoke(persistence) {
+  const idle = createSchedulerHarness('idle');
+  const persisted = [];
+  const scheduler =
+    persistence.createSubscriptionEpisodeCoverPersistenceScheduler({
+      schedule: callback => idle.schedule(callback),
+      cancelSchedule: handle => idle.cancel(handle),
+    });
+
+  for (let index = 0; index < 20; index++) {
+    scheduler.enqueue({
+      url: 'https://covers.test/base-' + index + '.jpg',
+      isValid: () => true,
+      persist: () => persisted.push('base-' + index),
+    });
+    scheduler.enqueue({
+      url: 'https://covers.test/episode-' + index + '.jpg',
+      isValid: () => true,
+      persist: () => persisted.push('episode-' + index),
+    });
+  }
+  assert.strictEqual(scheduler.getStateForTest().pendingCount, 40);
+  assert.strictEqual(
+    idle.pendingCount(),
+    1,
+    'all visible decode completions must share one idle callback'
+  );
+  for (let index = 0; index < 40; index++) {
+    assert.strictEqual(idle.pendingCount(), 1);
+    assert.ok(idle.runNext({ didTimeout: true }));
+    assert.strictEqual(
+      persisted.length,
+      index + 1,
+      'a timed-out idle turn may encode exactly one cover'
+    );
+  }
+  assert.strictEqual(scheduler.getStateForTest().pendingCount, 0);
+  assert.strictEqual(idle.pendingCount(), 0);
+
+  const dedupeIdle = createSchedulerHarness('idle');
+  const dedupeReasons = [];
+  const dedupePersisted = [];
+  const dedupeScheduler =
+    persistence.createSubscriptionEpisodeCoverPersistenceScheduler({
+      schedule: callback => dedupeIdle.schedule(callback),
+      cancelSchedule: handle => dedupeIdle.cancel(handle),
+    });
+  const firstTicket = dedupeScheduler.enqueue({
+    url: 'https://covers.test/shared.jpg',
+    isValid: () => true,
+    persist: () => dedupePersisted.push('first'),
+    onSettled: reason => dedupeReasons.push(reason),
+  });
+  dedupeScheduler.enqueue({
+    url: 'https://covers.test/shared.jpg',
+    isValid: () => true,
+    persist: () => dedupePersisted.push('latest'),
+  });
+  assert.strictEqual(firstTicket.job, null);
+  assert.deepStrictEqual(dedupeReasons, ['deduped']);
+  assert.strictEqual(dedupeScheduler.getStateForTest().pendingCount, 1);
+  dedupeIdle.runNext({ didTimeout: true });
+  assert.deepStrictEqual(dedupePersisted, ['latest']);
+
+  const reuseIdle = createSchedulerHarness('idle');
+  const reusePersisted = [];
+  let activeRow = 'a';
+  const reuseScheduler =
+    persistence.createSubscriptionEpisodeCoverPersistenceScheduler({
+      schedule: callback => reuseIdle.schedule(callback),
+      cancelSchedule: handle => reuseIdle.cancel(handle),
+    });
+  const staleTicket = reuseScheduler.enqueue({
+    url: 'https://covers.test/a.jpg',
+    isValid: () => activeRow === 'a',
+    persist: () => reusePersisted.push('a'),
+  });
+  activeRow = 'b';
+  reuseScheduler.enqueue({
+    url: 'https://covers.test/b.jpg',
+    isValid: () => activeRow === 'b',
+    persist: () => reusePersisted.push('b'),
+  });
+  assert.strictEqual(staleTicket.job, null);
+  reuseIdle.runNext({ didTimeout: true });
+  assert.deepStrictEqual(reusePersisted, ['b']);
+
+  const capIdle = createSchedulerHarness('idle');
+  const capReasons = [];
+  const capPersisted = [];
+  const capScheduler =
+    persistence.createSubscriptionEpisodeCoverPersistenceScheduler({
+      maxPending: 3,
+      schedule: callback => capIdle.schedule(callback),
+      cancelSchedule: handle => capIdle.cancel(handle),
+    });
+  for (let index = 0; index < 5; index++) {
+    capScheduler.enqueue({
+      url: 'https://covers.test/cap-' + index + '.jpg',
+      isValid: () => true,
+      persist: () => capPersisted.push(index),
+      onSettled: reason => capReasons.push({ index, reason }),
+    });
+  }
+  assert.strictEqual(capScheduler.getStateForTest().pendingCount, 3);
+  assert.deepStrictEqual(capReasons, [
+    { index: 0, reason: 'queue-cap' },
+    { index: 1, reason: 'queue-cap' },
+  ]);
+  while (capIdle.runNext({ didTimeout: true })) {
+    // Drain each job independently to prove queue-cap survivors remain serial.
+  }
+  assert.deepStrictEqual(capPersisted, [2, 3, 4]);
+
+  const timeout = createSchedulerHarness('timeout');
+  const timeoutPersisted = [];
+  const timeoutScheduler =
+    persistence.createSubscriptionEpisodeCoverPersistenceScheduler({
+      schedule: callback => timeout.schedule(callback),
+      cancelSchedule: handle => timeout.cancel(handle),
+    });
+  for (let index = 0; index < 3; index++) {
+    timeoutScheduler.enqueue({
+      url: 'https://covers.test/timeout-' + index + '.jpg',
+      isValid: () => true,
+      persist: () => timeoutPersisted.push(index),
+    });
+  }
+  assert.strictEqual(timeout.pendingCount(), 1);
+  for (let index = 0; index < 3; index++) {
+    timeout.runNext();
+    assert.strictEqual(timeoutPersisted.length, index + 1);
+  }
+}
+
 async function main() {
   const previousWindow = global.window;
   try {
     const component = await buildComponent();
+    const persistence = await buildPersistenceScheduler();
+    runPersistenceSchedulerSmoke(persistence);
     const helperOutput = path.join(tempDir, 'helper.cjs');
     await esbuild.build({
       entryPoints: [
@@ -389,7 +585,11 @@ async function main() {
       [],
       'decode must reveal the episode before canvas persistence runs'
     );
-    assert.strictEqual(idle.pendingCount(), 2);
+    assert.strictEqual(
+      idle.pendingCount(),
+      1,
+      'base and episode persistence must share the global idle queue'
+    );
     idle.runAll();
     assert.deepStrictEqual(
       global.__subscriptionEpisodeCoverCache.persisted
@@ -506,6 +706,7 @@ async function main() {
     await flush();
     assert.strictEqual(reducedVm.episodeAnimate, false);
     assert.strictEqual(reducedVm.episodeSettled, true);
+    idle.runAll();
 
     idle = createIdleHarness(false);
     global.window = idle.window;
@@ -528,22 +729,18 @@ async function main() {
       resetVm.baseSrc
     );
     await flush();
-    const resetTasks = resetVm._coverCacheTasks.slice();
-    const resetCallbacks = idle.captureCallbacks(
-      resetTasks.map(task => task.id)
-    );
-    assert.strictEqual(resetCallbacks.length, resetTasks.length);
+    const resetCallbacks = idle.captureCallbacks();
+    assert.strictEqual(resetCallbacks.length, 1);
     resetVm.episode = {
       id: 'idle-reset-next-row',
       episodeCoverUrl: newEpisodeUrl,
       podcastCoverUrl: podcastUrl,
     };
     resetVm.resetCover();
-    assert.strictEqual(
-      idle.captureCallbacks(resetTasks.map(task => task.id)).length,
-      0
+    assert.strictEqual(idle.pendingCount(), 0);
+    resetCallbacks.forEach(callback =>
+      callback({ didTimeout: true, timeRemaining: () => 0 })
     );
-    resetCallbacks.forEach(callback => callback());
     assert.deepStrictEqual(
       global.__subscriptionEpisodeCoverCache.persisted,
       [],
@@ -572,15 +769,13 @@ async function main() {
     );
     await flush();
     const inactiveTasks = inactiveVm._coverCacheTasks.slice();
-    const inactiveCallbacks = idle.captureCallbacks(
-      inactiveTasks.map(task => task.id)
-    );
+    const inactiveCallbacks = idle.captureCallbacks();
     assert.deepStrictEqual(
       inactiveTasks.map(task => task.layer),
       ['base'],
       'only the decoded base image may schedule idle persistence here'
     );
-    assert.strictEqual(inactiveCallbacks.length, inactiveTasks.length);
+    assert.strictEqual(inactiveCallbacks.length, 1);
     const inactiveTask = inactiveTasks[0];
     component.deactivated.call(inactiveVm);
     assert.strictEqual(inactiveVm._coverActive, false);
@@ -592,7 +787,9 @@ async function main() {
       0,
       'deactivation itself must not persist a pending cover'
     );
-    inactiveCallbacks.forEach(callback => callback());
+    inactiveCallbacks.forEach(callback =>
+      callback({ didTimeout: true, timeRemaining: () => 0 })
+    );
     assert.deepStrictEqual(
       global.__subscriptionEpisodeCoverCache.persisted,
       [],
@@ -621,7 +818,7 @@ async function main() {
     );
     await flush();
     const destroyedTask = destroyedVm._coverCacheTasks[0];
-    const destroyedCallbacks = idle.captureCallbacks([destroyedTask.id]);
+    const destroyedCallbacks = idle.captureCallbacks();
     component.beforeDestroy.call(destroyedVm);
     assert.strictEqual(destroyedVm._coverActive, false);
     assert.strictEqual(destroyedTask.canceled, true);
@@ -631,7 +828,9 @@ async function main() {
       0,
       'destruction itself must not persist a pending cover'
     );
-    destroyedCallbacks.forEach(callback => callback());
+    destroyedCallbacks.forEach(callback =>
+      callback({ didTimeout: true, timeRemaining: () => 0 })
+    );
     assert.deepStrictEqual(
       global.__subscriptionEpisodeCoverCache.persisted,
       [],
@@ -642,13 +841,23 @@ async function main() {
       path.join(root, 'src/components/podcast/SubscriptionEpisodeCover.vue'),
       'utf8'
     );
+    const persistenceSource = fs.readFileSync(
+      path.join(
+        root,
+        'src/utils/podcast/subscriptionEpisodeCoverPersistence.js'
+      ),
+      'utf8'
+    );
     assert.ok(componentSource.includes('<img'));
     assert.ok(!componentSource.includes('draggable="false"'));
     assert.ok(!componentSource.includes('-webkit-user-drag: none'));
     assert.ok(!componentSource.includes('transition: all'));
     assert.ok(componentSource.includes('visibility: hidden'));
-    assert.ok(componentSource.includes('requestIdleCallback'));
-    assert.ok(componentSource.includes('setTimeout(callback, 0)'));
+    assert.ok(
+      componentSource.includes('enqueueSubscriptionEpisodeCoverPersistence')
+    );
+    assert.ok(persistenceSource.includes('requestIdleCallback'));
+    assert.ok(persistenceSource.includes('setTimeout(callback, 0)'));
     assert.ok(componentSource.includes('pointer-events: none'));
     assert.ok(componentSource.includes('pointer-events: auto'));
     assert.ok(

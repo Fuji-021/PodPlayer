@@ -61,6 +61,10 @@ import {
   shouldPersistSubscriptionEpisodeCover,
   SUBSCRIPTION_EPISODE_COVER_SOURCES,
 } from '@/utils/podcast/subscriptionEpisodeCover';
+import {
+  cancelSubscriptionEpisodeCoverPersistence,
+  enqueueSubscriptionEpisodeCoverPersistence,
+} from '@/utils/podcast/subscriptionEpisodeCoverPersistence';
 
 function isReducedMotion() {
   return !!(
@@ -83,39 +87,6 @@ function decodeImage(image) {
   } catch (e) {
     return Promise.resolve(false);
   }
-}
-
-const COVER_CACHE_IDLE_TIMEOUT = 1200;
-
-function requestCoverCacheIdle(callback) {
-  if (
-    typeof window !== 'undefined' &&
-    typeof window.requestIdleCallback === 'function'
-  ) {
-    return {
-      type: 'idle',
-      id: window.requestIdleCallback(callback, {
-        timeout: COVER_CACHE_IDLE_TIMEOUT,
-      }),
-    };
-  }
-  return {
-    type: 'timeout',
-    id: setTimeout(callback, 0),
-  };
-}
-
-function cancelCoverCacheIdle(task) {
-  if (!task) return;
-  if (
-    task.type === 'idle' &&
-    typeof window !== 'undefined' &&
-    typeof window.cancelIdleCallback === 'function'
-  ) {
-    window.cancelIdleCallback(task.id);
-    return;
-  }
-  clearTimeout(task.id);
 }
 
 export default {
@@ -188,11 +159,13 @@ export default {
       return this._coverCacheTasks;
     },
     cancelCoverCachePersistence() {
-      this.getCoverCacheTasks().forEach(task => {
-        task.canceled = true;
-        cancelCoverCacheIdle(task);
-      });
+      const tasks = this.getCoverCacheTasks().slice();
       this._coverCacheTasks = [];
+      tasks.forEach(task => {
+        task.canceled = true;
+        cancelSubscriptionEpisodeCoverPersistence(task.ticket);
+        task.ticket = null;
+      });
     },
     isCurrentCoverCacheTask(task) {
       if (!task || task.canceled || this._coverActive === false) return false;
@@ -228,23 +201,27 @@ export default {
         url,
         source,
         image,
-        type: '',
-        id: null,
         canceled: false,
+        ticket: null,
       };
-      const scheduled = requestCoverCacheIdle(() => {
-        const tasks = this.getCoverCacheTasks();
-        const index = tasks.indexOf(task);
-        if (index >= 0) tasks.splice(index, 1);
-        if (!this.isCurrentCoverCacheTask(task)) return;
-        try {
-          cacheCoverFromImg(task.url, task.image);
-        } catch (e) {
-          // Cover persistence is an idle best effort; rendering is already ready.
-        }
+      task.ticket = enqueueSubscriptionEpisodeCoverPersistence({
+        url: task.url,
+        isValid: () => this.isCurrentCoverCacheTask(task),
+        persist: () => {
+          if (!this.isCurrentCoverCacheTask(task)) return;
+          try {
+            cacheCoverFromImg(task.url, task.image);
+          } catch (e) {
+            // Cover persistence is an idle best effort; rendering is already ready.
+          }
+        },
+        onSettled: () => {
+          const tasks = this.getCoverCacheTasks();
+          const index = tasks.indexOf(task);
+          if (index >= 0) tasks.splice(index, 1);
+        },
       });
-      task.type = scheduled.type;
-      task.id = scheduled.id;
+      if (!task.ticket) return;
       this.getCoverCacheTasks().push(task);
     },
     resetCover() {
