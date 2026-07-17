@@ -85,6 +85,39 @@ function decodeImage(image) {
   }
 }
 
+const COVER_CACHE_IDLE_TIMEOUT = 1200;
+
+function requestCoverCacheIdle(callback) {
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.requestIdleCallback === 'function'
+  ) {
+    return {
+      type: 'idle',
+      id: window.requestIdleCallback(callback, {
+        timeout: COVER_CACHE_IDLE_TIMEOUT,
+      }),
+    };
+  }
+  return {
+    type: 'timeout',
+    id: setTimeout(callback, 0),
+  };
+}
+
+function cancelCoverCacheIdle(task) {
+  if (!task) return;
+  if (
+    task.type === 'idle' &&
+    typeof window !== 'undefined' &&
+    typeof window.cancelIdleCallback === 'function'
+  ) {
+    window.cancelIdleCallback(task.id);
+    return;
+  }
+  clearTimeout(task.id);
+}
+
 export default {
   name: 'SubscriptionEpisodeCover',
   components: { SvgIcon },
@@ -97,6 +130,7 @@ export default {
       requestEpisodeId: '',
       currentPlan: null,
       baseSrc: '',
+      baseSource: SUBSCRIPTION_EPISODE_COVER_SOURCES.NONE,
       baseFailed: false,
       baseReady: false,
       baseResolved: false,
@@ -125,16 +159,20 @@ export default {
     },
   },
   activated() {
+    this._coverActive = true;
     this.resetCover();
   },
   deactivated() {
+    this._coverActive = false;
     this.invalidateRequests();
   },
   beforeDestroy() {
+    this._coverActive = false;
     this.invalidateRequests();
   },
   methods: {
     invalidateRequests() {
+      this.cancelCoverCachePersistence();
       this.requestToken += 1;
     },
     isCurrentRequest(token, episodeId) {
@@ -145,7 +183,72 @@ export default {
         currentEpisodeId: this.requestEpisodeId,
       });
     },
+    getCoverCacheTasks() {
+      if (!this._coverCacheTasks) this._coverCacheTasks = [];
+      return this._coverCacheTasks;
+    },
+    cancelCoverCachePersistence() {
+      this.getCoverCacheTasks().forEach(task => {
+        task.canceled = true;
+        cancelCoverCacheIdle(task);
+      });
+      this._coverCacheTasks = [];
+    },
+    isCurrentCoverCacheTask(task) {
+      if (!task || task.canceled || this._coverActive === false) return false;
+      const isBase = task.layer === 'base';
+      const currentUrl = isBase ? this.baseSrc : this.episodeSrc;
+      const currentSource = isBase ? this.baseSource : this.episodeSource;
+      const currentImage = isBase
+        ? this.$refs.baseImage
+        : this.$refs.episodeImage;
+      return (
+        this.isCurrentRequest(task.token, task.episodeId) &&
+        task.url === currentUrl &&
+        task.source === currentSource &&
+        task.image === currentImage &&
+        !!task.image.naturalWidth
+      );
+    },
+    scheduleCoverCachePersistence({
+      layer,
+      token,
+      episodeId,
+      url,
+      source,
+      image,
+    }) {
+      if (!url || !image || !shouldPersistSubscriptionEpisodeCover(source)) {
+        return;
+      }
+      const task = {
+        layer,
+        token,
+        episodeId,
+        url,
+        source,
+        image,
+        type: '',
+        id: null,
+        canceled: false,
+      };
+      const scheduled = requestCoverCacheIdle(() => {
+        const tasks = this.getCoverCacheTasks();
+        const index = tasks.indexOf(task);
+        if (index >= 0) tasks.splice(index, 1);
+        if (!this.isCurrentCoverCacheTask(task)) return;
+        try {
+          cacheCoverFromImg(task.url, task.image);
+        } catch (e) {
+          // Cover persistence is an idle best effort; rendering is already ready.
+        }
+      });
+      task.type = scheduled.type;
+      task.id = scheduled.id;
+      this.getCoverCacheTasks().push(task);
+    },
     resetCover() {
+      this.cancelCoverCachePersistence();
       const token = this.requestToken + 1;
       this.requestToken = token;
       this.requestEpisodeId = String((this.episode && this.episode.id) || '');
@@ -167,6 +270,9 @@ export default {
       const initialPodcast = resolveSubscriptionPodcastCoverSource(plan, '');
       const initialEpisode = resolveSubscriptionEpisodeCoverSource(plan, '');
       this.baseSrc = plan.memoryPodcastUrl ? initialPodcast.src : '';
+      this.baseSource = this.baseSrc
+        ? initialPodcast.source
+        : SUBSCRIPTION_EPISODE_COVER_SOURCES.NONE;
       this.baseFailed = false;
       this.baseReady = false;
       this.baseResolved = !plan.shouldLookupPodcastCache;
@@ -196,6 +302,7 @@ export default {
           if (!this.isCurrentRequest(token, plan.episodeId)) return;
           const resolved = resolveSubscriptionPodcastCoverSource(plan, data);
           this.baseSrc = resolved.src;
+          this.baseSource = resolved.source;
           this.baseFailed = false;
           this.baseResolved = true;
           this.checkBaseImage(token, this.baseSrc);
@@ -203,6 +310,7 @@ export default {
         .catch(() => {
           if (!this.isCurrentRequest(token, plan.episodeId)) return;
           this.baseSrc = plan.podcastUrl;
+          this.baseSource = SUBSCRIPTION_EPISODE_COVER_SOURCES.REMOTE;
           this.baseFailed = false;
           this.baseResolved = true;
           this.checkBaseImage(token, this.baseSrc);
@@ -287,11 +395,17 @@ export default {
           this.failBaseImage(token, source);
           return;
         }
+        if (this.baseReady) return;
         this.baseReady = true;
-        if (source === this.currentPlan.podcastUrl) {
-          cacheCoverFromImg(this.currentPlan.podcastUrl, image);
-        }
         this.revealEpisodeIfReady();
+        this.scheduleCoverCachePersistence({
+          layer: 'base',
+          token,
+          episodeId: this.requestEpisodeId,
+          url: this.currentPlan.podcastUrl,
+          source: this.baseSource,
+          image,
+        });
       });
     },
     failBaseImage(token, source) {
@@ -327,15 +441,17 @@ export default {
           this.failEpisodeImage(token, source);
           return;
         }
-        if (
-          this.currentPlan &&
-          shouldPersistSubscriptionEpisodeCover(this.episodeSource) &&
-          source === this.currentPlan.episodeUrl
-        ) {
-          cacheCoverFromImg(this.currentPlan.episodeUrl, image);
-        }
+        if (this.episodeDecoded) return;
         this.episodeDecoded = true;
         this.revealEpisodeIfReady();
+        this.scheduleCoverCachePersistence({
+          layer: 'episode',
+          token,
+          episodeId: this.requestEpisodeId,
+          url: this.currentPlan && this.currentPlan.episodeUrl,
+          source: this.episodeSource,
+          image,
+        });
       });
     },
     revealEpisodeIfReady() {
@@ -421,6 +537,7 @@ export default {
 }
 
 .episode-cover-base {
+  pointer-events: auto;
   visibility: hidden;
 
   &.is-ready {
@@ -431,10 +548,12 @@ export default {
 .episode-cover-overlay {
   z-index: 2;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 140ms cubic-bezier(0.22, 1, 0.36, 1);
 
   &.is-ready {
     opacity: 1;
+    pointer-events: auto;
   }
 
   &.is-instant {
@@ -443,6 +562,7 @@ export default {
 }
 
 .subscription-episode-cover.is-overlay-settled .episode-cover-base {
+  pointer-events: none;
   visibility: hidden;
 }
 

@@ -31,6 +31,41 @@ function createCacheState() {
   };
 }
 
+function createIdleHarness(reducedMotion = false) {
+  let nextId = 0;
+  const callbacks = new Map();
+  const window = {
+    matchMedia: () => ({ matches: reducedMotion }),
+    requestIdleCallback(callback, options) {
+      const id = ++nextId;
+      callbacks.set(id, { callback, options });
+      return id;
+    },
+    cancelIdleCallback(id) {
+      callbacks.delete(id);
+    },
+  };
+  return {
+    window,
+    pendingCount() {
+      return callbacks.size;
+    },
+    captureCallbacks(ids) {
+      const requested = ids ? new Set(ids) : null;
+      return Array.from(callbacks.entries())
+        .filter(([id]) => !requested || requested.has(id))
+        .map(([, item]) => item.callback);
+    },
+    runAll() {
+      const queued = Array.from(callbacks.values());
+      callbacks.clear();
+      queued.forEach(({ callback }) => {
+        callback({ didTimeout: false, timeRemaining: () => 50 });
+      });
+    },
+  };
+}
+
 function createVm(component, episode) {
   const vm = {
     ...component.data(),
@@ -58,6 +93,11 @@ function fakeImage(token, source, decode = true) {
       return decode ? Promise.resolve() : Promise.reject(new Error('decode'));
     },
   };
+}
+
+function attachImage(vm, layer, image) {
+  vm.$refs[layer === 'base' ? 'baseImage' : 'episodeImage'] = image;
+  return image;
 }
 
 async function buildComponent() {
@@ -249,7 +289,8 @@ async function main() {
       'an old episode request must not overwrite the reused virtual row'
     );
 
-    global.window = { matchMedia: () => ({ matches: false }) };
+    let idle = createIdleHarness(false);
+    global.window = idle.window;
     global.__subscriptionEpisodeCoverCache = createCacheState();
     global.__subscriptionEpisodeCoverCache.peek[episodeUrl] =
       'data:image/jpeg;base64,episode';
@@ -324,6 +365,7 @@ async function main() {
     assert.strictEqual(coldVm.baseSrc, podcastUrl);
     assert.strictEqual(coldVm.episodeSrc, episodeUrl);
     const coldImage = fakeImage(coldVm.requestToken, coldVm.episodeSrc, true);
+    attachImage(coldVm, 'episode', coldImage);
     coldVm.finishEpisodeImage(
       coldImage,
       coldVm.requestToken,
@@ -335,15 +377,20 @@ async function main() {
       false,
       'cold episode art must wait for the podcast fallback to decode'
     );
-    coldVm.finishBaseImage(
-      fakeImage(coldVm.requestToken, coldVm.baseSrc, true),
-      coldVm.requestToken,
-      coldVm.baseSrc
-    );
+    const coldBaseImage = fakeImage(coldVm.requestToken, coldVm.baseSrc, true);
+    attachImage(coldVm, 'base', coldBaseImage);
+    coldVm.finishBaseImage(coldBaseImage, coldVm.requestToken, coldVm.baseSrc);
     await flush();
     assert.strictEqual(coldVm.episodeReady, true);
     assert.strictEqual(coldVm.episodeAnimate, true);
     assert.strictEqual(coldVm.episodeSettled, false);
+    assert.deepStrictEqual(
+      global.__subscriptionEpisodeCoverCache.persisted,
+      [],
+      'decode must reveal the episode before canvas persistence runs'
+    );
+    assert.strictEqual(idle.pendingCount(), 2);
+    idle.runAll();
     assert.deepStrictEqual(
       global.__subscriptionEpisodeCoverCache.persisted
         .map(item => item.url)
@@ -423,7 +470,8 @@ async function main() {
       'A -> B must discard the old cache result'
     );
 
-    global.window = { matchMedia: () => ({ matches: true }) };
+    idle = createIdleHarness(true);
+    global.window = idle.window;
     global.__subscriptionEpisodeCoverCache = createCacheState();
     const reducedVm = createVm(component, {
       id: 'reduced-row',
@@ -437,20 +485,158 @@ async function main() {
       reducedVm.episodeSrc,
       true
     );
+    attachImage(reducedVm, 'episode', reducedImage);
     reducedVm.finishEpisodeImage(
       reducedImage,
       reducedVm.requestToken,
       reducedVm.episodeSrc
     );
     await flush();
+    const reducedBaseImage = fakeImage(
+      reducedVm.requestToken,
+      reducedVm.baseSrc,
+      true
+    );
+    attachImage(reducedVm, 'base', reducedBaseImage);
     reducedVm.finishBaseImage(
-      fakeImage(reducedVm.requestToken, reducedVm.baseSrc, true),
+      reducedBaseImage,
       reducedVm.requestToken,
       reducedVm.baseSrc
     );
     await flush();
     assert.strictEqual(reducedVm.episodeAnimate, false);
     assert.strictEqual(reducedVm.episodeSettled, true);
+
+    idle = createIdleHarness(false);
+    global.window = idle.window;
+    global.__subscriptionEpisodeCoverCache = createCacheState();
+    const resetVm = createVm(component, {
+      id: 'idle-reset-row',
+      episodeCoverUrl: episodeUrl,
+      podcastCoverUrl: podcastUrl,
+    });
+    resetVm.resetCover();
+    await flush();
+    const resetBaseImage = attachImage(
+      resetVm,
+      'base',
+      fakeImage(resetVm.requestToken, resetVm.baseSrc, true)
+    );
+    resetVm.finishBaseImage(
+      resetBaseImage,
+      resetVm.requestToken,
+      resetVm.baseSrc
+    );
+    await flush();
+    const resetTasks = resetVm._coverCacheTasks.slice();
+    const resetCallbacks = idle.captureCallbacks(
+      resetTasks.map(task => task.id)
+    );
+    assert.strictEqual(resetCallbacks.length, resetTasks.length);
+    resetVm.episode = {
+      id: 'idle-reset-next-row',
+      episodeCoverUrl: newEpisodeUrl,
+      podcastCoverUrl: podcastUrl,
+    };
+    resetVm.resetCover();
+    assert.strictEqual(
+      idle.captureCallbacks(resetTasks.map(task => task.id)).length,
+      0
+    );
+    resetCallbacks.forEach(callback => callback());
+    assert.deepStrictEqual(
+      global.__subscriptionEpisodeCoverCache.persisted,
+      [],
+      'a reset must invalidate an idle callback that races cancellation'
+    );
+
+    idle = createIdleHarness(false);
+    global.window = idle.window;
+    global.__subscriptionEpisodeCoverCache = createCacheState();
+    const inactiveVm = createVm(component, {
+      id: 'idle-inactive-row',
+      episodeCoverUrl: episodeUrl,
+      podcastCoverUrl: podcastUrl,
+    });
+    inactiveVm.resetCover();
+    await flush();
+    const inactiveBaseImage = attachImage(
+      inactiveVm,
+      'base',
+      fakeImage(inactiveVm.requestToken, inactiveVm.baseSrc, true)
+    );
+    inactiveVm.finishBaseImage(
+      inactiveBaseImage,
+      inactiveVm.requestToken,
+      inactiveVm.baseSrc
+    );
+    await flush();
+    const inactiveTasks = inactiveVm._coverCacheTasks.slice();
+    const inactiveCallbacks = idle.captureCallbacks(
+      inactiveTasks.map(task => task.id)
+    );
+    assert.deepStrictEqual(
+      inactiveTasks.map(task => task.layer),
+      ['base'],
+      'only the decoded base image may schedule idle persistence here'
+    );
+    assert.strictEqual(inactiveCallbacks.length, inactiveTasks.length);
+    const inactiveTask = inactiveTasks[0];
+    component.deactivated.call(inactiveVm);
+    assert.strictEqual(inactiveVm._coverActive, false);
+    assert.strictEqual(inactiveTask.canceled, true);
+    assert.ok(inactiveTasks.every(task => task.canceled));
+    assert.strictEqual(inactiveVm._coverCacheTasks.length, 0);
+    assert.strictEqual(
+      global.__subscriptionEpisodeCoverCache.persisted.length,
+      0,
+      'deactivation itself must not persist a pending cover'
+    );
+    inactiveCallbacks.forEach(callback => callback());
+    assert.deepStrictEqual(
+      global.__subscriptionEpisodeCoverCache.persisted,
+      [],
+      'deactivation must invalidate pending idle persistence'
+    );
+
+    idle = createIdleHarness(false);
+    global.window = idle.window;
+    global.__subscriptionEpisodeCoverCache = createCacheState();
+    const destroyedVm = createVm(component, {
+      id: 'idle-destroyed-row',
+      episodeCoverUrl: episodeUrl,
+      podcastCoverUrl: podcastUrl,
+    });
+    destroyedVm.resetCover();
+    await flush();
+    const destroyedBaseImage = attachImage(
+      destroyedVm,
+      'base',
+      fakeImage(destroyedVm.requestToken, destroyedVm.baseSrc, true)
+    );
+    destroyedVm.finishBaseImage(
+      destroyedBaseImage,
+      destroyedVm.requestToken,
+      destroyedVm.baseSrc
+    );
+    await flush();
+    const destroyedTask = destroyedVm._coverCacheTasks[0];
+    const destroyedCallbacks = idle.captureCallbacks([destroyedTask.id]);
+    component.beforeDestroy.call(destroyedVm);
+    assert.strictEqual(destroyedVm._coverActive, false);
+    assert.strictEqual(destroyedTask.canceled, true);
+    assert.strictEqual(destroyedVm._coverCacheTasks.length, 0);
+    assert.strictEqual(
+      global.__subscriptionEpisodeCoverCache.persisted.length,
+      0,
+      'destruction itself must not persist a pending cover'
+    );
+    destroyedCallbacks.forEach(callback => callback());
+    assert.deepStrictEqual(
+      global.__subscriptionEpisodeCoverCache.persisted,
+      [],
+      'destruction must invalidate pending idle persistence'
+    );
 
     const componentSource = fs.readFileSync(
       path.join(root, 'src/components/podcast/SubscriptionEpisodeCover.vue'),
@@ -461,6 +647,10 @@ async function main() {
     assert.ok(!componentSource.includes('-webkit-user-drag: none'));
     assert.ok(!componentSource.includes('transition: all'));
     assert.ok(componentSource.includes('visibility: hidden'));
+    assert.ok(componentSource.includes('requestIdleCallback'));
+    assert.ok(componentSource.includes('setTimeout(callback, 0)'));
+    assert.ok(componentSource.includes('pointer-events: none'));
+    assert.ok(componentSource.includes('pointer-events: auto'));
     assert.ok(
       componentSource.includes(
         'transition: opacity 140ms cubic-bezier(0.22, 1, 0.36, 1)'
