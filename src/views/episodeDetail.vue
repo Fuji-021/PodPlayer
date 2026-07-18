@@ -168,6 +168,7 @@ import {
   removeDownload,
 } from '@/utils/podcast/downloads';
 import { sanitizeHtml } from '@/utils/podcast/sanitizeHtml';
+import { normalizeShownotesReaderMedia } from '@/utils/podcast/shownotesReaderMedia';
 import { getCoverColor } from '@/utils/podcast/coverColor';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import SvgIcon from '@/components/SvgIcon.vue';
@@ -219,6 +220,7 @@ export default {
         const div = document.createElement('div');
         div.innerHTML = html;
         this.linkifyTimestamps(div);
+        normalizeShownotesReaderMedia(div);
         return div.innerHTML;
       } catch (e) {
         return html; // 解析异常兜底用原文
@@ -1011,6 +1013,39 @@ export default {
       padding: 1px 6px;
       border-radius: 4px;
       font-size: 0.92em;
+    }
+    img.pp-shownotes-reader-media--block {
+      display: block;
+      width: auto;
+      height: auto;
+      max-width: min(760px, 100%);
+      max-height: min(58vh, 620px);
+      margin: 18px 0;
+      object-fit: contain;
+      object-position: left center;
+    }
+    a.pp-shownotes-reader-media-link {
+      display: block;
+      width: fit-content;
+      max-width: 100%;
+      margin: 18px 0;
+
+      > img.pp-shownotes-reader-media--block {
+        margin: 0;
+      }
+    }
+    .pp-shownotes-reader-media-flow {
+      margin: 18px 0;
+
+      > .pp-shownotes-reader-media--block {
+        margin: 0;
+      }
+      > .pp-shownotes-reader-media--block + .pp-shownotes-reader-media--block {
+        margin-top: 18px;
+      }
+      figcaption {
+        margin-top: 8px;
+      }
     }
   }
   .empty {

@@ -32,6 +32,7 @@
     "test:subscription-updates": "node scripts/subscription_updates_rules_smoke.js && node scripts/subscription_updates_component_contract_smoke.js",
     "test:subscription-rail": "node scripts/subscription_program_rail_contract_smoke.js",
     "test:selection-intent": "node scripts/selection_intent_smoke.js",
+    "test:shownotes-reader": "node scripts/shownotes_reader_smoke.js",
     "prettier": "npx prettier --write ./src",
     "netease_api:run": "npx @neteaseapireborn/api"
   },
