@@ -251,6 +251,7 @@ async function buildSnapshot(now, version) {
             totalSec: Number(stats.totalSec) || 0,
           }
         : null,
+      listenWallSec: Number(stats && stats.totalPlayWallSec) || 0,
       transcriptReady: !!(transcript && transcript.status === 'done'),
       downloaded: !!(
         download &&

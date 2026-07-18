@@ -29,7 +29,7 @@
         @focusin="handleRailFocusIn"
         @focusout="handleRailFocusOut"
         @wheel="handleRailWheel"
-        @pointerdown="interruptRailMotion"
+        @pointerdown="handleRailPointerDown"
         @scroll.passive="onScroll"
       >
         <button
@@ -175,6 +175,7 @@ export default {
     activateRail() {
       if (this._railActive) return;
       this._railActive = true;
+      this.setRailInputMode(null);
       this.$nextTick(() => {
         if (!this._railActive || this._destroyed) return;
         if (typeof ResizeObserver !== 'undefined') {
@@ -205,7 +206,7 @@ export default {
       this._hoverHaloTarget = null;
       this._hoverHaloPodcast = null;
       this._selectedHaloTarget = null;
-      this.clearPointerFocus();
+      this.releaseRailFocus({ blur: true });
       this.stopAnimation();
       this.finishDrag();
       this.cancelNativeRailFrame();
@@ -227,55 +228,52 @@ export default {
       this.$emit('select', podcastId);
     },
     prepareRailItemFocus(event) {
-      this.focusRailItem(event && event.currentTarget, { source: 'pointer' });
+      this.setRailInputMode('pointer');
+      this.focusRailItem(event && event.currentTarget);
     },
-    handleRailKeyboardInput() {
-      this.clearPointerFocus();
+    handleRailPointerDown() {
+      this.setRailInputMode('pointer');
+      this.interruptRailMotion();
     },
-    markPointerFocus(target) {
-      if (!target) return;
-      this.cancelPointerFocusClear();
+    handleRailKeyboardInput(event) {
+      const key = event && event.key;
+      if (['Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) {
+        this.setRailInputMode('keyboard');
+      }
+    },
+    setRailInputMode(mode) {
+      const inputMode = mode === 'pointer' || mode === 'keyboard' ? mode : '';
       const root = this.$refs.root;
       if (root && root.setAttribute) {
-        root.setAttribute('data-rail-focus-origin', 'pointer');
+        if (inputMode) root.setAttribute('data-rail-input-mode', inputMode);
+        else root.removeAttribute('data-rail-input-mode');
       }
-      this._pointerFocusTarget = target;
+      this._railInputMode = inputMode;
     },
-    cancelPointerFocusClear() {
-      if (this._pointerFocusClearRaf) {
-        cancelAnimationFrame(this._pointerFocusClearRaf);
-        this._pointerFocusClearRaf = null;
+    cancelRailFocusClear() {
+      if (this._railFocusClearRaf) {
+        cancelAnimationFrame(this._railFocusClearRaf);
+        this._railFocusClearRaf = null;
       }
-    },
-    clearPointerFocus() {
-      this.cancelPointerFocusClear();
-      const root = this.$refs.root;
-      if (root && root.removeAttribute) {
-        root.removeAttribute('data-rail-focus-origin');
-      }
-      this._pointerFocusTarget = null;
     },
     handleRailFocusIn(event) {
-      const target = event && event.target;
-      if (target === this._pointerFocusTarget) {
-        this.cancelPointerFocusClear();
-        return;
-      }
-      this.clearPointerFocus();
+      if (!event || !event.target) return;
+      this.cancelRailFocusClear();
+      if (this._railInputMode !== 'pointer') this.setRailInputMode('keyboard');
     },
-    schedulePointerFocusClear() {
-      this.cancelPointerFocusClear();
+    scheduleRailFocusClear() {
+      this.cancelRailFocusClear();
       if (typeof requestAnimationFrame !== 'function') {
-        this.clearPointerFocus();
+        this.setRailInputMode(null);
         return;
       }
-      this._pointerFocusClearRaf = requestAnimationFrame(() => {
-        this._pointerFocusClearRaf = null;
+      this._railFocusClearRaf = requestAnimationFrame(() => {
+        this._railFocusClearRaf = null;
         const viewport = this.$refs.viewport;
         const activeElement =
           typeof document !== 'undefined' ? document.activeElement : null;
         if (!viewport || !activeElement || !viewport.contains(activeElement)) {
-          this.clearPointerFocus();
+          this.setRailInputMode(null);
         }
       });
     },
@@ -283,13 +281,27 @@ export default {
       const viewport = this.$refs.viewport;
       const nextTarget = event && event.relatedTarget;
       if (!viewport || !nextTarget || !viewport.contains(nextTarget)) {
-        this.schedulePointerFocusClear();
+        this.scheduleRailFocusClear();
       }
     },
-    focusRailItem(target, { source = 'keyboard' } = {}) {
+    releaseRailFocus({ blur = false } = {}) {
+      this.cancelRailFocusClear();
+      const viewport = this.$refs.viewport;
+      const activeElement =
+        typeof document !== 'undefined' ? document.activeElement : null;
+      if (
+        blur &&
+        viewport &&
+        activeElement &&
+        viewport.contains(activeElement) &&
+        typeof activeElement.blur === 'function'
+      ) {
+        activeElement.blur();
+      }
+      this.setRailInputMode(null);
+    },
+    focusRailItem(target) {
       if (!target || typeof target.focus !== 'function') return;
-      if (source === 'pointer') this.markPointerFocus(target);
-      else this.clearPointerFocus();
       if (
         typeof document !== 'undefined' &&
         document.activeElement === target
@@ -635,6 +647,7 @@ export default {
       const target = last
         ? items[items.length - 1]
         : this.$el.querySelector('.rail-all');
+      this.setRailInputMode('keyboard');
       this.focusRailItem(target);
     },
     moveRailFocus(direction) {
@@ -649,6 +662,7 @@ export default {
         Math.min(items.length - 1, base + (direction < 0 ? -1 : 1))
       );
       const target = items[nextIndex];
+      this.setRailInputMode('keyboard');
       this.focusRailItem(target);
     },
     startDrag(event) {
@@ -927,7 +941,9 @@ export default {
   }
 }
 
-.program-rail[data-rail-focus-origin='pointer'] .rail-item:focus-visible {
+.program-rail:not([data-rail-input-mode='keyboard']) .rail-item:focus-visible,
+.program-rail:not([data-rail-input-mode='keyboard'])
+  .rail-viewport:focus-visible {
   outline: none;
 }
 

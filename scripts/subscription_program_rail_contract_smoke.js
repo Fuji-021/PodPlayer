@@ -160,6 +160,12 @@ function buildRailHarness(
         this.focusOptions = options || null;
         global.document.activeElement = this;
       },
+      blur() {
+        this.blurCalls = (this.blurCalls || 0) + 1;
+        if (global.document.activeElement === this) {
+          global.document.activeElement = null;
+        }
+      },
       setAttribute(name, value) {
         attributes[name] = String(value);
       },
@@ -410,9 +416,9 @@ async function main() {
       'pointer preparation should focus a rail item exactly once'
     );
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      root.getAttribute('data-rail-input-mode'),
       'pointer',
-      'pointer focus should be recorded on the stable rail root'
+      'pointer input must be recorded on the stable rail root'
     );
     vm.select('C', { currentTarget: cItem });
     assert.strictEqual(
@@ -422,17 +428,17 @@ async function main() {
     );
     vm.handleRailFocusOut({ relatedTarget: allItem });
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      root.getAttribute('data-rail-input-mode'),
       'pointer',
-      'moving focus within the rail must retain the pointer origin'
+      'moving focus within the rail must retain pointer input mode'
     );
     vm.handleRailFocusOut({ relatedTarget: null });
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      root.getAttribute('data-rail-input-mode'),
       'pointer',
-      'a transient null relatedTarget must not clear pointer origin before focus settles'
+      'a transient null relatedTarget must not clear input mode before focus settles'
     );
-    const returnFocusFrame = vm._pointerFocusClearRaf;
+    const returnFocusFrame = vm._railFocusClearRaf;
     assert.ok(returnFocusFrame, 'transient focusout must schedule a settle frame');
     global.document.activeElement = cItem;
     assert.ok(
@@ -440,47 +446,66 @@ async function main() {
       'pointer focus settle frame should run'
     );
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      root.getAttribute('data-rail-input-mode'),
       'pointer',
-      'focus returning to the rail in the same frame must keep the pointer origin'
+      'focus returning to the rail in the same frame must keep pointer mode'
     );
     global.document.activeElement = {};
     vm.handleRailFocusOut({ relatedTarget: null });
-    const outsideFocusFrame = vm._pointerFocusClearRaf;
+    const outsideFocusFrame = vm._railFocusClearRaf;
     assert.ok(
       raf.flushId(outsideFocusFrame, 32),
       'outside focus settle frame should run'
     );
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      root.getAttribute('data-rail-input-mode'),
       null,
-      'leaving the rail after focus settles must clear the pointer focus origin'
+      'leaving the rail after focus settles must clear input mode'
     );
     vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
     vm.handleRailFocusIn({ target: cItem });
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      root.getAttribute('data-rail-input-mode'),
       'pointer',
-      'the pointer-origin focus must survive its own focusin event'
+      'the pointer focus must survive its own focusin event'
     );
-    vm.handleRailKeyboardInput();
+    vm.handleRailKeyboardInput({ key: 'ArrowRight' });
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
-      null,
-      'keyboard input inside the rail must restore its visible focus outline'
+      root.getAttribute('data-rail-input-mode'),
+      'keyboard',
+      'keyboard input inside the rail must enable its visible focus outline'
     );
-    vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
     vm.handleRailFocusIn({ target: allItem });
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      root.getAttribute('data-rail-input-mode'),
+      'keyboard',
+      'keyboard focus entering another rail item must retain its outline'
+    );
+    vm.handleRailPointerDown();
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
+      'pointer',
+      'a later pointer interaction must replace stale keyboard focus mode'
+    );
+    global.document.activeElement = cItem;
+    vm.releaseRailFocus({ blur: true });
+    assert.strictEqual(cItem.blurCalls, 1, 'deactivation must blur rail focus');
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
       null,
-      'keyboard focus entering another rail item must restore its outline'
+      'deactivation must not carry pointer focus into keep-alive activation'
+    );
+    vm.handleRailFocusIn({ target: viewport });
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
+      'keyboard',
+      'focus entering an inactive-mode viewport must be keyboard-visible'
     );
     assert.ok(
       source.includes(
-        ".program-rail[data-rail-focus-origin='pointer'] .rail-item:focus-visible"
+        ".program-rail:not([data-rail-input-mode='keyboard']) .rail-item:focus-visible"
       ),
-      'only a rail-level pointer origin may suppress the local outline'
+      'only keyboard input mode may expose the local focus outline'
     );
     assert.ok(
       source.includes('&:focus-visible'),
