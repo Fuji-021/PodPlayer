@@ -1035,14 +1035,8 @@ export default {
       }
     }
     .pp-shownotes-reader-media-flow {
-      margin: 18px 0;
-
-      > .pp-shownotes-reader-media--block {
-        margin: 0;
-      }
-      > .pp-shownotes-reader-media--block + .pp-shownotes-reader-media--block {
-        margin-top: 18px;
-      }
+      display: flow-root;
+      margin: 0;
       figcaption {
         margin-top: 8px;
       }

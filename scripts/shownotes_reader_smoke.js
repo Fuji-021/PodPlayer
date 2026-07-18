@@ -73,6 +73,14 @@ async function main() {
       <figure id="one-figure"><img id="figure-one" src="https://cdn.example.test/figure-one.jpg"/><figcaption id="figure-caption">Caption <img id="caption-icon" src="https://cdn.example.test/caption-icon.jpg"/> <a id="timestamp" class="ts-seek" data-sec="65">1:05</a></figcaption></figure>
       <figure id="many-figure"><img id="figure-many-a" src="https://cdn.example.test/figure-many-a.jpg"/><br/><a id="figure-many-link" href="https://example.test/gallery"><img id="figure-many-b" src="https://cdn.example.test/figure-many-b.jpg"/></a><img id="figure-many-c" src="https://cdn.example.test/figure-many-c.jpg"/><figcaption>Gallery caption</figcaption></figure>
       <figure id="nested-figure"><p id="nested-figure-flow"><img id="nested-figure-a" src="https://cdn.example.test/nested-a.jpg"/><img id="nested-figure-b" src="https://cdn.example.test/nested-b.jpg"/></p><figcaption>Nested gallery</figcaption></figure>
+      <!-- Deidentified structural fixture from the No.210 reader input: most
+           independent images are direct article children; one is a figure. -->
+      <img id="no210-root-a" src="https://cdn.example.test/root-a.jpg"/>
+      <br/>
+      <a id="no210-root-link" href="https://example.test/reference"><span><img id="no210-root-b" src="https://cdn.example.test/root-b.jpg" draggable="true"/></span></a>
+      <figure id="no210-root-figure"><img id="no210-root-figure-image" src="https://cdn.example.test/root-figure.jpg"/><figcaption>Figure caption</figcaption></figure>
+      <p id="wrapped-root"><span><a id="wrapped-root-link" href="https://example.test/wrapped"><img id="wrapped-root-image" src="https://cdn.example.test/wrapped.jpg"/></a></span></p>
+      <p id="no210-inline">正文中的 <img id="no210-inline-image" src="https://cdn.example.test/inline.jpg"/> 小图不应改变排版。</p>
       <p id="bad-wrap"><img id="bad-image" alt="missing source"/></p>
     `);
 
@@ -134,6 +142,29 @@ async function main() {
     assert.strictEqual(
       getById(notes, 'figure-caption').textContent.replace(/\s+/g, ' ').trim(),
       'Caption 1:05'
+    );
+
+    [
+      'no210-root-a',
+      'no210-root-b',
+      'no210-root-figure-image',
+      'wrapped-root-image',
+    ].forEach(id => assertReaderMedia(notes, id));
+    assert.ok(
+      !hasClass(notes, FLOW_CLASS),
+      'mixed reader roots must not turn all shownotes into a media flow'
+    );
+    assert.ok(hasClass(getById(notes, 'no210-root-link'), LINK_CLASS));
+    assert.ok(hasClass(getById(notes, 'no210-root-figure'), FIGURE_CLASS));
+    assert.ok(hasClass(getById(notes, 'wrapped-root'), FLOW_CLASS));
+    assert.ok(hasClass(getById(notes, 'wrapped-root-link'), LINK_CLASS));
+    assert.strictEqual(
+      getById(notes, 'no210-root-b').getAttribute('draggable'),
+      'true'
+    );
+    assert.ok(
+      !hasClass(getById(notes, 'no210-inline-image'), MEDIA_CLASS),
+      'inline prose images must remain inline even beside independent media'
     );
 
     const badImage = getById(notes, 'bad-image');

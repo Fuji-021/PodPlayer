@@ -4,6 +4,7 @@ const LINK_CLASS = 'pp-shownotes-reader-media-link';
 const FLOW_CLASS = 'pp-shownotes-reader-media-flow';
 const FIGURE_CLASS = 'pp-shownotes-reader-media-figure';
 const MEDIA_CONTAINER_TAGS = new Set(['P', 'DIV', 'LI', 'BLOCKQUOTE']);
+const TRANSPARENT_MEDIA_TAGS = new Set(['A', 'SPAN', ...MEDIA_CONTAINER_TAGS]);
 
 function getTagName(node) {
   return String((node && node.tagName) || '').toUpperCase();
@@ -48,31 +49,69 @@ function isRenderableImage(node) {
 
 function getMediaImage(node) {
   if (isRenderableImage(node)) return node;
-  if (getTagName(node) !== 'A') return null;
+  if (!TRANSPARENT_MEDIA_TAGS.has(getTagName(node))) return null;
 
   const children = getMeaningfulChildren(node);
-  return children.length === 1 && isRenderableImage(children[0])
-    ? children[0]
-    : null;
+  return children.length === 1 ? getMediaImage(children[0]) : null;
 }
 
-function getLinkForImage(image) {
-  const parent = image && image.parentNode;
-  return getMediaImage(parent) === image && getTagName(parent) === 'A'
-    ? parent
-    : null;
+function getLinkForImage(image, root) {
+  let node = image && image.parentNode;
+  while (node && node !== root) {
+    if (getTagName(node) === 'A' && getMediaImage(node) === image) {
+      return node;
+    }
+    node = node.parentNode;
+  }
+  return null;
+}
+
+function isMediaOnlyStructure(node) {
+  if (isRenderableImage(node)) return true;
+  if (!TRANSPARENT_MEDIA_TAGS.has(getTagName(node))) return false;
+  const children = getMeaningfulChildren(node);
+  return (
+    children.length > 0 && children.every(child => isMediaOnlyStructure(child))
+  );
 }
 
 function isMediaOnlyContainer(node) {
-  const children = getMeaningfulChildren(node);
-  return children.length > 0 && children.every(child => !!getMediaImage(child));
+  return (
+    MEDIA_CONTAINER_TAGS.has(getTagName(node)) && isMediaOnlyStructure(node)
+  );
 }
 
 function isReaderMediaFigure(figure) {
   const children = getMeaningfulChildren(figure).filter(
     child => getTagName(child) !== 'FIGCAPTION'
   );
-  return children.length > 0 && children.every(child => !!getMediaImage(child));
+  return children.length > 0 && children.every(isMediaOnlyStructure);
+}
+
+function isIndependentReaderMedia(image, root) {
+  const figure = findFigureAncestor(image, root);
+  if (figure) {
+    return !isInsideFigureCaption(image, figure) && isReaderMediaFigure(figure);
+  }
+
+  let node = image;
+  while (node && node !== root) {
+    const parent = node.parentNode;
+    if (parent === root) return true;
+    if (!parent || !TRANSPARENT_MEDIA_TAGS.has(getTagName(parent))) {
+      return false;
+    }
+    if (
+      !isMediaOnlyContainer(parent) &&
+      getTagName(parent) !== 'SPAN' &&
+      getTagName(parent) !== 'A'
+    ) {
+      return false;
+    }
+    if (!isMediaOnlyStructure(parent)) return false;
+    node = parent;
+  }
+  return false;
 }
 
 function findFigureAncestor(image, root) {
@@ -97,36 +136,37 @@ function getReaderMediaContainer(image, root) {
   const figure = findFigureAncestor(image, root);
   if (figure && isInsideFigureCaption(image, figure)) return null;
 
-  let node = getLinkForImage(image) || image;
-  node = node && node.parentNode;
+  let node = image;
+  let flowContainer = null;
   while (node && node !== root) {
-    if (getTagName(node) === 'FIGURE' && isReaderMediaFigure(node)) {
-      return node;
+    const parent = node.parentNode;
+    if (!parent) return flowContainer;
+    if (getTagName(parent) === 'FIGURE') {
+      return flowContainer || (isReaderMediaFigure(parent) ? parent : null);
     }
-    if (MEDIA_CONTAINER_TAGS.has(getTagName(node))) {
-      return isMediaOnlyContainer(node) ? node : null;
+    if (parent === root) return flowContainer;
+    if (!TRANSPARENT_MEDIA_TAGS.has(getTagName(parent))) return null;
+    if (!isMediaOnlyStructure(parent)) return null;
+    if (MEDIA_CONTAINER_TAGS.has(getTagName(parent))) {
+      if (!isMediaOnlyContainer(parent)) return null;
+      flowContainer = parent;
     }
-    node = node.parentNode;
+    node = parent;
   }
-
-  const rootChildren = getMeaningfulChildren(root);
-  return rootChildren.length > 0 &&
-    rootChildren.every(child => !!getMediaImage(child))
-    ? root
-    : null;
+  return flowContainer;
 }
 
 function markReaderMediaImage(image, root) {
   if (!isRenderableImage(image)) return;
+  if (!isIndependentReaderMedia(image, root)) return;
 
   const container = getReaderMediaContainer(image, root);
-  if (!container) return;
 
   addClass(image, MEDIA_CLASS);
   addClass(image, BLOCK_CLASS);
   if (!image.getAttribute('decoding')) image.setAttribute('decoding', 'async');
 
-  const link = getLinkForImage(image);
+  const link = getLinkForImage(image, root);
   if (link) {
     addClass(link, LINK_CLASS);
     addClass(link, BLOCK_CLASS);
