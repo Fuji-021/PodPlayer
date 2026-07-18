@@ -504,29 +504,94 @@ async function main() {
       null,
       'unknown focus restoration must not be guessed as keyboard input'
     );
-    vm.bindRailKeyboardIntent();
+    vm.bindRailInputTracking();
+    assert.ok(
+      listeners.has('keydown') &&
+        listeners.has('pointerdown') &&
+        listeners.has('wheel'),
+      'activation must register paired document capture input listeners'
+    );
+
+    // Real failure path: the all item owns keyboard focus, selection changes to
+    // C, then page-level wheel input happens away from the rail before it is
+    // scrolled back into view. Do not clear the mode manually in this test.
+    global.document.activeElement = allItem;
+    vm.selectedPodcastId = '';
+    listeners.get('keydown')({ key: 'Tab' });
+    vm.handleRailFocusIn({ target: allItem });
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
+      'keyboard',
+      'an explicit Tab intent must make the all item keyboard-visible'
+    );
+    vm.selectedPodcastId = 'C';
+    const allBlurBeforeWheel = allItem.blurCalls || 0;
+    listeners.get('wheel')({ target: {} });
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
+      'pointer',
+      'page-level wheel input must clear residual keyboard mode'
+    );
+    assert.strictEqual(
+      allItem.blurCalls,
+      allBlurBeforeWheel + 1,
+      'page-level wheel input must blur a stale all-item focus after selection changes'
+    );
+    global.document.activeElement = allItem;
+    vm.handleRailFocusIn({ target: allItem });
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
+      'pointer',
+      'scroll-return focus on a no-longer-selected all item must stay non-keyboard'
+    );
+
+    const allBlurBeforePointer = allItem.blurCalls || 0;
+    vm.markRailKeyboardInput();
+    listeners.get('pointerdown')({ target: {} });
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
+      'pointer',
+      'page-level pointer input must also clear residual keyboard mode'
+    );
+    assert.strictEqual(
+      allItem.blurCalls,
+      allBlurBeforePointer + 1,
+      'page-level pointer input must blur a stale all-item focus'
+    );
+
+    global.document.activeElement = cItem;
+    listeners.get('keydown')({ key: 'ArrowRight' });
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
+      'keyboard',
+      'document capture must preserve keyboard focus for rail arrow navigation'
+    );
     listeners.get('keydown')({ key: 'Tab' });
     vm.handleRailFocusIn({ target: viewport });
     assert.strictEqual(
       root.getAttribute('data-rail-input-mode'),
       'keyboard',
-      'an explicit Tab intent must make focus entering the rail keyboard-visible'
+      'an explicit Tab intent must keep viewport focus keyboard-visible'
     );
-    vm.handleRailPointerDown();
-    vm.setRailInputMode(null);
-    vm.selectedPodcastId = 'C';
-    global.document.activeElement = allItem;
-    vm.handleRailFocusIn({ target: allItem });
+
+    vm.deactivateRail();
     assert.strictEqual(
       root.getAttribute('data-rail-input-mode'),
       null,
-      'scroll-return focus on a no-longer-selected all item must not create a keyboard outline'
+      'keep-alive deactivation must clear the input mode'
     );
-    vm.unbindRailKeyboardIntent();
-    assert.strictEqual(
-      listeners.has('keydown'),
-      false,
-      'deactivation cleanup must remove the document Tab intent listener'
+    assert.ok(
+      !listeners.has('keydown') &&
+        !listeners.has('pointerdown') &&
+        !listeners.has('wheel'),
+      'keep-alive deactivation must release every document input listener'
+    );
+    vm.activateRail();
+    assert.ok(
+      listeners.has('keydown') &&
+        listeners.has('pointerdown') &&
+        listeners.has('wheel'),
+      'keep-alive activation must register one fresh input listener set'
     );
     assert.ok(
       source.includes(
@@ -689,8 +754,8 @@ async function main() {
     vm.finishDrag({ pointerId: 7 });
     assert.strictEqual(
       listeners.size,
-      0,
-      'drag cleanup must remove document listeners'
+      3,
+      'drag cleanup must remove only its temporary listeners and retain the active rail input listeners'
     );
 
     // Resize changes geometry only at the explicit measurement boundary. First
@@ -748,6 +813,12 @@ async function main() {
       hoverItem.halo.style.backgroundImage,
       '',
       'unselected hover must release its halo image after pointer leave'
+    );
+    vm.deactivateRail();
+    assert.strictEqual(
+      listeners.size,
+      0,
+      'final keep-alive cleanup must release every document listener'
     );
 
     console.log('subscription program rail component contract smoke passed');
