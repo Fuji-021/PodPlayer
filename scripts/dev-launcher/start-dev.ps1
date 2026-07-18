@@ -23,6 +23,8 @@ try {
       branch = $source.actualBranch
       head = $source.actualHead
       workingTreeClean = $source.workingTreeClean
+      requiredAncestors = @($source.requiredAncestors)
+      requiredAncestorChecks = @($source.requiredAncestorChecks)
       profile = $script:DevProfile
       ports = $script:DevPorts
     } | ConvertTo-Json -Compress
@@ -38,6 +40,7 @@ try {
   Write-Host " SOURCE ROOT: $($source.sourceRoot)"
   Write-Host " BRANCH:      $($source.actualBranch)"
   Write-Host " HEAD:        $($source.actualHead)"
+  Write-Host " ANCESTORS:   $((@($source.requiredAncestors) | ForEach-Object { $_.Substring(0, 7) }) -join ', ')"
   Write-Host " PROFILE:     $script:DevProfile"
   Write-Host " USER DATA:   $script:DevUserData"
   Write-Host " PORTS:       webpack=20201 neapi=10755 express=27233"
@@ -93,6 +96,8 @@ try {
     actualBranch = $source.actualBranch
     actualHead = $source.actualHead
     workingTreeClean = $source.workingTreeClean
+    requiredAncestors = @($source.requiredAncestors)
+    requiredAncestorChecks = @($source.requiredAncestorChecks)
     profile = $script:DevProfile
     userData = $script:DevUserData
     ports = [ordered]@{ webpack = 20201; neapi = 10755; express = 27233 }

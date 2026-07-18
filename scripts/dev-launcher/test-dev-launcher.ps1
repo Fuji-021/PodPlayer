@@ -32,6 +32,7 @@ function New-SelectionObject {
     branch = Invoke-LauncherGit -Repository $normalizedRoot -Arguments @('branch', '--show-current')
     expectedHead = Invoke-LauncherGit -Repository $normalizedRoot -Arguments @('rev-parse', 'HEAD')
     requireClean = $true
+    requiredAncestors = @()
     selectedAt = (Get-Date).ToUniversalTime().ToString('o')
     selectedBy = 'launcher-smoke'
     purpose = 'fail-closed gate smoke'
@@ -65,6 +66,32 @@ try {
   Write-LauncherJsonAtomically -Path $wrongHeadConfig -Value $wrongHead
   $wrongHeadResult = Invoke-DryRun -ConfigPath $wrongHeadConfig
   Assert-TestResult -Condition ($wrongHeadResult.exitCode -ne 0) -Message 'Wrong expectedHead must fail closed.'
+
+  $missingAncestorsField = [ordered]@{} + $baseSelection
+  $missingAncestorsField.Remove('requiredAncestors')
+  $missingAncestorsFieldConfig = Join-Path $temporaryDirectory 'missing-ancestors-field.json'
+  Write-LauncherJsonAtomically -Path $missingAncestorsFieldConfig -Value $missingAncestorsField
+  $missingAncestorsFieldResult = Invoke-DryRun -ConfigPath $missingAncestorsFieldConfig
+  Assert-TestResult -Condition ($missingAncestorsFieldResult.exitCode -ne 0) -Message 'Missing requiredAncestors field must fail closed.'
+
+  $presentAncestor = [ordered]@{} + $baseSelection
+  $presentAncestor.requiredAncestors = @($baseSelection.expectedHead)
+  $presentAncestorConfig = Join-Path $temporaryDirectory 'present-ancestor.json'
+  Write-LauncherJsonAtomically -Path $presentAncestorConfig -Value $presentAncestor
+  $presentAncestorResult = Invoke-DryRun -ConfigPath $presentAncestorConfig
+  Assert-TestResult -Condition ($presentAncestorResult.exitCode -eq 0) -Message 'A selected HEAD must satisfy itself as a required ancestor.'
+  Assert-TestResult -Condition ($presentAncestorResult.output -match 'requiredAncestorChecks') -Message 'Successful dry-run must expose required ancestor receipt data.'
+
+  $nonAncestorOutput = Invoke-LauncherGit -Repository ([string]$baseSelection.canonicalRepo) -Arguments @('rev-list', '--all', '--not', $baseSelection.expectedHead)
+  $outsideAncestor = ($nonAncestorOutput -split "`r?`n" | Where-Object { $_ } | Select-Object -First 1)
+  Assert-TestResult -Condition (-not [string]::IsNullOrWhiteSpace($outsideAncestor)) -Message 'Fixture repository must provide a known non-ancestor commit.'
+  $missingAncestor = [ordered]@{} + $baseSelection
+  $missingAncestor.requiredAncestors = @($outsideAncestor)
+  $missingAncestorConfig = Join-Path $temporaryDirectory 'missing-ancestor.json'
+  Write-LauncherJsonAtomically -Path $missingAncestorConfig -Value $missingAncestor
+  $missingAncestorResult = Invoke-DryRun -ConfigPath $missingAncestorConfig
+  Assert-TestResult -Condition ($missingAncestorResult.exitCode -ne 0) -Message 'Correct path, branch, and HEAD with a missing feature ancestor must fail closed.'
+  Assert-TestResult -Condition ($missingAncestorResult.output -match 'missing required ancestor') -Message 'Missing feature ancestor failure must identify the failed gate.'
 
   $correct = Invoke-DryRun -ConfigPath $correctConfig
   Assert-TestResult -Condition ($correct.exitCode -eq 0) -Message 'Correct clean configuration must pass the gates.'

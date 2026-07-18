@@ -4,6 +4,7 @@
   "branch": null,
   "expectedHead": null,
   "requireClean": true,
+  "requiredAncestors": [],
   "selectedAt": null,
   "selectedBy": null,
   "purpose": "No source selected. Run select-dev-source.ps1 first."

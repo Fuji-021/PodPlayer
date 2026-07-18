@@ -9,7 +9,8 @@ worktree can change deliberately.
 
 Run the deployed `select-dev-source.ps1` with an explicit worktree path. It
 records the canonical Git repository, source root, branch, full expected HEAD,
-cleanliness requirement, selector identity, timestamp, and verification purpose.
+cleanliness requirement, required feature ancestors, selector identity, timestamp,
+and verification purpose.
 
 The selector does not choose a branch by recency, current directory, or a
 directory-name heuristic. It verifies the source appears in Git's registered
@@ -20,8 +21,11 @@ worktree list before writing `selected-source.json`.
 `start-dev.ps1` validates the deployed launcher manifest and then revalidates
 the selected worktree on every launch. A missing configuration, stale branch,
 HEAD mismatch, dirty worktree when `requireClean=true`, absent project entry,
-or unregistered worktree is a fail-closed error. It never falls back to the
-main repository.
+or unregistered worktree is a fail-closed error. Each configured
+`requiredAncestors` SHA is also checked with `git merge-base --is-ancestor`
+against the selected HEAD; a source at the right path and SHA but missing an
+integrated feature commit is rejected. It never falls back to the main
+repository.
 
 Only after all gates pass does it clear the Dev profile ports `20201`, `10755`,
 and `27233`, then launch `yarn electron:serve` with `PODPLAYER_PROFILE=dev`.
@@ -42,8 +46,9 @@ unknown reparse point and never installs or upgrades dependencies.
 ## Audit receipt
 
 Successful starts write `runtime-receipt.json` from the actual Git validation,
-profile, process, and port results. GUI conclusions must cite this receipt; a
-successful window launch alone is not proof of which worktree ran.
+required-ancestor results, profile, process, and port results. GUI conclusions
+must cite this receipt; a successful window launch alone is not proof of which
+worktree ran.
 
 After a verified old Dev instance has stopped and the Dev ports are free, its
 receipt is atomically moved to the bounded `runtime-receipt.previous.json`.

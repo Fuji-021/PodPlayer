@@ -1,4 +1,6 @@
 {
   "status": "not-started",
+  "requiredAncestors": [],
+  "requiredAncestorChecks": [],
   "message": "No verified Dev runtime has been launched yet."
 }

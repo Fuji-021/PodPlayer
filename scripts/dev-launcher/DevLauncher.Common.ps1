@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-$script:DevLauncherVersion = '1.0.5'
+$script:DevLauncherVersion = '1.0.6'
 $script:DevProfile = 'dev'
 $script:DevPorts = @(20201, 10755, 27233)
 $script:DevUserData = 'D:\MyYesPlayerMusic\PodPlayerData\PodPlayerDev'
@@ -295,10 +295,41 @@ function Get-LauncherWorkingTreeStatus {
   return Invoke-LauncherGit -Repository $Repository -Arguments @('status', '--porcelain=v1', '--untracked-files=normal')
 }
 
+function Test-LauncherRequiredAncestors {
+  param(
+    [Parameter(Mandatory = $true)][string]$Repository,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$RequiredAncestors
+  )
+
+  $safeRepository = $Repository -replace '\\', '/'
+  $checks = New-Object System.Collections.Generic.List[object]
+  foreach ($ancestor in @($RequiredAncestors)) {
+    $sha = [string]$ancestor
+    if ([string]::IsNullOrWhiteSpace($sha) -or $sha -notmatch '^[0-9a-fA-F]{40}$') {
+      Write-LauncherFailure "Selected source requiredAncestors contains an invalid full Git SHA: $sha"
+    }
+
+    $output = & git -C $Repository -c "safe.directory=$safeRepository" merge-base --is-ancestor $sha HEAD 2>&1
+    if ($LASTEXITCODE -eq 0) {
+      $checks.Add([pscustomobject]@{ sha = $sha.ToLowerInvariant(); passed = $true })
+      continue
+    }
+    if ($LASTEXITCODE -eq 1) {
+      $checks.Add([pscustomobject]@{ sha = $sha.ToLowerInvariant(); passed = $false })
+      continue
+    }
+
+    $detail = ($output -join [Environment]::NewLine).Trim()
+    Write-LauncherFailure "Could not verify required ancestor $sha in $Repository. $detail"
+  }
+
+  return $checks.ToArray()
+}
+
 function Assert-SelectedDevSource {
   param([Parameter(Mandatory = $true)]$Selection)
 
-  foreach ($name in @('canonicalRepo', 'sourceRoot', 'branch', 'expectedHead', 'requireClean')) {
+  foreach ($name in @('canonicalRepo', 'sourceRoot', 'branch', 'expectedHead', 'requireClean', 'requiredAncestors')) {
     if ($null -eq $Selection.PSObject.Properties[$name]) {
       Write-LauncherFailure "Selected source has no $name field."
     }
@@ -341,6 +372,14 @@ function Assert-SelectedDevSource {
     Write-LauncherFailure "Selected worktree is dirty while requireClean=true. sourceRoot=$sourceRoot`n$workingTreeStatus"
   }
 
+  $requiredAncestors = @($Selection.requiredAncestors | ForEach-Object { [string]$_ })
+  $requiredAncestorChecks = Test-LauncherRequiredAncestors -Repository $sourceRoot -RequiredAncestors $requiredAncestors
+  $missingAncestors = @($requiredAncestorChecks | Where-Object { -not $_.passed })
+  if ($missingAncestors.Count -gt 0) {
+    $missing = ($missingAncestors | ForEach-Object { $_.sha }) -join ', '
+    Write-LauncherFailure "Selected source is missing required ancestor commit(s): $missing"
+  }
+
   foreach ($requiredFile in @('package.json', 'vue.config.js', 'yarn.lock', 'src\\background.js')) {
     if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $requiredFile) -PathType Leaf)) {
       Write-LauncherFailure "Selected source is missing required project entry: $requiredFile"
@@ -354,6 +393,8 @@ function Assert-SelectedDevSource {
     actualHead = $actualHead
     workingTreeClean = $workingTreeClean
     workingTreeStatus = $workingTreeStatus
+    requiredAncestors = $requiredAncestors
+    requiredAncestorChecks = $requiredAncestorChecks
   }
 }
 

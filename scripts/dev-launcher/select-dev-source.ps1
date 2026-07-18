@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory = $true)][string]$SourceRoot,
   [string]$ExpectedHead,
   [bool]$RequireClean = $true,
+  [string[]]$RequiredAncestors = @(),
   [string]$Purpose = 'manual GUI verification',
   [string]$OutputPath
 )
@@ -33,6 +34,7 @@ try {
     branch = $actualBranch
     expectedHead = $actualHead
     requireClean = $RequireClean
+    requiredAncestors = @($RequiredAncestors | ForEach-Object { ([string]$_).Trim() })
     selectedAt = (Get-Date).ToUniversalTime().ToString('o')
     selectedBy = "$env:USERNAME@$env:COMPUTERNAME"
     purpose = $Purpose
