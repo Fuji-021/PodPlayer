@@ -439,7 +439,10 @@ async function main() {
       'a transient null relatedTarget must not clear input mode before focus settles'
     );
     const returnFocusFrame = vm._railFocusClearRaf;
-    assert.ok(returnFocusFrame, 'transient focusout must schedule a settle frame');
+    assert.ok(
+      returnFocusFrame,
+      'transient focusout must schedule a settle frame'
+    );
     global.document.activeElement = cItem;
     assert.ok(
       raf.flushId(returnFocusFrame, 16),
@@ -498,18 +501,42 @@ async function main() {
     vm.handleRailFocusIn({ target: viewport });
     assert.strictEqual(
       root.getAttribute('data-rail-input-mode'),
+      null,
+      'unknown focus restoration must not be guessed as keyboard input'
+    );
+    vm.bindRailKeyboardIntent();
+    listeners.get('keydown')({ key: 'Tab' });
+    vm.handleRailFocusIn({ target: viewport });
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
       'keyboard',
-      'focus entering an inactive-mode viewport must be keyboard-visible'
+      'an explicit Tab intent must make focus entering the rail keyboard-visible'
+    );
+    vm.handleRailPointerDown();
+    vm.setRailInputMode(null);
+    vm.selectedPodcastId = 'C';
+    global.document.activeElement = allItem;
+    vm.handleRailFocusIn({ target: allItem });
+    assert.strictEqual(
+      root.getAttribute('data-rail-input-mode'),
+      null,
+      'scroll-return focus on a no-longer-selected all item must not create a keyboard outline'
+    );
+    vm.unbindRailKeyboardIntent();
+    assert.strictEqual(
+      listeners.has('keydown'),
+      false,
+      'deactivation cleanup must remove the document Tab intent listener'
     );
     assert.ok(
       source.includes(
-        ".program-rail:not([data-rail-input-mode='keyboard']) .rail-item:focus-visible"
+        ".program-rail[data-rail-input-mode='keyboard'] .rail-item:focus,"
       ),
       'only keyboard input mode may expose the local focus outline'
     );
     assert.ok(
-      source.includes('&:focus-visible'),
-      'keyboard focus-visible outline must remain in the component'
+      !source.includes(':focus-visible') && source.includes('&:focus {'),
+      'browser focus-visible heuristics must not bypass the local input mode'
     );
     assert.ok(
       !Object.prototype.hasOwnProperty.call(vm, 'previewPodcastId') &&

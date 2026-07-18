@@ -176,6 +176,7 @@ export default {
       if (this._railActive) return;
       this._railActive = true;
       this.setRailInputMode(null);
+      this.bindRailKeyboardIntent();
       this.$nextTick(() => {
         if (!this._railActive || this._destroyed) return;
         if (typeof ResizeObserver !== 'undefined') {
@@ -193,6 +194,7 @@ export default {
     },
     deactivateRail() {
       this._railActive = false;
+      this.unbindRailKeyboardIntent();
       if (
         this._hoverHaloTarget &&
         this._hoverHaloTarget !== this._selectedHaloTarget
@@ -228,18 +230,63 @@ export default {
       this.$emit('select', podcastId);
     },
     prepareRailItemFocus(event) {
+      this.clearRailKeyboardIntent();
       this.setRailInputMode('pointer');
       this.focusRailItem(event && event.currentTarget);
     },
     handleRailPointerDown() {
+      this.clearRailKeyboardIntent();
       this.setRailInputMode('pointer');
       this.interruptRailMotion();
     },
     handleRailKeyboardInput(event) {
       const key = event && event.key;
       if (['Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) {
+        this.clearRailKeyboardIntent();
         this.setRailInputMode('keyboard');
       }
+    },
+    bindRailKeyboardIntent() {
+      if (
+        this._railKeyboardIntentListener ||
+        typeof document === 'undefined' ||
+        !document.addEventListener
+      ) {
+        return;
+      }
+      this._railKeyboardIntentListener = event => {
+        if (event && event.key === 'Tab') {
+          this._pendingRailKeyboardIntentAt = Date.now();
+        }
+      };
+      document.addEventListener(
+        'keydown',
+        this._railKeyboardIntentListener,
+        true
+      );
+    },
+    unbindRailKeyboardIntent() {
+      if (
+        this._railKeyboardIntentListener &&
+        typeof document !== 'undefined' &&
+        document.removeEventListener
+      ) {
+        document.removeEventListener(
+          'keydown',
+          this._railKeyboardIntentListener,
+          true
+        );
+      }
+      this._railKeyboardIntentListener = null;
+      this.clearRailKeyboardIntent();
+    },
+    clearRailKeyboardIntent() {
+      this._pendingRailKeyboardIntentAt = 0;
+    },
+    consumeRailKeyboardIntent() {
+      const startedAt = this._pendingRailKeyboardIntentAt || 0;
+      this.clearRailKeyboardIntent();
+      return startedAt > 0 && Date.now() - startedAt <= 750;
     },
     setRailInputMode(mode) {
       const inputMode = mode === 'pointer' || mode === 'keyboard' ? mode : '';
@@ -259,7 +306,16 @@ export default {
     handleRailFocusIn(event) {
       if (!event || !event.target) return;
       this.cancelRailFocusClear();
-      if (this._railInputMode !== 'pointer') this.setRailInputMode('keyboard');
+      if (
+        this._railInputMode === 'keyboard' ||
+        this.consumeRailKeyboardIntent()
+      ) {
+        this.setRailInputMode('keyboard');
+        return;
+      }
+      // Scroll restoration and programmatic focus are not keyboard input. The
+      // focused item may remain in the DOM after its business selection moves.
+      if (this._railInputMode !== 'pointer') this.setRailInputMode(null);
     },
     scheduleRailFocusClear() {
       this.cancelRailFocusClear();
@@ -298,6 +354,7 @@ export default {
       ) {
         activeElement.blur();
       }
+      this.clearRailKeyboardIntent();
       this.setRailInputMode(null);
     },
     focusRailItem(target) {
@@ -900,10 +957,8 @@ export default {
     display: none;
   }
 
-  &:focus-visible {
-    outline: 2px solid var(--color-primary);
-    outline-offset: 4px;
-    border-radius: 8px;
+  &:focus {
+    outline: none;
   }
 }
 
@@ -935,16 +990,20 @@ export default {
     z-index: 1;
   }
 
-  &:focus-visible {
-    outline: 2px solid var(--color-primary);
-    outline-offset: 2px;
+  &:focus {
+    outline: none;
   }
 }
 
-.program-rail:not([data-rail-input-mode='keyboard']) .rail-item:focus-visible,
-.program-rail:not([data-rail-input-mode='keyboard'])
-  .rail-viewport:focus-visible {
-  outline: none;
+.program-rail[data-rail-input-mode='keyboard'] .rail-item:focus,
+.program-rail[data-rail-input-mode='keyboard'] .rail-viewport:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.program-rail[data-rail-input-mode='keyboard'] .rail-viewport:focus {
+  outline-offset: 4px;
+  border-radius: 8px;
 }
 
 .rail-cover,
