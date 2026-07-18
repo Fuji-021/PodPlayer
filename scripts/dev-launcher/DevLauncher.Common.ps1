@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-$script:DevLauncherVersion = '1.0.4'
+$script:DevLauncherVersion = '1.0.5'
 $script:DevProfile = 'dev'
 $script:DevPorts = @(20201, 10755, 27233)
 $script:DevUserData = 'D:\MyYesPlayerMusic\PodPlayerData\PodPlayerDev'
@@ -146,6 +146,107 @@ function Write-LauncherJsonAtomically {
     if (Test-Path -LiteralPath $temporaryPath) {
       Remove-Item -LiteralPath $temporaryPath -Force
     }
+  }
+}
+
+function Read-LauncherJsonBestEffort {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return [pscustomobject]@{
+      exists = $false
+      valid = $true
+      value = $null
+      error = $null
+    }
+  }
+
+  try {
+    return [pscustomobject]@{
+      exists = $true
+      valid = $true
+      value = (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+      error = $null
+    }
+  } catch {
+    return [pscustomobject]@{
+      exists = $true
+      valid = $false
+      value = $null
+      error = $_.Exception.Message
+    }
+  }
+}
+
+function Archive-LauncherStateFile {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$PreviousPath
+  )
+
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return $false
+  }
+
+  $directory = Split-Path -Parent $PreviousPath
+  if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  }
+
+  $temporaryPath = Join-Path $directory ('.' + [System.IO.Path]::GetFileName($PreviousPath) + '.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  $backupPath = Join-Path $directory ('.' + [System.IO.Path]::GetFileName($PreviousPath) + '.' + [Guid]::NewGuid().ToString('N') + '.bak')
+  try {
+    Copy-Item -LiteralPath $Path -Destination $temporaryPath -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $PreviousPath -PathType Leaf) {
+      [System.IO.File]::Replace($temporaryPath, $PreviousPath, $backupPath)
+    } else {
+      [System.IO.File]::Move($temporaryPath, $PreviousPath)
+    }
+    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+    return $true
+  } finally {
+    if (Test-Path -LiteralPath $temporaryPath) {
+      Remove-Item -LiteralPath $temporaryPath -Force
+    }
+    if (Test-Path -LiteralPath $backupPath) {
+      Remove-Item -LiteralPath $backupPath -Force
+    }
+  }
+}
+
+function Resolve-LauncherStartError {
+  param(
+    [Parameter(Mandatory = $true)][string]$LauncherRoot,
+    [Parameter(Mandatory = $true)][string]$SourceRoot,
+    [Parameter(Mandatory = $true)][string]$Branch,
+    [Parameter(Mandatory = $true)][string]$Head
+  )
+
+  $errorPath = Join-Path $LauncherRoot 'last-start-error.json'
+  if (-not (Test-Path -LiteralPath $errorPath -PathType Leaf)) {
+    return 'none'
+  }
+
+  $previousPath = Join-Path $LauncherRoot 'last-start-error.previous.json'
+  try {
+    Archive-LauncherStateFile -Path $errorPath -PreviousPath $previousPath | Out-Null
+    return 'archived'
+  } catch {
+    # A successful launch must never leave an old failure looking current. If an
+    # archival rename is unavailable, atomically replace the current error with
+    # an explicit resolved record instead.
+    $resolved = [ordered]@{
+      status = 'resolved'
+      resolvedAt = (Get-Date).ToUniversalTime().ToString('o')
+      launcherVersion = $script:DevLauncherVersion
+      resolution = 'A subsequent verified PodPlayer Dev launch completed successfully.'
+      archiveError = $_.Exception.Message
+      actualSourceRoot = $SourceRoot
+      actualBranch = $Branch
+      actualHead = $Head
+    }
+    Write-LauncherJsonAtomically -Path $errorPath -Value $resolved
+    return 'resolved'
   }
 }
 
@@ -334,59 +435,278 @@ function Get-DevProcessTree {
   return @($result)
 }
 
-function Test-ReceiptProcessMatch {
-  param([Parameter(Mandatory = $true)]$Receipt)
-
-  if ($null -eq $Receipt.PSObject.Properties['relevantPid'] -or $null -eq $Receipt.PSObject.Properties['relevantProcessStartedAt']) {
-    return $false
-  }
-  try {
-    $process = Get-Process -Id ([int]$Receipt.relevantPid) -ErrorAction Stop
-    $actualStartedAt = $process.StartTime.ToUniversalTime().ToString('o')
-    return $actualStartedAt -eq $Receipt.relevantProcessStartedAt
-  } catch {
-    return $false
+function New-DevProcessAdapter {
+  return [pscustomobject]@{
+    GetProcess = {
+      param([Parameter(Mandatory = $true)][int]$ProcessId)
+      Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    }
+    StopProcessTree = {
+      param([Parameter(Mandatory = $true)][int]$ProcessId)
+      Invoke-DevTaskkill -ProcessId $ProcessId
+    }
+    GetPortOwners = {
+      @(Get-DevPortOwners)
+    }
+    GetProcessTree = {
+      param([Parameter(Mandatory = $true)][int]$RootPid)
+      @(Get-DevProcessTree -RootPid $RootPid)
+    }
+    Sleep = {
+      param([Parameter(Mandatory = $true)][int]$Milliseconds)
+      Start-Sleep -Milliseconds $Milliseconds
+    }
   }
 }
 
+function Get-DevProcessAdapterMember {
+  param(
+    [Parameter(Mandatory = $true)]$Adapter,
+    [Parameter(Mandatory = $true)][string]$Name
+  )
+
+  $member = $Adapter.PSObject.Properties[$Name]
+  if ($null -eq $member -or $member.Value -isnot [scriptblock]) {
+    throw "Dev process adapter is missing required scriptblock: $Name"
+  }
+  return $member.Value
+}
+
+function Invoke-DevTaskkill {
+  param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+  # Native-command stderr and a non-zero exit must become structured cleanup
+  # evidence. Under a terminating ErrorActionPreference, letting taskkill write
+  # directly to the error stream skips the authoritative port-release gate.
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+      $PSNativeCommandUseErrorActionPreference = $false
+    }
+    $output = @(& taskkill.exe /F /T /PID $ProcessId 2>&1 | ForEach-Object { [string]$_ })
+    return [pscustomobject]@{
+      exitCode = [int]$LASTEXITCODE
+      output = ($output -join [Environment]::NewLine).Trim()
+      invocationError = $null
+    }
+  } catch {
+    return [pscustomobject]@{
+      exitCode = $null
+      output = $null
+      invocationError = $_.Exception.Message
+    }
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+}
+
+function Get-ReceiptProcessIdentity {
+  param(
+    [Parameter(Mandatory = $true)]$Receipt,
+    [Parameter(Mandatory = $true)]$Adapter
+  )
+
+  if ($null -eq $Receipt.PSObject.Properties['relevantPid'] -or $null -eq $Receipt.PSObject.Properties['relevantProcessStartedAt']) {
+    return [pscustomobject]@{ status = 'invalid-receipt'; pid = $null; process = $null; expectedStartedAt = $null; actualStartedAt = $null }
+  }
+
+  try {
+    $processId = [int]$Receipt.relevantPid
+    $expectedStartedAt = ([datetime]$Receipt.relevantProcessStartedAt).ToUniversalTime().ToString('o')
+  } catch {
+    return [pscustomobject]@{ status = 'invalid-receipt'; pid = $null; process = $null; expectedStartedAt = $null; actualStartedAt = $null }
+  }
+
+  $getProcess = Get-DevProcessAdapterMember -Adapter $Adapter -Name 'GetProcess'
+  $process = & $getProcess $processId | Select-Object -First 1
+  if ($null -eq $process) {
+    return [pscustomobject]@{ status = 'not-found'; pid = $processId; process = $null; expectedStartedAt = $expectedStartedAt; actualStartedAt = $null }
+  }
+
+  try {
+    $actualStartedAt = ([datetime]$process.StartTime).ToUniversalTime().ToString('o')
+  } catch {
+    return [pscustomobject]@{ status = 'unverifiable-process'; pid = $processId; process = $process; expectedStartedAt = $expectedStartedAt; actualStartedAt = $null }
+  }
+
+  if ($actualStartedAt -ne $expectedStartedAt) {
+    return [pscustomobject]@{ status = 'pid-reused'; pid = $processId; process = $process; expectedStartedAt = $expectedStartedAt; actualStartedAt = $actualStartedAt }
+  }
+
+  return [pscustomobject]@{ status = 'match'; pid = $processId; process = $process; expectedStartedAt = $expectedStartedAt; actualStartedAt = $actualStartedAt }
+}
+
+function Stop-DevProcessTreeIdempotently {
+  param(
+    [Parameter(Mandatory = $true)][int]$ProcessId,
+    [Parameter(Mandatory = $true)][string]$ExpectedStartedAt,
+    [Parameter(Mandatory = $true)]$Adapter
+  )
+
+  $getProcess = Get-DevProcessAdapterMember -Adapter $Adapter -Name 'GetProcess'
+  $before = & $getProcess $ProcessId | Select-Object -First 1
+  if ($null -eq $before) {
+    return [pscustomobject]@{ status = 'already-stopped'; pid = $ProcessId; taskkill = $null }
+  }
+
+  try {
+    $actualStartedAt = ([datetime]$before.StartTime).ToUniversalTime().ToString('o')
+    $expectedUtc = ([datetime]$ExpectedStartedAt).ToUniversalTime().ToString('o')
+  } catch {
+    return [pscustomobject]@{ status = 'unverifiable-process'; pid = $ProcessId; taskkill = $null }
+  }
+  if ($actualStartedAt -ne $expectedUtc) {
+    return [pscustomobject]@{ status = 'pid-reused'; pid = $ProcessId; taskkill = $null; expectedStartedAt = $expectedUtc; actualStartedAt = $actualStartedAt }
+  }
+
+  $stopProcessTree = Get-DevProcessAdapterMember -Adapter $Adapter -Name 'StopProcessTree'
+  try {
+    $taskkill = & $stopProcessTree $ProcessId | Select-Object -First 1
+  } catch {
+    $taskkill = [pscustomobject]@{ exitCode = $null; output = $null; invocationError = $_.Exception.Message }
+  }
+
+  # The process can exit after the initial identity check but before taskkill
+  # reaches it. Its final presence, not the native exit code, decides whether
+  # cleanup succeeded; port release is checked by the caller immediately after.
+  $after = & $getProcess $ProcessId | Select-Object -First 1
+  if ($null -eq $after) {
+    return [pscustomobject]@{ status = 'stopped'; pid = $ProcessId; taskkill = $taskkill }
+  }
+
+  return [pscustomobject]@{ status = 'still-running'; pid = $ProcessId; taskkill = $taskkill }
+}
+
+function Test-DevPortOwnersBelongToReceipt {
+  param(
+    [Parameter(Mandatory = $true)]$Receipt,
+    [Parameter(Mandatory = $true)][int[]]$Owners,
+    [Parameter(Mandatory = $true)]$Adapter
+  )
+
+  $identity = Get-ReceiptProcessIdentity -Receipt $Receipt -Adapter $Adapter
+  if ($identity.status -ne 'match') {
+    return [pscustomobject]@{ trusted = $false; identity = $identity; processTree = @(); foreignOwners = @($Owners) }
+  }
+
+  $getProcessTree = Get-DevProcessAdapterMember -Adapter $Adapter -Name 'GetProcessTree'
+  $processTree = @(& $getProcessTree $identity.pid | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+  if ($processTree -notcontains $identity.pid) {
+    $processTree += $identity.pid
+  }
+  $foreignOwners = @($Owners | Where-Object { $processTree -notcontains $_ })
+  return [pscustomobject]@{
+    trusted = ($foreignOwners.Count -eq 0)
+    identity = $identity
+    processTree = @($processTree)
+    foreignOwners = $foreignOwners
+  }
+}
+
+function Wait-DevPortsReleased {
+  param(
+    [Parameter(Mandatory = $true)]$Adapter,
+    [int]$MaxAttempts = 48,
+    [int]$SleepMilliseconds = 250
+  )
+
+  $getPortOwners = Get-DevProcessAdapterMember -Adapter $Adapter -Name 'GetPortOwners'
+  $sleep = Get-DevProcessAdapterMember -Adapter $Adapter -Name 'Sleep'
+  for ($attempt = 0; $attempt -le $MaxAttempts; $attempt++) {
+    $owners = @(& $getPortOwners | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+    if ($owners.Count -eq 0) {
+      return [pscustomobject]@{ released = $true; owners = @(); attempts = $attempt }
+    }
+    if ($attempt -lt $MaxAttempts) {
+      & $sleep $SleepMilliseconds
+    }
+  }
+
+  return [pscustomobject]@{ released = $false; owners = $owners; attempts = $MaxAttempts }
+}
+
+function Get-DevPortOwnerAuditText {
+  param([Parameter(Mandatory = $true)][int[]]$Owners)
+
+  $audit = @(Get-ProcessAudit -Pids $Owners)
+  if ($audit.Count -eq 0) {
+    return "owners=$($Owners -join ', ')"
+  }
+  return ($audit | ForEach-Object {
+    "pid=$($_.pid) name=$($_.name) parent=$($_.parentPid) command=$($_.commandLine)"
+  }) -join '; '
+}
+
 function Stop-DevProfileProcesses {
-  param([Parameter(Mandatory = $true)][string]$ReceiptPath)
+  param(
+    [Parameter(Mandatory = $true)][string]$ReceiptPath,
+    $Adapter = $null,
+    [int]$PortReleaseAttempts = 48
+  )
 
-  $roots = New-Object System.Collections.Generic.HashSet[int]
-  if (Test-Path -LiteralPath $ReceiptPath -PathType Leaf) {
-    try {
-      $previousReceipt = Read-LauncherJson -Path $ReceiptPath
-      if ($previousReceipt.profile -eq $script:DevProfile -and (Test-ReceiptProcessMatch -Receipt $previousReceipt)) {
-        $roots.Add([int]$previousReceipt.relevantPid) | Out-Null
+  if ($null -eq $Adapter) {
+    $Adapter = New-DevProcessAdapter
+  }
+
+  $receiptState = Read-LauncherJsonBestEffort -Path $ReceiptPath
+  $receipt = $receiptState.value
+  $getPortOwners = Get-DevProcessAdapterMember -Adapter $Adapter -Name 'GetPortOwners'
+  $initialOwners = @(& $getPortOwners | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+  $identity = $null
+  $stopResult = $null
+
+  if ($receiptState.valid -and $null -ne $receipt -and $receipt.PSObject.Properties['profile'] -and $receipt.profile -eq $script:DevProfile) {
+    $identity = Get-ReceiptProcessIdentity -Receipt $receipt -Adapter $Adapter
+    if ($identity.status -eq 'pid-reused') {
+      Write-LauncherFailure "Previous Dev receipt PID was reused. Refusing to terminate PID $($identity.pid). expectedStart=$($identity.expectedStartedAt) actualStart=$($identity.actualStartedAt)"
+    }
+    if ($identity.status -eq 'unverifiable-process') {
+      Write-LauncherFailure "Previous Dev receipt process cannot be identified safely. Refusing to terminate PID $($identity.pid)."
+    }
+
+    if ($identity.status -eq 'match') {
+      if ($initialOwners.Count -gt 0) {
+        $ownership = Test-DevPortOwnersBelongToReceipt -Receipt $receipt -Owners $initialOwners -Adapter $Adapter
+        if (-not $ownership.trusted) {
+          $audit = Get-DevPortOwnerAuditText -Owners $initialOwners
+          Write-LauncherFailure "Dev ports are owned by a process outside the verified prior Dev tree. Refusing to terminate it. foreignOwners=$($ownership.foreignOwners -join ', ') audit=$audit"
+        }
       }
-    } catch {
-      Write-Host "[launcher] Ignoring unreadable prior receipt while stopping dev ports: $($_.Exception.Message)" -ForegroundColor Yellow
+      $stopResult = Stop-DevProcessTreeIdempotently -ProcessId $identity.pid -ExpectedStartedAt $identity.expectedStartedAt -Adapter $Adapter
+      if ($stopResult.status -notin @('stopped', 'already-stopped')) {
+        Write-LauncherFailure "Verified prior Dev process could not be stopped safely. pid=$($identity.pid) status=$($stopResult.status) taskkillExit=$($stopResult.taskkill.exitCode)"
+      }
+    } elseif ($initialOwners.Count -gt 0) {
+      $audit = Get-DevPortOwnerAuditText -Owners $initialOwners
+      Write-LauncherFailure "Dev ports are occupied but the prior receipt cannot prove ownership. receiptStatus=$($identity.status) audit=$audit"
+    } else {
+      $stopResult = [pscustomobject]@{ status = 'already-stopped'; pid = $identity.pid; taskkill = $null }
     }
+  } elseif ($initialOwners.Count -gt 0) {
+    $audit = Get-DevPortOwnerAuditText -Owners $initialOwners
+    $receiptStatus = if ($receiptState.valid) { 'missing-or-non-dev' } else { 'unreadable' }
+    Write-LauncherFailure "Dev ports are occupied but no verified prior Dev receipt authorizes cleanup. receiptStatus=$receiptStatus audit=$audit"
   }
 
-  foreach ($owner in Get-DevPortOwners) {
-    $roots.Add([int]$owner) | Out-Null
+  $release = Wait-DevPortsReleased -Adapter $Adapter -MaxAttempts $PortReleaseAttempts
+  if (-not $release.released) {
+    $audit = Get-DevPortOwnerAuditText -Owners $release.owners
+    Write-LauncherFailure "Dev ports remained occupied after targeted cleanup. owners=$($release.owners -join ', ') audit=$audit"
   }
 
-  foreach ($root in @($roots)) {
-    if (Get-Process -Id $root -ErrorAction SilentlyContinue) {
-      # A previous /T can already have ended a child root. The port-release
-      # gate below remains authoritative, so this expected race is non-fatal.
-      & taskkill.exe /F /T /PID $root *> $null
-    }
+  # A previous receipt is historical only after the old instance is gone and all
+  # three Dev ports have been authoritatively observed as released.
+  if ($receiptState.exists) {
+    $previousReceiptPath = Join-Path (Split-Path -Parent $ReceiptPath) 'runtime-receipt.previous.json'
+    Archive-LauncherStateFile -Path $ReceiptPath -PreviousPath $previousReceiptPath | Out-Null
   }
 
-  $deadline = (Get-Date).AddSeconds(12)
-  do {
-    Start-Sleep -Milliseconds 250
-    $remaining = @(Get-DevPortOwners)
-  } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
-
-  if ($remaining.Count -gt 0) {
-    Write-LauncherFailure "Dev ports remained occupied after targeted dev cleanup: $($remaining -join ', ')"
+  return [pscustomobject]@{
+    status = if ($null -eq $stopResult) { 'no-previous-dev' } else { $stopResult.status }
+    stop = $stopResult
+    released = $release
   }
-
-  return @($roots)
 }
 
 function Wait-DevPortsReady {

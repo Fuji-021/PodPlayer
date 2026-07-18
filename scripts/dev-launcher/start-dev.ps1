@@ -66,7 +66,10 @@ try {
   $launcherStartedAt = $launcherProcess.StartTime.ToUniversalTime().ToString('o')
 
   if (-not (Wait-DevPortsReady -TimeoutSeconds 90)) {
-    & taskkill.exe /F /T /PID $launcherProcess.Id *> $null
+    $timeoutStop = Stop-DevProcessTreeIdempotently -ProcessId $launcherProcess.Id -ExpectedStartedAt $launcherStartedAt -Adapter (New-DevProcessAdapter)
+    if ($timeoutStop.status -notin @('stopped', 'already-stopped')) {
+      Write-Host "[launcher] Timed-out Dev wrapper could not be stopped cleanly. pid=$($launcherProcess.Id) status=$($timeoutStop.status)" -ForegroundColor Yellow
+    }
     Write-LauncherFailure 'Dev ports did not become ready within 90 seconds. The new Dev process was stopped.'
   }
 
@@ -111,8 +114,9 @@ try {
     electronProcess = $electronProcess
   }
   Write-LauncherJsonAtomically -Path $receiptPath -Value $receipt
+  $errorResolution = Resolve-LauncherStartError -LauncherRoot $launcher.root -SourceRoot $source.sourceRoot -Branch $source.actualBranch -Head $source.actualHead
 
-  Write-Host "[ready] Dev started from $($source.actualBranch)@$shortHead. Receipt: $receiptPath" -ForegroundColor Green
+  Write-Host "[ready] Dev started from $($source.actualBranch)@$shortHead. Receipt: $receiptPath errorState=$errorResolution" -ForegroundColor Green
   exit 0
 } catch {
   try {
