@@ -118,7 +118,11 @@ function main() {
   assert(podcastDetailSource.includes('pendingRestore'));
   assert(podcastDetailSource.includes('this._bindScroll()'));
   assert(podcastDetailSource.includes('this._onMainScroll()'));
-  assert(transcriptPanelSource.includes('v-tip="\'回到顶部\'"'));
+  // The transcript toolbar is now intentionally limited to follow, display
+  // version, AI tools, and more. Page-level back-to-top remains the shared
+  // component above, so the retired inline toolbar action must not return.
+  assert(!transcriptPanelSource.includes('t-top-link'));
+  assert(!transcriptPanelSource.includes('scrollPageTop'));
   assert(!transcriptPanelSource.includes('回到本页顶部'));
 
   const component = loadComponent(componentSource);

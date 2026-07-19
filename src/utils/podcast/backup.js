@@ -28,6 +28,7 @@ export async function runBackup() {
       transcripts,
       transcriptDict,
       transcriptAi,
+      transcriptSummaries,
     ] = await Promise.all([
       db.podcasts.toArray(),
       db.favorites.toArray(),
@@ -42,6 +43,8 @@ export async function runBackup() {
       db.transcriptDict.toArray(),
       // [转文字稿·AI精修] B 路 AI 层结果(花了 API 钱)，备份免重跑。
       db.transcriptAi.toArray(),
+      // [AI 本集总结] 用户主动生成的文字资产，备份免重复联网。
+      db.transcriptSummaries.toArray(),
     ]);
 
     // 安全阀：空库(无订阅/收藏/进度)直接跳过，绝不用空数据覆盖历史好备份。
@@ -65,6 +68,7 @@ export async function runBackup() {
       transcripts,
       transcriptDict,
       transcriptAi,
+      transcriptSummaries,
     });
     let opml = '';
     try {
@@ -125,6 +129,8 @@ export async function restoreFromLatestBackup() {
   await db.transcripts.bulkPut(arr('transcripts')); // [转文字稿] 回灌文稿索引
   await db.transcriptDict.bulkPut(arr('transcriptDict')); // [转文字稿·词典] 回灌纠错词典
   await db.transcriptAi.bulkPut(arr('transcriptAi')); // [转文字稿·AI精修] 回灌 AI 层
+  // 旧备份缺少该数组时 arr() 安全回退为空。
+  await db.transcriptSummaries.bulkPut(arr('transcriptSummaries'));
   clearPodcastMem(); // [封面闪烁修] 整库 bulkPut 绕过 upsert/update 失效出口 → 清会话内存层防过期封面
   return {
     from: res.name,
@@ -137,6 +143,7 @@ export async function restoreFromLatestBackup() {
     transcripts: arr('transcripts').length,
     transcriptDict: arr('transcriptDict').length,
     transcriptAi: arr('transcriptAi').length,
+    transcriptSummaries: arr('transcriptSummaries').length,
   };
 }
 
@@ -239,6 +246,7 @@ export async function mergeRestoreHistoryFromLatestBackup(opts) {
     db.transcripts,
     db.transcriptDict,
     db.transcriptAi,
+    db.transcriptSummaries,
     async () => {
       await db.favorites.bulkPut(arr('favorites'));
       await db.episodeProgress.bulkPut(arr('episodeProgress'));
@@ -248,6 +256,7 @@ export async function mergeRestoreHistoryFromLatestBackup(opts) {
       await db.transcripts.bulkPut(arr('transcripts')); // [转文字稿] 合并回灌文稿索引
       await db.transcriptDict.bulkPut(arr('transcriptDict')); // [转文字稿·词典] 合并回灌纠错词典
       await db.transcriptAi.bulkPut(arr('transcriptAi')); // [转文字稿·AI精修] 合并回灌 AI 层
+      await db.transcriptSummaries.bulkPut(arr('transcriptSummaries'));
     }
   );
   return {
@@ -260,6 +269,7 @@ export async function mergeRestoreHistoryFromLatestBackup(opts) {
     transcripts: arr('transcripts').length,
     transcriptDict: arr('transcriptDict').length,
     transcriptAi: arr('transcriptAi').length,
+    transcriptSummaries: arr('transcriptSummaries').length,
   };
 }
 

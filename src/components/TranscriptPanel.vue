@@ -1,16 +1,13 @@
 <template>
-  <div class="transcript-section" data-selection="ui" :class="{ expanded }">
+  <div
+    v-if="shouldRenderPanel"
+    class="transcript-section"
+    data-selection="ui"
+    :class="{ expanded }"
+  >
     <div class="transcript-header">
       <h2>AI 文字稿</h2>
       <div v-if="mode === 'done' || mode === 'paused'" class="t-actions">
-        <button
-          v-tip="'回到顶部'"
-          class="t-link t-top-link"
-          @click="scrollPageTop"
-        >
-          <svg-icon icon-class="arrow-up" />
-          <span>顶部</span>
-        </button>
         <button
           v-tip="'播放时自动高亮并滚动到当前段'"
           class="t-link"
@@ -19,45 +16,77 @@
         >
           {{ follow ? '跟随中' : '跟随' }}
         </button>
-        <button
-          v-tip="viewModeTitle"
-          class="t-link t-mode-cycle"
-          :class="{ on: viewMode !== 'raw' }"
-          @click="cycleViewMode"
-        >
-          {{ viewModeLabel }}
-        </button>
-        <!-- [B路·AI精修] 触发/进度/取消 -->
-        <button
-          v-if="aiLive.status === 'running' && aiLive.episodeId === episodeId"
-          v-tip="'取消 AI 精修'"
-          class="t-link danger"
-          @click="onAiCancel"
-        >
-          AI中 {{ aiPct }}% · 取消
-        </button>
-        <button v-else v-tip="aiRefineTip" class="t-link" @click="onAiRefine">
-          {{ aiAvailable ? '重跑 AI' : 'AI 优化' }}
-        </button>
-        <button
-          v-tip="'导出为 txt / srt 文件'"
-          class="t-link"
-          :disabled="!segments.length"
-          @click="onExport"
-        >
-          导出
-        </button>
-        <button
-          v-tip="'管理本节目纠错词典'"
-          class="t-link"
-          :class="{ on: showDict }"
-          @click="showDict = !showDict"
-        >
-          词典{{ dictCount ? '·' + dictCount : '' }}
-        </button>
-        <button v-tip="'删除文字稿'" class="t-link" @click="onDelete"
-          >删除</button
-        >
+        <div class="t-menu-wrap">
+          <button
+            v-tip="viewModeTitle"
+            class="t-link t-mode-cycle"
+            :class="{ on: viewMode !== 'raw' }"
+            @click="toggleActionMenu('showVersionMenu')"
+          >
+            {{ viewModeLabel }}
+          </button>
+          <div v-if="showVersionMenu" class="t-action-menu">
+            <button @click="setViewMode('opt')">校对稿</button>
+            <button :disabled="!hasValidAiRefine" @click="setViewMode('ai')">
+              精修稿{{ hasValidAiRefine ? '' : '（未生成）' }}
+            </button>
+            <button @click="setViewMode('raw')">原始转写</button>
+          </div>
+        </div>
+        <div class="t-menu-wrap">
+          <button
+            v-tip="'生成总结或精修本集文字稿'"
+            class="t-link"
+            :class="{ on: showAiTools }"
+            @click="toggleActionMenu('showAiTools')"
+          >
+            AI 工具
+          </button>
+          <div v-if="showAiTools" class="t-action-menu">
+            <button
+              v-if="
+                summaryLive.status === 'running' &&
+                summaryLive.episodeId === episodeId
+              "
+              class="danger"
+              @click="onSummaryCancel"
+            >
+              取消总结 {{ summaryProgressLabel }}
+            </button>
+            <button v-else @click="onGenerateSummary">
+              {{ summaryActionLabel }}
+            </button>
+            <button
+              v-if="
+                aiLive.status === 'running' && aiLive.episodeId === episodeId
+              "
+              class="danger"
+              @click="onAiCancel"
+            >
+              取消精修 {{ aiPct }}%
+            </button>
+            <button v-else :disabled="!aiKey" @click="onAiRefine">
+              {{ hasValidAiRefine ? '重新生成精修稿' : '生成精修稿' }}
+            </button>
+          </div>
+        </div>
+        <div class="t-menu-wrap">
+          <button
+            v-tip="'导出、词典和删除'"
+            class="t-link"
+            :class="{ on: showMoreMenu || showDict }"
+            @click="toggleActionMenu('showMoreMenu')"
+          >
+            更多
+          </button>
+          <div v-if="showMoreMenu" class="t-action-menu t-action-menu-right">
+            <button :disabled="!segments.length" @click="onExport">导出</button>
+            <button @click="showDict = !showDict">
+              词典{{ dictCount ? '·' + dictCount : '' }}
+            </button>
+            <button class="danger" @click="onDelete">删除文字稿</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -125,118 +154,181 @@
         <span>已暂停（已转 {{ pausedSegCount }} 段），可继续。</span>
         <button class="t-btn small" @click="onGenerate">继续转录</button>
       </div>
-      <!-- 选中错词 → 加入本节目纠错词典（即时重算、原文可回退） -->
-      <div v-if="sel.show" class="t-fix-bar">
-        <span class="t-fix-from">把「{{ sel.from }}」改为</span>
-        <input
-          ref="fixInput"
-          v-model="sel.to"
-          class="t-fix-input"
-          placeholder="正确写法"
-          @keyup.enter="addSelToDict"
-        />
-        <label v-tip="'勾选后连同近音变体一起归一'" class="t-fix-mode">
-          <input
-            type="checkbox"
-            :checked="sel.mode === 'anchor'"
-            @change="sel.mode = sel.mode === 'anchor' ? 'exact' : 'anchor'"
-          />
-          治近音
-        </label>
-        <button class="t-btn small" @click="addSelToDict">加入词典</button>
-        <button class="t-link" @click="cancelSel">取消</button>
-      </div>
-      <!-- 词典管理：来源标记 + 删除（author/global 只读） -->
-      <div v-if="showDict" class="t-dict">
-        <div v-if="!dictRows.length" class="t-dict-empty">
-          暂无词条。选中文稿里的错词即可加入；主播名(author)会自动加入。
-        </div>
-        <div v-for="row in dictRows" :key="row.id" class="t-dict-row">
-          <span class="t-dict-tag" :class="'src-' + (row.source || 'manual')">{{
-            srcLabel(row.source)
-          }}</span>
-          <span class="t-dict-body">
-            <template v-if="row.mode === 'anchor'"
-              >{{ row.to }} <i class="t-dict-mode">近音</i></template
-            >
-            <template v-else>{{ row.from }} → {{ row.to }}</template>
-          </span>
-          <button
-            v-if="row.source !== 'author' && row.source !== 'global'"
-            class="t-link"
-            @click="removeDictRow(row)"
-          >
-            删
-          </button>
-          <span v-else class="t-dict-ro">只读</span>
-        </div>
-      </div>
-      <div v-if="loadingSegs" class="t-hint">
-        <span class="t-spin"></span>加载文稿…
-      </div>
-      <div v-else-if="!segments.length" class="t-hint"
-        >（暂无可显示的段落）</div
-      >
-      <div v-else class="seg-box">
-        <!-- 展开/收起：浮在文稿框右上角的小按钮(批注：缩小 + 放进框里) -->
+      <div class="t-content-tabs" role="tablist" aria-label="文字稿内容">
         <button
-          v-tip="expandTitle"
-          class="t-expand-float"
-          :class="{ on: expanded }"
-          :aria-label="expandTitle"
-          @click="toggleExpand"
+          type="button"
+          role="tab"
+          :aria-selected="contentView === 'transcript'"
+          :class="{ on: contentView === 'transcript' }"
+          @click="setContentView('transcript')"
         >
-          <svg-icon :icon-class="expanded ? 'fullscreen-exit' : 'fullscreen'" />
+          文字稿
         </button>
-        <div
-          ref="list"
-          class="seg-list"
-          data-selection="content"
-          @scroll.passive="onListScroll"
-          @wheel.passive="onUserScrollIntent"
-          @pointerdown="onUserScrollIntent"
-          @touchstart.passive="onUserScrollIntent"
-          @mouseup="onSelectText"
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="contentView === 'summary'"
+          :class="{ on: contentView === 'summary' }"
+          @click="setContentView('summary')"
         >
-          <div class="seg-spacer" :style="{ height: topPad + 'px' }"></div>
-          <template v-for="w in winRows">
-            <!-- 段落块：组内各原始段作 span 连排；点任意句跳该句、当前句 inline 高亮 -->
-            <div
-              v-if="w.row.type === 'para'"
-              :key="'p' + w.row.items[0].vi"
-              :data-ri="w.ri"
-              class="seg-row"
-              :class="{ active: rowHasActive(w.row) }"
-            >
-              <span
-                class="seg-time"
-                @click="onSegClick(w.row.items[0].seg, $event)"
-                >{{ fmtClock(w.row.items[0].seg.start) }}</span
-              >
-              <span class="seg-text"
-                ><span
-                  v-for="it in w.row.items"
-                  :key="it.vi"
-                  class="seg-sent"
-                  :class="{
-                    active: it.vi === curIdx,
-                    'ai-changed': showAi && aiChangedSet.has(it.vi),
-                  }"
-                  @click="onSegClick(it.seg, $event)"
-                  >{{ it.seg.display }}</span
-                ></span
-              >
-            </div>
-            <div v-else :key="'g' + w.ri" :data-ri="w.ri" class="seg-gap">
-              {{ w.row.music ? '♪ 音乐' : '···' }}
-              <span v-if="w.row.count > 1" class="seg-gap-n"
-                >×{{ w.row.count }}</span
-              >
-            </div>
-          </template>
-          <div class="seg-spacer" :style="{ height: botPad + 'px' }"></div>
-        </div>
+          总结
+        </button>
       </div>
+      <div
+        v-if="contentView === 'summary'"
+        class="t-summary"
+        data-selection="content"
+      >
+        <div
+          v-if="
+            summaryLive.status === 'running' &&
+            summaryLive.episodeId === episodeId
+          "
+          class="t-summary-running"
+        >
+          <span class="t-spin"></span>正在生成本集总结
+          {{ summaryProgressLabel }}
+          <button class="t-link danger" @click="onSummaryCancel">取消</button>
+        </div>
+        <template v-else-if="hasSummary && !summaryIsStale">
+          <p class="t-summary-body">{{ summaryRow.summary }}</p>
+          <button class="t-summary-action" @click="onGenerateSummary">
+            重新生成本集总结
+          </button>
+        </template>
+        <template v-else>
+          <p v-if="summaryIsStale" class="t-summary-note">
+            文字稿已更新，请重新生成总结。
+          </p>
+          <p
+            v-else-if="summaryLive.status === 'error'"
+            class="t-summary-note danger"
+          >
+            {{ summaryLive.error }}
+          </p>
+          <button class="t-summary-action" @click="onGenerateSummary">
+            {{ summaryActionLabel }}
+          </button>
+        </template>
+      </div>
+      <template v-else>
+        <!-- 选中错词 → 加入本节目纠错词典（即时重算、原文可回退） -->
+        <div v-if="sel.show" class="t-fix-bar">
+          <span class="t-fix-from">把「{{ sel.from }}」改为</span>
+          <input
+            ref="fixInput"
+            v-model="sel.to"
+            class="t-fix-input"
+            placeholder="正确写法"
+            @keyup.enter="addSelToDict"
+          />
+          <label v-tip="'勾选后连同近音变体一起归一'" class="t-fix-mode">
+            <input
+              type="checkbox"
+              :checked="sel.mode === 'anchor'"
+              @change="sel.mode = sel.mode === 'anchor' ? 'exact' : 'anchor'"
+            />
+            治近音
+          </label>
+          <button class="t-btn small" @click="addSelToDict">加入词典</button>
+          <button class="t-link" @click="cancelSel">取消</button>
+        </div>
+        <!-- 词典管理：来源标记 + 删除（author/global 只读） -->
+        <div v-if="showDict" class="t-dict">
+          <div v-if="!dictRows.length" class="t-dict-empty">
+            暂无词条。选中文稿里的错词即可加入；主播名(author)会自动加入。
+          </div>
+          <div v-for="row in dictRows" :key="row.id" class="t-dict-row">
+            <span
+              class="t-dict-tag"
+              :class="'src-' + (row.source || 'manual')"
+              >{{ srcLabel(row.source) }}</span
+            >
+            <span class="t-dict-body">
+              <template v-if="row.mode === 'anchor'"
+                >{{ row.to }} <i class="t-dict-mode">近音</i></template
+              >
+              <template v-else>{{ row.from }} → {{ row.to }}</template>
+            </span>
+            <button
+              v-if="row.source !== 'author' && row.source !== 'global'"
+              class="t-link"
+              @click="removeDictRow(row)"
+            >
+              删
+            </button>
+            <span v-else class="t-dict-ro">只读</span>
+          </div>
+        </div>
+        <div v-if="loadingSegs" class="t-hint">
+          <span class="t-spin"></span>加载文稿…
+        </div>
+        <div v-else-if="!segments.length" class="t-hint"
+          >（暂无可显示的段落）</div
+        >
+        <div v-else class="seg-box">
+          <!-- 展开/收起：浮在文稿框右上角的小按钮(批注：缩小 + 放进框里) -->
+          <button
+            v-tip="expandTitle"
+            class="t-expand-float"
+            :class="{ on: expanded }"
+            :aria-label="expandTitle"
+            @click="toggleExpand"
+          >
+            <svg-icon
+              :icon-class="expanded ? 'fullscreen-exit' : 'fullscreen'"
+            />
+          </button>
+          <div
+            ref="list"
+            class="seg-list"
+            data-selection="content"
+            @scroll.passive="onListScroll"
+            @wheel.passive="onUserScrollIntent"
+            @pointerdown="onUserScrollIntent"
+            @touchstart.passive="onUserScrollIntent"
+            @mouseup="onSelectText"
+          >
+            <div class="seg-spacer" :style="{ height: topPad + 'px' }"></div>
+            <template v-for="w in winRows">
+              <!-- 段落块：组内各原始段作 span 连排；点任意句跳该句、当前句 inline 高亮 -->
+              <div
+                v-if="w.row.type === 'para'"
+                :key="'p' + w.row.items[0].vi"
+                :data-ri="w.ri"
+                class="seg-row"
+                :class="{ active: rowHasActive(w.row) }"
+              >
+                <span
+                  class="seg-time"
+                  @click="onSegClick(w.row.items[0].seg, $event)"
+                  >{{ fmtClock(w.row.items[0].seg.start) }}</span
+                >
+                <span class="seg-text"
+                  ><span
+                    v-for="it in w.row.items"
+                    :key="it.vi"
+                    class="seg-sent"
+                    :class="{
+                      active: it.vi === curIdx,
+                      'ai-changed': showAi && aiChangedSet.has(it.vi),
+                    }"
+                    @click="onSegClick(it.seg, $event)"
+                    >{{ it.seg.display }}</span
+                  ></span
+                >
+              </div>
+              <div v-else :key="'g' + w.ri" :data-ri="w.ri" class="seg-gap">
+                {{ w.row.music ? '♪ 音乐' : '···' }}
+                <span v-if="w.row.count > 1" class="seg-gap-n"
+                  >×{{ w.row.count }}</span
+                >
+              </div>
+            </template>
+            <div class="seg-spacer" :style="{ height: botPad + 'px' }"></div>
+          </div>
+        </div>
+      </template>
     </template>
 
     <!-- 失败 -->
@@ -268,6 +360,10 @@ import {
   cancelAiRefine,
   aiRefineState,
   aiPromptVersion,
+  getTranscriptSummary,
+  startTranscriptSummary,
+  cancelTranscriptSummary,
+  transcriptSummaryState,
 } from '@/utils/podcast/transcripts';
 import { getDownload } from '@/utils/podcast/downloads';
 import { getPodcast } from '@/utils/podcast/db';
@@ -275,6 +371,10 @@ import {
   postprocessSegments,
   groupParagraphs,
 } from '@/utils/podcast/transcriptPostprocess';
+import {
+  isTranscriptSummaryStale,
+  shouldApplyTranscriptSummaryResult,
+} from '@/utils/podcast/transcriptSummary';
 import {
   getQueuedStateFromAsrStatus,
   getTranscriptEntryBehavior,
@@ -314,6 +414,12 @@ export default {
       viewMode: 'opt',
       aiMap: {}, // {viewSegments下标: AI采纳后文本}
       aiChangedSet: new Set(), // 被 AI 改过的下标(打标记)
+      aiRefineReady: false, // prompt/段数有效的精修版本，允许部分段原样回退到校对稿
+      contentView: 'transcript', // transcript | summary；切换视图绝不触发联网
+      summaryRow: null,
+      showVersionMenu: false,
+      showAiTools: false,
+      showMoreMenu: false,
       expanded: false, // 文稿窗口展开为大窗口(夹在 navbar 与播放 bar 之间，非真全屏)
       sel: { show: false, from: '', to: '', mode: 'anchor' },
     };
@@ -411,12 +517,65 @@ export default {
     aiLive() {
       return aiRefineState;
     },
+    summaryLive() {
+      return transcriptSummaryState;
+    },
     aiPct() {
       const t = this.aiLive.total || 0;
       return t ? Math.min(99, Math.floor((this.aiLive.done / t) * 100)) : 0;
     },
-    aiAvailable() {
-      return this.aiMap && Object.keys(this.aiMap).length > 0;
+    proofreadSegments() {
+      return postprocessSegments(this.segments, {
+        dict: this.dictParts.exact,
+        anchors: this.dictParts.anchors,
+        mainLang: 'zh',
+      });
+    },
+    hasValidAiRefine() {
+      return this.aiRefineReady;
+    },
+    summarySourceSegments() {
+      if (!this.hasValidAiRefine) return this.proofreadSegments;
+      return this.proofreadSegments.map((segment, index) => {
+        if (segment.kind === 'speech' && this.aiMap[index] != null) {
+          return Object.assign({}, segment, { display: this.aiMap[index] });
+        }
+        return segment;
+      });
+    },
+    summarySourceKind() {
+      return this.hasValidAiRefine ? 'refined' : 'proofread';
+    },
+    hasSummary() {
+      return !!(this.summaryRow && this.summaryRow.summary);
+    },
+    summaryIsStale() {
+      return !!(
+        this.hasSummary &&
+        this.segments.length &&
+        isTranscriptSummaryStale(this.summaryRow, this.summarySourceSegments)
+      );
+    },
+    summaryActionLabel() {
+      return this.hasSummary ? '重新生成本集总结' : '生成本集总结';
+    },
+    summaryProgressLabel() {
+      const total = this.summaryLive.total || 0;
+      const done = this.summaryLive.done || 0;
+      return total
+        ? Math.min(99, Math.floor((done / total) * 100)) + '%'
+        : '准备中';
+    },
+    shouldRenderPanel() {
+      // 未生成且无任务时只保留详情头部入口，不插入大块空面板。
+      return (
+        this.initializing ||
+        this.mode === 'queued' ||
+        this.mode === 'running' ||
+        this.mode === 'done' ||
+        this.mode === 'paused' ||
+        this.mode === 'error'
+      );
     },
     viewModeLabel() {
       if (this.viewMode === 'raw') return '原文';
@@ -424,14 +583,9 @@ export default {
       return '已优化';
     },
     viewModeTitle() {
-      return this.aiAvailable
+      return this.hasValidAiRefine
         ? '点击切换：已优化 / AI 精修 / 原文'
         : '点击切换：已优化 / 原文';
-    },
-    aiRefineTip() {
-      return this.aiKey
-        ? '联网 AI 精修（仅在点击后发送本集文字稿）'
-        : '需先在设置中配置 AI 精修服务';
     },
     expandTitle() {
       return this.expanded ? '退出展开' : '展开为大窗口（保留导航和播放栏）';
@@ -495,11 +649,7 @@ export default {
           Object.assign({}, s, { kind: 'speech', display: s.text })
         );
       }
-      const vs = postprocessSegments(this.segments, {
-        dict: this.dictParts.exact,
-        anchors: this.dictParts.anchors,
-        mainLang: 'zh',
-      });
+      const vs = this.proofreadSegments;
       if (this.showAi && this.aiMap) {
         // AI 层：仅 speech 段、仅有 AI 结果的下标，用采纳后文本覆盖(段边界/数/时间戳全不动)
         return vs.map((s, i) => {
@@ -643,6 +793,12 @@ export default {
     if (this._scrollRAF) cancelAnimationFrame(this._scrollRAF);
     if (this._resizeRAF) cancelAnimationFrame(this._resizeRAF);
     if (this._measureTimer) clearTimeout(this._measureTimer);
+    if (
+      transcriptSummaryState.episodeId === this.episodeId &&
+      transcriptSummaryState.status === 'running'
+    ) {
+      cancelTranscriptSummary(this.episodeId);
+    }
   },
   methods: {
     // 文稿窗口展开/收起为大窗口(夹在 navbar 与播放 bar 之间，非真全屏)；
@@ -672,17 +828,26 @@ export default {
       });
       this._resizeObserver.observe(list);
     },
-    cycleViewMode() {
-      const modes = this.aiAvailable ? ['opt', 'ai', 'raw'] : ['opt', 'raw'];
-      const idx = modes.indexOf(this.viewMode);
-      this.viewMode = modes[(idx + 1) % modes.length] || 'opt';
+    closeActionMenus() {
+      this.showVersionMenu = false;
+      this.showAiTools = false;
+      this.showMoreMenu = false;
     },
-    scrollPageTop() {
-      const root = this.$el;
-      const scroller = root && root.closest && root.closest('main');
-      if (scroller) {
-        scroller.scrollTop = 0;
-      }
+    toggleActionMenu(name) {
+      const next = !this[name];
+      this.closeActionMenus();
+      this[name] = next;
+    },
+    setViewMode(mode) {
+      if (mode === 'ai' && !this.hasValidAiRefine) return;
+      if (['opt', 'ai', 'raw'].indexOf(mode) === -1) return;
+      this.viewMode = mode;
+      this.showVersionMenu = false;
+    },
+    setContentView(view) {
+      if (view !== 'transcript' && view !== 'summary') return;
+      this.contentView = view;
+      this.closeActionMenus();
     },
     async refreshEntryReadiness() {
       const reqId = (this._entryReq || 0) + 1;
@@ -738,6 +903,8 @@ export default {
         this.goModelSettings();
       } else if (info.action === 'generate') {
         this.onGenerate();
+      } else if (info.reason === 'unsupported') {
+        this.$store.dispatch('showToast', '当前平台暂不支持本地转文字稿');
       } else if (
         !this.hasLocalFile &&
         this.modelReady &&
@@ -763,6 +930,12 @@ export default {
       this.viewMode = 'opt'; // [三态] 切集回到"已优化"
       this.aiMap = {};
       this.aiChangedSet = new Set();
+      this.aiRefineReady = false;
+      this.contentView = 'transcript';
+      this.summaryRow = null;
+      this.showVersionMenu = false;
+      this.showAiTools = false;
+      this.showMoreMenu = false;
       if (!episodeId) {
         this.modelReady = false;
         this.hasLocalFile = false;
@@ -846,6 +1019,8 @@ export default {
       if (reqId !== this._segmentsReq || episodeId !== this.episodeId) return;
       await this.loadAiRefine(reqId, episodeId, segments.length); // [B路·AI] 载入已缓存的 AI 精修层(若有)
       if (reqId !== this._segmentsReq || episodeId !== this.episodeId) return;
+      await this.loadSummary(reqId, episodeId);
+      if (reqId !== this._segmentsReq || episodeId !== this.episodeId) return;
       this.$nextTick(() => this.updateHighlight());
     },
     // [B路·AI] 载入该集已缓存的 AI 精修(同 promptVer 才用，否则视为无)
@@ -869,6 +1044,7 @@ export default {
         ) {
           this.aiMap = row.segs;
           this.aiChangedSet = new Set(row.changedIdx || []);
+          this.aiRefineReady = true;
           return;
         }
       } catch (e) {
@@ -881,12 +1057,35 @@ export default {
         return;
       this.aiMap = {};
       this.aiChangedSet = new Set();
+      this.aiRefineReady = false;
+    },
+    async loadSummary(reqId, episodeId) {
+      episodeId = episodeId || this.episodeId;
+      try {
+        const row = await getTranscriptSummary(episodeId);
+        if (
+          episodeId !== this.episodeId ||
+          (reqId && reqId !== this._segmentsReq)
+        ) {
+          return;
+        }
+        this.summaryRow = row || null;
+      } catch (e) {
+        if (
+          episodeId !== this.episodeId ||
+          (reqId && reqId !== this._segmentsReq)
+        ) {
+          return;
+        }
+        this.summaryRow = null;
+      }
     },
     // [B路·AI] 触发 AI 段内词汇精修：取"已优化"态的 speech 段送 DeepSeek，完成后切 AI 态
     async onAiRefine() {
       const episodeId = this.episodeId;
       const podcastId = this.podcastId;
       const segmentCount = this.segments.length;
+      this.showAiTools = false;
       if (!this.aiKey) {
         this.$store.dispatch(
           'showToast',
@@ -911,13 +1110,13 @@ export default {
         .filter(Boolean);
       // 「重跑 AI」(已有完整缓存=覆盖全部 speech 段)→ 清旧缓存重算(吸收词典变更)；
       //   部分缓存(取消后)→ 保留续跑。
-      const complete =
-        this.aiAvailable && Object.keys(this.aiMap).length >= speech.length;
+      const complete = this.aiRefineReady;
       if (complete) {
         await deleteAiRefine(episodeId);
         if (episodeId !== this.episodeId) return;
         this.aiMap = {};
         this.aiChangedSet = new Set();
+        this.aiRefineReady = false;
       }
       const res = await startAiRefine(
         episodeId,
@@ -935,6 +1134,40 @@ export default {
     },
     onAiCancel() {
       cancelAiRefine(this.episodeId);
+    },
+    async onGenerateSummary() {
+      const episodeId = this.episodeId;
+      if (!episodeId || !this.summarySourceSegments.length) return;
+      if (!this.aiKey) {
+        this.$store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
+        if (this.$router) this.$router.push('/settings').catch(() => {});
+        return;
+      }
+      this.showAiTools = false;
+      const res = await startTranscriptSummary(
+        episodeId,
+        this.podcastId,
+        this.summarySourceSegments,
+        {
+          sourceKind: this.summarySourceKind,
+          force: this.hasSummary,
+        }
+      );
+      // 路由或切集后只放弃 UI 回写；原集的可用结果仍可安全存入独立缓存。
+      if (!shouldApplyTranscriptSummaryResult(episodeId, this.episodeId)) {
+        return;
+      }
+      if (res && res.ok) {
+        this.summaryRow = res.row || this.summaryRow;
+        await this.loadSummary();
+        if (!shouldApplyTranscriptSummaryResult(episodeId, this.episodeId)) {
+          return;
+        }
+        this.contentView = 'summary';
+      }
+    },
+    onSummaryCancel() {
+      cancelTranscriptSummary(this.episodeId);
     },
     async loadDict(reqId, episodeId) {
       episodeId = episodeId || this.episodeId;
@@ -1083,6 +1316,8 @@ export default {
       this.dbRow = null;
       this.segments = [];
       this.curIdx = -1;
+      this.summaryRow = null;
+      this.contentView = 'transcript';
       this.$store.dispatch('showToast', '已删除文字稿');
     },
     onSegClick(seg, event) {
@@ -1459,6 +1694,45 @@ export default {
     max-width: min(760px, 70vw);
   }
 }
+.t-menu-wrap {
+  position: relative;
+}
+.t-action-menu {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 8;
+  display: flex;
+  min-width: 148px;
+  padding: 5px;
+  flex-direction: column;
+  border-radius: 8px;
+  background: var(--color-body-bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  button {
+    min-height: 30px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    color: var(--color-text);
+    font-size: 12px;
+    text-align: left;
+    white-space: nowrap;
+    &:hover:not(:disabled) {
+      background: var(--color-secondary-bg);
+    }
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+    &.danger:hover {
+      color: #e74c3c;
+    }
+  }
+}
+.t-action-menu-right {
+  right: 0;
+  left: auto;
+}
 .t-link {
   background: transparent;
   color: var(--color-text);
@@ -1483,14 +1757,64 @@ export default {
     background: var(--color-secondary-bg-for-transparent);
     opacity: 0.78;
   }
-  &.t-top-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    .svg-icon {
-      width: 13px;
-      height: 13px;
+}
+.t-content-tabs {
+  display: inline-flex;
+  margin-bottom: 12px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--color-secondary-bg-for-transparent);
+  button {
+    min-width: 58px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    color: var(--color-text);
+    font-size: 13px;
+    opacity: 0.65;
+    &.on {
+      background: var(--color-primary-bg-for-transparent);
+      color: var(--color-primary);
+      opacity: 1;
     }
+  }
+}
+.t-summary {
+  max-width: min(760px, 100%);
+  padding: 18px;
+  border-radius: 10px;
+  background: var(--color-secondary-bg-for-transparent);
+}
+.t-summary-body {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+.t-summary-note,
+.t-summary-running {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.7;
+  opacity: 0.65;
+}
+.t-summary-running {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.t-summary-note.danger {
+  color: #e74c3c;
+  opacity: 0.9;
+}
+.t-summary-action {
+  margin-top: 10px;
+  color: var(--color-primary);
+  font-size: 13px;
+  opacity: 0.78;
+  &:hover {
+    opacity: 1;
   }
 }
 .t-btn {

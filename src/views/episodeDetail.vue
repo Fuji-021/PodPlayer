@@ -107,7 +107,7 @@
         <div class="msg">
           确定要删除已下载的
           <b>"{{ episode && episode.title }}"</b>
-          吗？<br />本地音频文件会被删除，单集听过的进度不会被删除。
+          吗？<br />只会删除本地音频文件；收听进度、文字稿、精修稿和总结都会保留。
         </div>
         <div class="actions">
           <button class="btn-secondary" @click="showDeleteDlConfirm = false">
@@ -119,6 +119,16 @@
         </div>
       </div>
     </div>
+
+    <!-- [转文字稿] 优先于 show notes，避免长正文把已生成的文字稿埋到页面底部。 -->
+    <TranscriptPanel
+      v-if="episode"
+      ref="transcriptPanel"
+      :episode="episode"
+      :episode-id="episodeId"
+      @entry-action="onTranscriptEntryAction"
+      @seek="seekToTimestamp"
+    />
 
     <div
       v-if="episode"
@@ -137,17 +147,6 @@
       <div v-else-if="processedNotes" v-html="processedNotes"></div>
       <div v-else class="empty">这一集没有提供 show notes / 节目简介。</div>
     </div>
-
-    <!-- [转文字稿] 单集文字稿面板：状态机（未转录/转录中/已完成/已暂停/失败/缺模型）+
-         虚拟滚动 + 跟随高亮 + 点段跳播（@seek 复用本页 seekToTimestamp 的播放/seek 逻辑）。 -->
-    <TranscriptPanel
-      v-if="episode"
-      ref="transcriptPanel"
-      :episode="episode"
-      :episode-id="episodeId"
-      @entry-action="onTranscriptEntryAction"
-      @seek="seekToTimestamp"
-    />
 
     <MainScrollBackToTop />
   </div>
