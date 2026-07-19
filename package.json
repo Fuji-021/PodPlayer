@@ -36,6 +36,7 @@
     "test:shownotes-reader": "node scripts/shownotes_reader_smoke.js",
     "test:main-scroll-back-top": "node scripts/main_scroll_back_to_top_smoke.js",
     "test:transcript-summary": "node scripts/transcript_summary_smoke.js",
+    "test:dexie-summary-upgrade": "node scripts/dexie_transcript_summary_upgrade_smoke.js",
     "prettier": "npx prettier --write ./src",
     "netease_api:run": "npx @neteaseapireborn/api"
   },
