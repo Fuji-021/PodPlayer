@@ -4,7 +4,7 @@
 //   网络走 node https(渲染端 nodeIntegration) → 无 CORS、无需主进程(不必重启 dev、不打扰转录)。
 //   只在段内改字词；段边界/段数/时间戳全不动 → 点读/高亮/虚拟滚动复用现有逻辑(同 D 段落重组)。
 import { pinyin } from 'pinyin-pro';
-import { requestOpenAiChat } from './openAiCompatible';
+import { requestOpenAiJson } from './openAiCompatible';
 
 // 改 prompt / 采纳规则务必改此号 → 旧缓存(Dexie transcriptAi.promptVer)自动失效、重算。
 //   v2: 修 UTF-8 跨 chunk 乱码 + 上下文加大(前后各~3段/200字) → 旧乱码缓存自动作废重跑。
@@ -109,9 +109,11 @@ export async function refineEpisode(
   cfg,
   onProgress,
   isCanceled,
-  existing
+  existing,
+  options
 ) {
-  if (!cfg || !cfg.key) throw new Error('未配置 DeepSeek API Key');
+  const opts = options || {};
+  if (!cfg || !cfg.key) throw new Error('请先配置联网 AI 服务');
   const map = Object.assign({}, existing || {});
   const changedIdx = [];
   let sent = 0;
@@ -138,13 +140,15 @@ export async function refineEpisode(
     const user = buildUser(batch, prevText, nextText, anchors);
     let parsed = null;
     try {
-      const resp = await requestOpenAiChat(cfg, [
-        { role: 'system', content: SYSTEM },
-        { role: 'user', content: user },
-      ]);
-      const content =
-        resp.choices && resp.choices[0] && resp.choices[0].message.content;
-      const obj = JSON.parse(content);
+      const resp = await requestOpenAiJson(
+        cfg,
+        [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: user },
+        ],
+        { signal: opts.signal }
+      );
+      const obj = resp.data;
       parsed = obj.segs;
     } catch (e) {
       // 单批失败：该批降级(全保留原文)，不中断整集；记录后继续

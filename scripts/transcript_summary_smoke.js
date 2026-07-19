@@ -149,7 +149,12 @@ export default store;\n`
   fs.writeFileSync(
     files.aiRefine,
     `export const AI_PROMPT_VERSION = 'refine-test';
-export function refineEpisode() { return Promise.resolve({ map: {}, changedIdx: [], stats: {} }); }\n`
+export function refineEpisode(...args) {
+  const state = global.__transcriptSummaryHarness;
+  state.refineCalls.push(args);
+  if (state.refine) return state.refine(...args);
+  return Promise.resolve({ map: {}, changedIdx: [], stats: { accepted: 0, rejected: 0 } });
+}\n`
   );
   fs.writeFileSync(
     files.summary,
@@ -285,6 +290,38 @@ export const db = {
   return require(output);
 }
 
+async function loadAiRefineHarness() {
+  const mockDir = path.join(tempDir, 'ai-refine-mocks');
+  fs.mkdirSync(mockDir, { recursive: true });
+  const openAi = path.join(mockDir, 'open-ai.js');
+  fs.writeFileSync(
+    openAi,
+    `export function requestOpenAiJson(...args) {
+  return global.__aiRefineHarness.request(...args);
+}\n`
+  );
+  const output = path.join(tempDir, 'ai-refine-harness.cjs');
+  await esbuild.build({
+    entryPoints: [path.join(root, 'src/utils/podcast/aiRefine.js')],
+    outfile: output,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'ai-refine-request-mock',
+        setup(build) {
+          build.onResolve({ filter: /^\.\/openAiCompatible$/ }, () => ({
+            path: openAi,
+          }));
+        },
+      },
+    ],
+  });
+  return require(output);
+}
+
 async function testTranscriptStateMachine(summary) {
   const harness = {
     settings: {
@@ -299,8 +336,10 @@ async function testTranscriptStateMachine(summary) {
     putGates: new Map(),
     putCalls: 0,
     generateCalls: 0,
+    refineCalls: [],
     toasts: [],
     generate: null,
+    refine: null,
   };
   global.__transcriptSummaryHarness = harness;
   global.window = { require: null };
@@ -320,6 +359,61 @@ async function testTranscriptStateMachine(summary) {
   );
 
   harness.settings.deepseekKey = 'configured-for-smoke';
+  let refineSignal = null;
+  harness.refine = (...args) => {
+    refineSignal = args[6] && args[6].signal;
+    return Promise.resolve({
+      map: { 0: '校对稿' },
+      changedIdx: [],
+      stats: { accepted: 0, rejected: 0 },
+    });
+  };
+  const refined = await transcripts.startAiRefine(
+    'refine-signal',
+    'podcast',
+    [{ idx: 0, text: '校对稿' }],
+    [],
+    1
+  );
+  assert.strictEqual(refined.ok, true);
+  assert.ok(
+    refineSignal && typeof refineSignal.addEventListener === 'function',
+    'the refine task must pass its AbortSignal into the request layer'
+  );
+
+  let refineAborted = false;
+  harness.refine = (...args) =>
+    new Promise(resolve => {
+      const signal = args[6] && args[6].signal;
+      signal.addEventListener('abort', () => {
+        refineAborted = true;
+        resolve({
+          map: { 0: '保留原文' },
+          changedIdx: [],
+          stats: { accepted: 0, rejected: 0 },
+        });
+      });
+    });
+  const cancelRefine = transcripts.startAiRefine(
+    'refine-cancel',
+    'podcast',
+    [{ idx: 0, text: '保留原文' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.length >= 2,
+    'the controlled refine task should reach its in-flight request'
+  );
+  transcripts.cancelAiRefine('refine-cancel');
+  const canceledRefine = await cancelRefine;
+  assert.strictEqual(
+    refineAborted,
+    true,
+    'cancel must abort the active request'
+  );
+  assert.strictEqual(canceledRefine.canceled, true);
+
   const cached = {
     id: 'cached',
     podcastId: 'podcast',
@@ -358,6 +452,7 @@ async function testTranscriptStateMachine(summary) {
   );
 
   const sameEpisode = deferred();
+  const putCallsBeforeDedupe = harness.putCalls;
   harness.generate = () => sameEpisode.promise;
   const first = transcripts.startTranscriptSummary(
     'dedupe',
@@ -385,7 +480,11 @@ async function testTranscriptStateMachine(summary) {
   const [firstResult, secondResult] = await Promise.all([first, second]);
   assert.strictEqual(firstResult.ok, true);
   assert.strictEqual(secondResult.ok, true);
-  assert.strictEqual(harness.putCalls, 1, 'same episode writes one cached row');
+  assert.strictEqual(
+    harness.putCalls,
+    putCallsBeforeDedupe + 1,
+    'same episode writes one cached row'
+  );
 
   const canceled = deferred();
   harness.generate = () => canceled.promise;
@@ -421,6 +520,7 @@ async function testTranscriptStateMachine(summary) {
   };
   harness.transcriptSummaries.set('late-cancel', previous);
   const latePut = deferred();
+  const putCallsBeforeLateCancel = harness.putCalls;
   harness.putGates.set('late-cancel', latePut);
   harness.generate = async () => ({
     summary: '迟到的新总结',
@@ -438,7 +538,7 @@ async function testTranscriptStateMachine(summary) {
     { force: true }
   );
   await waitFor(
-    () => harness.putCalls >= 2,
+    () => harness.putCalls > putCallsBeforeLateCancel,
     'late cancellation test should be waiting on the summary write'
   );
   transcripts.cancelTranscriptSummary('late-cancel');
@@ -581,11 +681,75 @@ async function testBackupCompatibility() {
   }
 }
 
+async function testAiRefineRequestLayer() {
+  const harness = { request: null };
+  global.__aiRefineHarness = harness;
+  try {
+    const refine = await loadAiRefineHarness();
+    let noKeyCalls = 0;
+    harness.request = () => {
+      noKeyCalls += 1;
+      return Promise.resolve({ data: { segs: [] } });
+    };
+    await assert.rejects(
+      () =>
+        refine.refineEpisode(
+          [{ idx: 0, text: '原文' }],
+          [],
+          { key: '' },
+          null,
+          () => false,
+          {}
+        ),
+      /请先配置联网 AI 服务/
+    );
+    assert.strictEqual(noKeyCalls, 0, 'missing key must not open a request');
+
+    const controller = new AbortController();
+    let receivedSignal = null;
+    harness.request = (_cfg, _messages, options) => {
+      receivedSignal = options && options.signal;
+      return Promise.resolve({
+        data: { segs: [{ i: 1, text: '原文', changed: false }] },
+      });
+    };
+    const valid = await refine.refineEpisode(
+      [{ idx: 0, text: '原文' }],
+      [],
+      { key: 'mock-key-only', model: 'mock-model' },
+      null,
+      () => false,
+      {},
+      { signal: controller.signal }
+    );
+    assert.strictEqual(receivedSignal, controller.signal);
+    assert.strictEqual(valid.map[0], '原文');
+
+    harness.request = () => Promise.resolve({ data: { segs: [] } });
+    const invalid = await refine.refineEpisode(
+      [{ idx: 1, text: '原文' }],
+      [],
+      { key: 'mock-key-only', model: 'mock-model' },
+      null,
+      () => false,
+      {}
+    );
+    assert.strictEqual(
+      invalid.map[1],
+      '原文',
+      'invalid structured data must retain the original segment'
+    );
+  } finally {
+    delete global.__aiRefineHarness;
+  }
+}
+
 async function main() {
   try {
     const { summary, request } = await buildModules();
     await testTranscriptStateMachine(summary);
     await testBackupCompatibility();
+    await testAiRefineRequestLayer();
     const cfg = {
       key: 'mock-key-only',
       model: 'mock-model',
@@ -754,8 +918,20 @@ async function main() {
       ),
       'the summary request must remain inside the explicit generate action'
     );
+    assert.strictEqual(
+      (panelSource.match(/startAiRefine\(/g) || []).length,
+      1,
+      'the refine request must have one explicit UI entry only'
+    );
     assert.ok(
-      !/mounted\(\)[\s\S]{0,500}startTranscriptSummary/.test(panelSource)
+      /async onAiRefine\(\)[\s\S]{0,1400}startAiRefine\(/.test(panelSource),
+      'the refine request must remain inside the explicit user action'
+    );
+    assert.ok(
+      !/mounted\(\)[\s\S]{0,500}(startTranscriptSummary|startAiRefine)/.test(
+        panelSource
+      ),
+      'mounting the panel must not start any AI request'
     );
     assert.ok(panelSource.includes('v-if="shouldRenderPanel"'));
     assert.ok(/>\s*总结\s*<\/button>/.test(panelSource));
@@ -825,7 +1001,14 @@ async function main() {
       path.join(root, 'src/utils/podcast/aiRefine.js'),
       'utf8'
     );
-    assert.ok(refineSource.includes('requestOpenAiChat(cfg'));
+    assert.ok(
+      refineSource.includes(
+        "import { requestOpenAiJson } from './openAiCompatible'"
+      )
+    );
+    assert.ok(refineSource.includes('requestOpenAiJson('));
+    assert.ok(!refineSource.includes('requestOpenAiChat'));
+    assert.ok(refineSource.includes('const obj = resp.data'));
     assert.ok(!refineSource.includes('function chatCompletion('));
 
     process.stdout.write('transcript summary smoke: PASS\n');

@@ -578,6 +578,8 @@ export const aiRefineState = Vue.observable({
   error: '',
 });
 let _aiCancel = '';
+let _aiController = null;
+let _aiControllerEpisodeId = '';
 
 // 总结任务与精修任务彼此独立。总结不会在转写完成、页面打开或播放时自动启动。
 export const transcriptSummaryState = Vue.observable({
@@ -603,7 +605,15 @@ export function deleteTranscriptSummary(episodeId) {
   return db.transcriptSummaries.delete(episodeId).catch(() => {});
 }
 export function cancelAiRefine(episodeId) {
-  _aiCancel = episodeId || aiRefineState.episodeId;
+  const id = episodeId || aiRefineState.episodeId;
+  _aiCancel = id;
+  if (
+    _aiController &&
+    _aiControllerEpisodeId === id &&
+    typeof _aiController.abort === 'function'
+  ) {
+    _aiController.abort();
+  }
 }
 
 export function getAiServiceConfig() {
@@ -635,6 +645,10 @@ export async function startAiRefine(
     return { ok: false, reason: 'no-key' };
   }
   _aiCancel = '';
+  const controller =
+    typeof AbortController !== 'undefined' ? new AbortController() : null;
+  _aiController = controller;
+  _aiControllerEpisodeId = episodeId;
   aiRefineState.episodeId = episodeId;
   aiRefineState.status = 'running';
   aiRefineState.done = 0;
@@ -660,13 +674,19 @@ export async function startAiRefine(
         aiRefineState.done = done;
       },
       () => _aiCancel === episodeId,
-      existing
+      existing,
+      { signal: controller && controller.signal }
     );
   } catch (e) {
     aiRefineState.status = 'error';
     aiRefineState.error = String((e && e.message) || e);
     store.dispatch('showToast', 'AI 精修失败：' + aiRefineState.error);
     return { ok: false, error: aiRefineState.error };
+  } finally {
+    if (_aiController === controller) {
+      _aiController = null;
+      _aiControllerEpisodeId = '';
+    }
   }
   try {
     await db.transcriptAi.put({
