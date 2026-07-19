@@ -1812,7 +1812,7 @@ export default {
   }
 }
 .t-summary {
-  display: inline-block;
+  display: block;
   width: fit-content;
   max-width: min(760px, 100%);
   box-sizing: border-box;
@@ -1955,8 +1955,6 @@ export default {
   margin-bottom: 12px;
 }
 .seg-list {
-  width: 100%;
-  max-width: min(760px, 100%);
   max-height: 56vh;
   overflow-y: auto;
   border-radius: 12px;
