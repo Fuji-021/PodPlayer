@@ -67,11 +67,11 @@ function Get-TreeProcessIds([int]$RootPid) {
   $queue = New-Object System.Collections.Generic.Queue[int]
   $queue.Enqueue($RootPid)
   while ($queue.Count -gt 0) {
-    $pid = $queue.Dequeue()
-    if ($out.Contains($pid)) { continue }
-    $out.Add($pid)
-    if ($children.ContainsKey($pid)) {
-      foreach ($child in $children[$pid]) { $queue.Enqueue($child) }
+    $candidatePid = $queue.Dequeue()
+    if ($out.Contains($candidatePid)) { continue }
+    $out.Add($candidatePid)
+    if ($children.ContainsKey($candidatePid)) {
+      foreach ($child in $children[$candidatePid]) { $queue.Enqueue($child) }
     }
   }
   return @($out)
@@ -82,9 +82,9 @@ function Get-ProcessMetrics([int[]]$ProcessIds) {
   $workingSet = [int64]0
   $privateBytes = [int64]0
   $alive = 0
-  foreach ($pid in @($ProcessIds)) {
+  foreach ($processId in @($ProcessIds)) {
     try {
-      $process = Get-Process -Id $pid -ErrorAction Stop
+      $process = Get-Process -Id $processId -ErrorAction Stop
       $cpuSeconds += [double]$process.CPU
       $workingSet += [int64]$process.WorkingSet64
       $privateBytes += [int64]$process.PrivateMemorySize64
@@ -175,6 +175,7 @@ $lastWorker = $null
 $lastDev = $null
 $lastSampleAt = Get-Date
 $child = $null
+$workerExitCode = -1
 $failure = $null
 
 try {
@@ -214,6 +215,7 @@ try {
     $child.Refresh()
   }
   $child.WaitForExit()
+  try { $workerExitCode = $child.ExitCode } catch {}
 } catch {
   $failure = $_.Exception.Message
 } finally {
@@ -223,8 +225,10 @@ try {
 
 $finishedAt = Get-Date
 $events = Convert-WorkerEvents $stdoutPath
-$doneEvent = @($events | Where-Object { $_.type -eq 'done' } | Select-Object -Last 1)[0]
-$errorEvent = @($events | Where-Object { $_.type -eq 'error' } | Select-Object -Last 1)[0]
+$doneEvents = @($events | Where-Object { $_.type -eq 'done' })
+$errorEvents = @($events | Where-Object { $_.type -eq 'error' })
+$doneEvent = if ($doneEvents.Count) { $doneEvents[-1] } else { $null }
+$errorEvent = if ($errorEvents.Count) { $errorEvents[-1] } else { $null }
 $audioDurationMs = if ($doneEvent) { [int64]$doneEvent.durationMs } else { 0 }
 $wallMs = [int64]($finishedAt - $startedAt).TotalMilliseconds
 $result = [ordered]@{
@@ -233,7 +237,7 @@ $result = [ordered]@{
   finishedAt = $finishedAt.ToString('o')
   input = @{ audioPath = $audioPath; readOnly = $true }
   sandboxRunDir = $runDir
-  worker = @{ pid = if ($child) { $child.Id } else { 0 }; exitCode = if ($child) { $child.ExitCode } else { -1 } }
+  worker = @{ pid = if ($child) { $child.Id } else { 0 }; exitCode = $workerExitCode }
   duration = @{
     wallMs = $wallMs
     audioDurationMs = $audioDurationMs
@@ -258,7 +262,7 @@ $result = [ordered]@{
   error = if ($failure) { $failure } elseif ($errorEvent) { $errorEvent.msg } elseif (-not $doneEvent) { 'worker exited without a done event' } else { '' }
 }
 
-@($samples) | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $metricsPath -Encoding UTF8
+$samples.ToArray() | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $metricsPath -Encoding UTF8
 $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $resultPath -Encoding UTF8
 Write-Host "ASR benchmark result: $($result.status)"
 Write-Host "Sandbox artifacts: $runDir"
