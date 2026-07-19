@@ -148,6 +148,8 @@
       @entry-action="onTranscriptEntryAction"
       @seek="seekToTimestamp"
     />
+
+    <MainScrollBackToTop />
   </div>
 </template>
 
@@ -173,10 +175,11 @@ import { getCoverColor } from '@/utils/podcast/coverColor';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import SvgIcon from '@/components/SvgIcon.vue';
 import TranscriptPanel from '@/components/TranscriptPanel.vue';
+import MainScrollBackToTop from '@/components/MainScrollBackToTop.vue';
 
 export default {
   name: 'EpisodeDetail',
-  components: { SvgIcon, TranscriptPanel },
+  components: { SvgIcon, TranscriptPanel, MainScrollBackToTop },
   data() {
     return {
       podcast: null,

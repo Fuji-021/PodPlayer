@@ -34,22 +34,12 @@
       </div>
     </div>
 
-    <transition name="updates-back-top">
-      <button
-        v-show="showBackTop"
-        v-tip="'回到更新页顶部'"
-        class="updates-back-top"
-        aria-label="回到更新页顶部"
-        @click="scrollToTopSmooth"
-      >
-        <svg-icon icon-class="arrow-up" />
-      </button>
-    </transition>
+    <MainScrollBackToTop />
   </section>
 </template>
 
 <script>
-import SvgIcon from '@/components/SvgIcon.vue';
+import MainScrollBackToTop from '@/components/MainScrollBackToTop.vue';
 import SubscriptionEpisodeRow from './SubscriptionEpisodeRow.vue';
 import {
   findFixedVirtualIndex,
@@ -61,7 +51,7 @@ const VIRTUAL_GUARD = 4;
 
 export default {
   name: 'SubscriptionEpisodeFeed',
-  components: { SvgIcon, SubscriptionEpisodeRow },
+  components: { MainScrollBackToTop, SubscriptionEpisodeRow },
   props: {
     view: { type: Object, default: null },
     getEpisodeState: { type: Function, required: true },
@@ -70,7 +60,6 @@ export default {
     return {
       winStart: 0,
       winEnd: 0,
-      showBackTop: false,
     };
   },
   computed: {
@@ -119,7 +108,6 @@ export default {
   deactivated() {
     this._isActive = false;
     this.unbindMainScroll();
-    this.stopScrollAnimation();
     this.cancelVirtualFrame();
     this.cancelVisibleHydration();
     if (this._resizeRaf) {
@@ -131,7 +119,6 @@ export default {
     this._destroyed = true;
     this._isActive = false;
     this.unbindMainScroll();
-    this.stopScrollAnimation();
     this.cancelVirtualFrame();
     this.cancelVisibleHydration();
     if (this._resizeRaf) cancelAnimationFrame(this._resizeRaf);
@@ -166,24 +153,11 @@ export default {
       this._scrollEl = main;
       this._mainScrollBound = main;
       main.addEventListener('scroll', this.onMainScroll, { passive: true });
-      main.addEventListener('wheel', this.stopScrollAnimation, {
-        passive: true,
-      });
-      main.addEventListener('pointerdown', this.stopScrollAnimation, {
-        passive: true,
-      });
-      main.addEventListener('touchstart', this.stopScrollAnimation, {
-        passive: true,
-      });
-      this.showBackTop = main.scrollTop > 520;
     },
     unbindMainScroll() {
       const main = this._mainScrollBound;
       if (!main) return;
       main.removeEventListener('scroll', this.onMainScroll);
-      main.removeEventListener('wheel', this.stopScrollAnimation);
-      main.removeEventListener('pointerdown', this.stopScrollAnimation);
-      main.removeEventListener('touchstart', this.stopScrollAnimation);
       this._mainScrollBound = null;
       this._scrollEl = null;
     },
@@ -192,8 +166,6 @@ export default {
       this._virtualRaf = requestAnimationFrame(() => {
         this._virtualRaf = null;
         if (this._destroyed || !this._isActive) return;
-        const main = this.getMainScrollElement();
-        this.showBackTop = !!(main && main.scrollTop > 520);
         this.recalcWindow(false);
       });
     },
@@ -278,39 +250,9 @@ export default {
       if (this._hydrateTimer) clearTimeout(this._hydrateTimer);
       this._hydrateTimer = null;
     },
-    scrollToTop() {
-      const main = this.getMainScrollElement();
-      this.stopScrollAnimation();
-      if (main) main.scrollTop = 0;
-      this.showBackTop = false;
-    },
-    scrollToTopSmooth() {
-      const main = this.getMainScrollElement();
-      if (!main || main.scrollTop <= 0) return;
-      this.stopScrollAnimation();
-      const start = main.scrollTop;
-      const duration = Math.min(420, Math.max(240, 180 + Math.sqrt(start) * 2));
-      const startedAt = performance.now();
-      const tick = now => {
-        const progress = Math.min(1, (now - startedAt) / duration);
-        const eased = 1 - Math.pow(1 - progress, 4);
-        main.scrollTop = start * (1 - eased);
-        if (progress < 1) this._feedScrollRaf = requestAnimationFrame(tick);
-        else {
-          this._feedScrollRaf = null;
-          main.scrollTop = 0;
-          this.showBackTop = false;
-        }
-      };
-      this._feedScrollRaf = requestAnimationFrame(tick);
-    },
-    stopScrollAnimation() {
-      if (!this._feedScrollRaf) return;
-      cancelAnimationFrame(this._feedScrollRaf);
-      this._feedScrollRaf = null;
-    },
     resetToTop() {
-      this.scrollToTop();
+      const main = this.getMainScrollElement();
+      if (main) main.scrollTop = 0;
       this.$nextTick(() => this.recalcWindow(true));
     },
   },
@@ -340,44 +282,5 @@ export default {
   color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 700;
-}
-
-.updates-back-top {
-  position: fixed;
-  right: clamp(24px, 4vw, 64px);
-  bottom: 108px;
-  z-index: 24;
-  display: inline-flex;
-  width: 42px;
-  height: 42px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  color: var(--color-text);
-  background: var(--color-body-bg);
-  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.18);
-
-  .svg-icon {
-    width: 18px;
-    height: 18px;
-  }
-
-  &:hover {
-    color: var(--color-primary);
-    background: var(--color-secondary-bg);
-  }
-}
-
-.updates-back-top-enter-active,
-.updates-back-top-leave-active {
-  transition: opacity 120ms ease-out, transform 120ms ease-out;
-}
-
-.updates-back-top-enter,
-.updates-back-top-leave-to {
-  opacity: 0;
-  transform: translateY(5px);
 }
 </style>

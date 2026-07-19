@@ -301,6 +301,8 @@
         </div>
       </div>
     </div>
+
+    <MainScrollBackToTop />
   </div>
 </template>
 
@@ -342,6 +344,7 @@ import {
 } from '@/utils/podcast/nasSource';
 import SvgIcon from '@/components/SvgIcon.vue';
 import BouncingDots from '@/components/BouncingDots.vue';
+import MainScrollBackToTop from '@/components/MainScrollBackToTop.vue';
 
 // [F1·方案C] 单集行固定高度兜底(px)。真实值 mounted 后测量并写 localStorage，此处仅供首帧 spacer 估算。
 const ROW_H_FALLBACK = 69;
@@ -363,7 +366,7 @@ let pendingRestore = null;
 
 export default {
   name: 'PodcastDetail',
-  components: { SvgIcon, BouncingDots },
+  components: { SvgIcon, BouncingDots, MainScrollBackToTop },
   data() {
     return {
       podcast: null,

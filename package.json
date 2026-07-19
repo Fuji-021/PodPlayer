@@ -34,6 +34,7 @@
     "test:subscription-rail": "node scripts/subscription_program_rail_contract_smoke.js",
     "test:selection-intent": "node scripts/selection_intent_smoke.js",
     "test:shownotes-reader": "node scripts/shownotes_reader_smoke.js",
+    "test:main-scroll-back-top": "node scripts/main_scroll_back_to_top_smoke.js",
     "prettier": "npx prettier --write ./src",
     "netease_api:run": "npx @neteaseapireborn/api"
   },

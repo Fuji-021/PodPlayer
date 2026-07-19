@@ -190,6 +190,46 @@ a {
   user-select: text;
 }
 
+// 全站主滚动容器的公共回顶入口，由 MainScrollBackToTop 统一挂载。
+.main-scroll-back-top {
+  position: fixed;
+  right: clamp(24px, 4vw, 64px);
+  bottom: 108px;
+  z-index: 24;
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--color-text);
+  background: var(--color-body-bg);
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.18);
+
+  .svg-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  &:hover {
+    color: var(--color-primary);
+    background: var(--color-secondary-bg);
+  }
+}
+
+.main-scroll-back-top-enter-active,
+.main-scroll-back-top-leave-active {
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+
+.main-scroll-back-top-enter,
+.main-scroll-back-top-leave-to {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
 /* ════════ 图标点击微反馈（统一·克制 · 审查 session 交付 tap-feedback.css 并入） ════════ */
 /* 图标本身静态，仅在「点击」时给一次轻微按压回弹：只缩放、无位移、无变色；尊重「减弱动画」。 */
 /* 显式用法：给可点击图标载体加 class="tap"。另：button 内的 .svg-icon 全局自动生效（图标级缩放，

@@ -4,7 +4,7 @@
       <h2>AI 文字稿</h2>
       <div v-if="mode === 'done' || mode === 'paused'" class="t-actions">
         <button
-          v-tip="'回到本页顶部'"
+          v-tip="'回到顶部'"
           class="t-link t-top-link"
           @click="scrollPageTop"
         >
