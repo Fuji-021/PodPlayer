@@ -781,6 +781,9 @@ export default {
     window.addEventListener('keydown', this._onEsc);
     this.$nextTick(() => this.setupListResizeObserver());
   },
+  deactivated() {
+    this.cancelTranscriptRestoreFrame();
+  },
   beforeDestroy() {
     this._initReq = (this._initReq || 0) + 1;
     this._entryReq = (this._entryReq || 0) + 1;
@@ -792,6 +795,7 @@ export default {
     this._resizeObservedEl = null;
     if (this._scrollRAF) cancelAnimationFrame(this._scrollRAF);
     if (this._resizeRAF) cancelAnimationFrame(this._resizeRAF);
+    this.cancelTranscriptRestoreFrame();
     if (this._measureTimer) clearTimeout(this._measureTimer);
     if (
       transcriptSummaryState.episodeId === this.episodeId &&
@@ -801,6 +805,11 @@ export default {
     }
   },
   methods: {
+    cancelTranscriptRestoreFrame() {
+      if (!this._restoreTranscriptRAF) return;
+      cancelAnimationFrame(this._restoreTranscriptRAF);
+      this._restoreTranscriptRAF = null;
+    },
     // 文稿窗口展开/收起为大窗口(夹在 navbar 与播放 bar 之间，非真全屏)；
     //   尺寸变 → 虚拟滚动按新 clientHeight 重算窗口。
     toggleExpand() {
@@ -851,15 +860,22 @@ export default {
       if (view === 'transcript') this.restoreTranscriptList();
     },
     // 总结视图只是隐藏文稿列表，切回时保留原有行高缓存与滚动位置，
-    // 再对已恢复可见的列表做一次窗口/测高同步，避免虚拟窗口短暂无行可渲染。
+    // 再等一帧让 v-show 的可见布局生效后同步窗口/测高，避免虚拟窗口按隐藏态尺寸短暂无行可渲染。
     restoreTranscriptList() {
+      this.cancelTranscriptRestoreFrame();
       this.$nextTick(() => {
         if (this._isBeingDestroyed || this.contentView !== 'transcript') return;
-        const list = this.$refs.list;
-        if (!list) return;
-        this.setupListResizeObserver();
-        this.recalcWindow();
-        this.scheduleMeasureVisible(0);
+        this._restoreTranscriptRAF = requestAnimationFrame(() => {
+          this._restoreTranscriptRAF = null;
+          if (this._isBeingDestroyed || this.contentView !== 'transcript') {
+            return;
+          }
+          const list = this.$refs.list;
+          if (!list) return;
+          this.setupListResizeObserver();
+          this.recalcWindow();
+          this.scheduleMeasureVisible(0);
+        });
       });
     },
     async refreshEntryReadiness() {

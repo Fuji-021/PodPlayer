@@ -965,6 +965,24 @@ async function main() {
       'switching back to the transcript must restore its virtual list window'
     );
     assert.ok(
+      /restoreTranscriptList\(\)[\s\S]{0,1100}requestAnimationFrame\([\s\S]{0,800}this\.recalcWindow\(\)/.test(
+        panelSource
+      ),
+      'the restored transcript list must wait for a visible layout frame before measuring its virtual window'
+    );
+    assert.ok(
+      /deactivated\(\)[\s\S]{0,180}cancelTranscriptRestoreFrame\(\)/.test(
+        panelSource
+      ) &&
+        /beforeDestroy\(\)[\s\S]{0,900}cancelTranscriptRestoreFrame\(\)/.test(
+          panelSource
+        ) &&
+        /cancelTranscriptRestoreFrame\(\)[\s\S]{0,260}cancelAnimationFrame/.test(
+          panelSource
+        ),
+      'deactivation and destroy must both cancel a pending transcript restore frame'
+    );
+    assert.ok(
       /\.t-summary\s*\{[\s\S]{0,220}width:\s*100%;[\s\S]{0,220}max-width:\s*760px/.test(
         panelSource
       ),
