@@ -678,9 +678,10 @@ export async function startAiRefine(
       { signal: controller && controller.signal }
     );
   } catch (e) {
+    const message = aiServiceErrorMessage(e, 'refine');
     aiRefineState.status = 'error';
-    aiRefineState.error = String((e && e.message) || e);
-    store.dispatch('showToast', 'AI 精修失败：' + aiRefineState.error);
+    aiRefineState.error = message;
+    store.dispatch('showToast', message);
     return { ok: false, error: aiRefineState.error };
   } finally {
     if (_aiController === controller) {
@@ -721,17 +722,25 @@ export async function startAiRefine(
   return { ok: true, changedIdx: res.changedIdx, segs: res.map, canceled };
 }
 
-function summaryErrorMessage(error) {
+function aiServiceErrorMessage(error, action) {
   const code = error && error.code;
   if (code === 'timeout') return 'AI 服务请求超时，请稍后重试';
-  if (code === 'canceled') return '已取消本集总结';
+  if (code === 'canceled') {
+    return action === 'refine' ? '已取消 AI 精修' : '已取消本集总结';
+  }
   if (code === 'invalid-json' || code === 'invalid-summary') {
     return 'AI 服务返回的数据无法识别，请重试';
   }
   if (code === 'invalid-endpoint') return 'AI 服务地址无效';
   if (code === 'network') return 'AI 服务连接失败，请检查网络或服务配置';
   if (code === 'http') return 'AI 服务请求失败，请稍后重试';
-  return '生成本集总结失败，请稍后重试';
+  return action === 'refine'
+    ? 'AI 精修失败，请稍后重试'
+    : '生成本集总结失败，请稍后重试';
+}
+
+function summaryErrorMessage(error) {
+  return aiServiceErrorMessage(error, 'summary');
 }
 
 export function cancelTranscriptSummary(episodeId) {

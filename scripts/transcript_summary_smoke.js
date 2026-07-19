@@ -414,6 +414,27 @@ async function testTranscriptStateMachine(summary) {
   );
   assert.strictEqual(canceledRefine.canceled, true);
 
+  const privateRefineError = 'internal-refine-error-do-not-display';
+  harness.toasts.length = 0;
+  harness.refine = () => Promise.reject(new Error(privateRefineError));
+  const failedRefine = await transcripts.startAiRefine(
+    'refine-error',
+    'podcast',
+    [{ idx: 0, text: '保留原文' }],
+    [],
+    1
+  );
+  assert.deepStrictEqual(failedRefine, {
+    ok: false,
+    error: 'AI 精修失败，请稍后重试',
+  });
+  assert.ok(
+    harness.toasts.every(
+      toast => !String(toast.value || '').includes(privateRefineError)
+    ),
+    'AI refine errors must not expose internal request details'
+  );
+
   const cached = {
     id: 'cached',
     podcastId: 'podcast',
