@@ -561,6 +561,20 @@ async function main() {
     );
     assert.ok(panelSource.includes('v-if="shouldRenderPanel"'));
     assert.ok(/>\s*总结\s*<\/button>/.test(panelSource));
+    assert.ok(panelSource.includes('v-show="contentView === \'transcript\'"'));
+    assert.ok(panelSource.includes('restoreTranscriptList()'));
+    assert.ok(
+      /setContentView\(view\)[\s\S]{0,400}this\.restoreTranscriptList\(\)/.test(
+        panelSource
+      ),
+      'switching back to the transcript must restore its virtual list window'
+    );
+    assert.ok(
+      /\.t-summary\s*\{[\s\S]{0,220}width:\s*100%;[\s\S]{0,220}max-width:\s*760px/.test(
+        panelSource
+      ),
+      'the summary reading surface must be bounded to the text column'
+    );
     assert.ok(!panelSource.includes('t-top-link'));
     assert.ok(panelSource.includes('shouldApplyTranscriptSummaryResult'));
     const dbSource = fs.readFileSync(

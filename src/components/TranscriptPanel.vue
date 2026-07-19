@@ -211,7 +211,7 @@
           </button>
         </template>
       </div>
-      <template v-else>
+      <div v-show="contentView === 'transcript'" class="t-transcript-view">
         <!-- 选中错词 → 加入本节目纠错词典（即时重算、原文可回退） -->
         <div v-if="sel.show" class="t-fix-bar">
           <span class="t-fix-from">把「{{ sel.from }}」改为</span>
@@ -328,7 +328,7 @@
             <div class="seg-spacer" :style="{ height: botPad + 'px' }"></div>
           </div>
         </div>
-      </template>
+      </div>
     </template>
 
     <!-- 失败 -->
@@ -848,6 +848,19 @@ export default {
       if (view !== 'transcript' && view !== 'summary') return;
       this.contentView = view;
       this.closeActionMenus();
+      if (view === 'transcript') this.restoreTranscriptList();
+    },
+    // 总结视图只是隐藏文稿列表，切回时保留原有行高缓存与滚动位置，
+    // 再对已恢复可见的列表做一次窗口/测高同步，避免虚拟窗口短暂无行可渲染。
+    restoreTranscriptList() {
+      this.$nextTick(() => {
+        if (this._isBeingDestroyed || this.contentView !== 'transcript') return;
+        const list = this.$refs.list;
+        if (!list) return;
+        this.setupListResizeObserver();
+        this.recalcWindow();
+        this.scheduleMeasureVisible(0);
+      });
     },
     async refreshEntryReadiness() {
       const reqId = (this._entryReq || 0) + 1;
@@ -1779,9 +1792,11 @@ export default {
   }
 }
 .t-summary {
-  max-width: min(760px, 100%);
-  padding: 18px;
-  border-radius: 10px;
+  width: 100%;
+  max-width: 760px;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  border-radius: 8px;
   background: var(--color-secondary-bg-for-transparent);
 }
 .t-summary-body {
