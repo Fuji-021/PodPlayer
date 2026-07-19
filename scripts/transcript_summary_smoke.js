@@ -206,6 +206,85 @@ export function generateTranscriptSummary(options) {
   return require(output);
 }
 
+async function loadBackupHarness() {
+  const mockDir = path.join(tempDir, 'backup-mocks');
+  fs.mkdirSync(mockDir, { recursive: true });
+  const files = {
+    db: path.join(mockDir, 'db.js'),
+    service: path.join(mockDir, 'service.js'),
+    podcastDb: path.join(mockDir, 'podcast-db.js'),
+  };
+  fs.writeFileSync(
+    files.db,
+    `function state() { return global.__transcriptBackupHarness; }
+function cloneRows(rows) { return (rows || []).map(row => Object.assign({}, row)); }
+function table(name) {
+  return {
+    async toArray() { return cloneRows(state().tables[name]); },
+    async bulkPut(rows) {
+      state().bulkPuts[name] = cloneRows(rows);
+      return state().bulkPuts[name].length;
+    },
+  };
+}
+export const db = {
+  podcasts: table('podcasts'),
+  favorites: table('favorites'),
+  episodeProgress: table('episodeProgress'),
+  episodeListenStats: table('episodeListenStats'),
+  listenDaily: table('listenDaily'),
+  episodeDownloads: table('episodeDownloads'),
+  transcripts: table('transcripts'),
+  transcriptDict: table('transcriptDict'),
+  transcriptAi: table('transcriptAi'),
+  transcriptSummaries: table('transcriptSummaries'),
+  async delete() { state().deleted = true; },
+  async open() { state().opened = true; },
+  transaction(...args) { return args[args.length - 1](); },
+};\n`
+  );
+  fs.writeFileSync(
+    files.service,
+    "export function exportSubscriptionsOpml() { return Promise.resolve('<opml />'); }\n"
+  );
+  fs.writeFileSync(
+    files.podcastDb,
+    'export function clearPodcastMem() { global.__transcriptBackupHarness.memCleared = true; }\n'
+  );
+  const output = path.join(tempDir, 'backup-harness.cjs');
+  await esbuild.build({
+    entryPoints: [path.join(root, 'src/utils/podcast/backup.js')],
+    outfile: output,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'transcript-summary-backup-mocks',
+        setup(build) {
+          const exact = {
+            '@/utils/db': files.db,
+            '@/utils/podcast/service': files.service,
+            '@/utils/podcast/db': files.podcastDb,
+          };
+          Object.keys(exact).forEach(filter => {
+            build.onResolve(
+              {
+                filter: new RegExp(
+                  '^' + filter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'
+                ),
+              },
+              () => ({ path: exact[filter] })
+            );
+          });
+        },
+      },
+    ],
+  });
+  return require(output);
+}
+
 async function testTranscriptStateMachine(summary) {
   const harness = {
     settings: {
@@ -409,10 +488,104 @@ async function testTranscriptStateMachine(summary) {
   delete global.window;
 }
 
+async function testBackupCompatibility() {
+  const tableNames = [
+    'podcasts',
+    'favorites',
+    'episodeProgress',
+    'episodeListenStats',
+    'listenDaily',
+    'episodeDownloads',
+    'transcripts',
+    'transcriptDict',
+    'transcriptAi',
+    'transcriptSummaries',
+  ];
+  const tables = {};
+  const bulkPuts = {};
+  tableNames.forEach(name => {
+    tables[name] = [];
+    bulkPuts[name] = [];
+  });
+  tables.podcasts = [{ id: 'podcast-1', title: '备份节目' }];
+  tables.transcriptSummaries = [
+    { id: 'episode-1', summary: '已备份的本集总结' },
+  ];
+  const harness = {
+    tables,
+    bulkPuts,
+    writes: [],
+    latestBackup: null,
+    deleted: false,
+    opened: false,
+    memCleared: false,
+  };
+  harness.ipcRenderer = {
+    async invoke(channel, payload) {
+      if (channel === 'podcast:backup:write') {
+        harness.writes.push(payload);
+        return { ok: true };
+      }
+      if (channel === 'podcast:backup:readLatest') return harness.latestBackup;
+      throw new Error('unexpected backup IPC: ' + channel);
+    },
+  };
+  global.__transcriptBackupHarness = harness;
+  global.window = {
+    require(name) {
+      if (name === 'electron') return { ipcRenderer: harness.ipcRenderer };
+      throw new Error('unexpected module: ' + name);
+    },
+  };
+  try {
+    const backup = await loadBackupHarness();
+    const written = await backup.runBackup();
+    assert.strictEqual(written.ok, true);
+    assert.strictEqual(harness.writes.length, 1);
+    assert.deepStrictEqual(
+      JSON.parse(harness.writes[0].json).transcriptSummaries,
+      tables.transcriptSummaries,
+      'new backups must retain independently stored summaries'
+    );
+
+    const legacy = {
+      podcasts: [{ id: 'podcast-legacy', title: '旧备份节目' }],
+      favorites: [],
+      episodeProgress: [],
+      episodeListenStats: [],
+      listenDaily: [],
+      episodeDownloads: [],
+      transcripts: [],
+      transcriptDict: [],
+      transcriptAi: [],
+      // transcriptSummaries deliberately omitted: this mirrors pre-v16 backups.
+    };
+    harness.latestBackup = {
+      ok: true,
+      name: 'legacy-backup.json',
+      json: JSON.stringify(legacy),
+    };
+    const restored = await backup.restoreFromLatestBackup();
+    assert.strictEqual(restored.transcriptSummaries, 0);
+    assert.deepStrictEqual(
+      harness.bulkPuts.transcriptSummaries,
+      [],
+      'restoring an old backup must safely fall back to an empty summary table'
+    );
+    assert.strictEqual(harness.deleted, true);
+    assert.strictEqual(harness.opened, true);
+    assert.strictEqual(harness.memCleared, true);
+  } finally {
+    delete global.__transcriptBackupHarness;
+    delete global.window;
+  }
+}
+
 async function main() {
   try {
     const { summary, request } = await buildModules();
     await testTranscriptStateMachine(summary);
+    await testBackupCompatibility();
     const cfg = {
       key: 'mock-key-only',
       model: 'mock-model',
