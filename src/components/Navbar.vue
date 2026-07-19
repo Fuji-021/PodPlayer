@@ -30,6 +30,7 @@
         <router-link
           to="/library"
           :class="{ active: navSection === 'library' }"
+          @click.native="onLibraryNavigation"
           >{{ $t('nav.library') }}</router-link
         >
         <!-- [NAS] 连接状态图标：放「我的订阅」旁，绿(在线·呼吸)/红(断联·静止)；未启用不显示。点击重连。
@@ -155,6 +156,7 @@
 <script>
 import { mapState } from 'vuex';
 import { isLooseLoggedIn, doLogout } from '@/utils/auth';
+import { requestSubscriptionUpdatesScrollTop } from '@/utils/podcast/subscriptionNavigation';
 
 // import icons for win32 title bar
 // icons by https://github.com/microsoft/vscode-codicons
@@ -290,6 +292,13 @@ export default {
     clearInterval(this._nasPoll);
   },
   methods: {
+    onLibraryNavigation() {
+      // The active update feed keeps its own filters and selected podcast. A
+      // repeat nav click only requests the shared, interruptible scroll-to-top.
+      if (this.$route.name === 'library') {
+        requestSubscriptionUpdatesScrollTop();
+      }
+    },
     go(where) {
       if (where === 'back') this.$router.go(-1);
       else this.$router.go(1);

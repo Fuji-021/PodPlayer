@@ -110,10 +110,13 @@ function main() {
         "import MainScrollBackToTop from '@/components/MainScrollBackToTop.vue'"
       )
     );
-    assert(source.includes('<MainScrollBackToTop />'));
+    assert(/<MainScrollBackToTop(?:\s+ref="backToTop")?\s*\/>/.test(source));
   });
   assert(!feedSource.includes('showBackTop'));
-  assert(!feedSource.includes('scrollToTopSmooth'));
+  assert(
+    feedSource.includes('backToTop.scrollToTopSmooth()'),
+    'the update feed may only delegate repeat navigation to the shared component'
+  );
   assert(!feedSource.includes('updates-back-top'));
   assert(podcastDetailSource.includes('pendingRestore'));
   assert(podcastDetailSource.includes('this._bindScroll()'));

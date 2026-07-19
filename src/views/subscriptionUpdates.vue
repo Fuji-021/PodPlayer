@@ -205,6 +205,7 @@ import {
 } from '@/utils/podcast/subscriptionUpdatesRules';
 import {
   markAllSubscriptionsEntryFromUpdates,
+  onSubscriptionUpdatesScrollTop,
   onSubscriptionUpdatesChanged,
 } from '@/utils/podcast/subscriptionNavigation';
 
@@ -345,6 +346,9 @@ export default {
         this.loadSnapshot({ preserveNewItems: true });
       }
     );
+    this._removeSubscriptionUpdatesScrollTop = onSubscriptionUpdatesScrollTop(
+      () => this.handleSubscriptionUpdatesScrollTop()
+    );
     this.loadInitialSnapshot();
     this.scheduleLocalDayRefresh();
   },
@@ -376,9 +380,26 @@ export default {
       this._removeSubscriptionUpdatesChanged();
       this._removeSubscriptionUpdatesChanged = null;
     }
+    if (this._removeSubscriptionUpdatesScrollTop) {
+      this._removeSubscriptionUpdatesScrollTop();
+      this._removeSubscriptionUpdatesScrollTop = null;
+    }
     if (this._dayRefreshTimer) clearTimeout(this._dayRefreshTimer);
   },
   methods: {
+    handleSubscriptionUpdatesScrollTop() {
+      if (
+        this._destroyed ||
+        !this._isActive ||
+        this.$route.name !== 'library'
+      ) {
+        return;
+      }
+      const feed = this.$refs.episodeFeed;
+      if (feed && typeof feed.scrollToTopSmooth === 'function') {
+        feed.scrollToTopSmooth();
+      }
+    },
     async loadInitialSnapshot() {
       await this.loadSnapshot();
       this.checkBackgroundRefresh();

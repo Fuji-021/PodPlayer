@@ -56,15 +56,6 @@
     </div>
     <div class="update-episode-actions">
       <button
-        v-tip="'更多操作'"
-        class="podcast-episode-action"
-        aria-label="更多操作"
-        @click.stop="$emit('menu', $event, episode)"
-        @dblclick.stop
-      >
-        <svg-icon icon-class="menu-dots-vertical" />
-      </button>
-      <button
         v-tip="runtime.isPlaying ? '暂停' : '播放'"
         class="podcast-episode-action"
         :aria-label="runtime.isPlaying ? '暂停' : '播放'"
@@ -72,6 +63,15 @@
         @dblclick.stop
       >
         <svg-icon :icon-class="runtime.isPlaying ? 'pause' : 'play-circle'" />
+      </button>
+      <button
+        v-tip="'更多操作'"
+        class="podcast-episode-action"
+        aria-label="更多操作"
+        @click.stop="$emit('menu', $event, episode)"
+        @dblclick.stop
+      >
+        <svg-icon icon-class="menu-dots-vertical" />
       </button>
     </div>
   </article>

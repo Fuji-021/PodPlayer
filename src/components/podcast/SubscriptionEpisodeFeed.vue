@@ -34,7 +34,7 @@
       </div>
     </div>
 
-    <MainScrollBackToTop />
+    <MainScrollBackToTop ref="backToTop" />
   </section>
 </template>
 
@@ -254,6 +254,12 @@ export default {
       const main = this.getMainScrollElement();
       if (main) main.scrollTop = 0;
       this.$nextTick(() => this.recalcWindow(true));
+    },
+    scrollToTopSmooth() {
+      const backToTop = this.$refs.backToTop;
+      if (backToTop && typeof backToTop.scrollToTopSmooth === 'function') {
+        backToTop.scrollToTopSmooth();
+      }
     },
   },
 };
