@@ -775,7 +775,7 @@ export default {
     this._onEsc = e => {
       if (e.key === 'Escape' && this.expanded) {
         this.expanded = false;
-        this.$nextTick(() => this.recalcWindow());
+        if (this.contentView === 'transcript') this.restoreTranscriptList();
       }
     };
     window.addEventListener('keydown', this._onEsc);
@@ -814,7 +814,7 @@ export default {
     //   尺寸变 → 虚拟滚动按新 clientHeight 重算窗口。
     toggleExpand() {
       this.expanded = !this.expanded;
-      this.$nextTick(() => this.recalcWindow());
+      if (this.contentView === 'transcript') this.restoreTranscriptList();
     },
     setupListResizeObserver() {
       const list = this.$refs.list;
@@ -1656,6 +1656,13 @@ export default {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  .t-transcript-view {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
   // [批注②] 展开态文稿框撑满高度：seg-box flex 列 → seg-list 填满
   .seg-box {
     flex: 1 1 auto;
@@ -1805,8 +1812,9 @@ export default {
   }
 }
 .t-summary {
-  width: 100%;
-  max-width: 760px;
+  display: inline-block;
+  width: fit-content;
+  max-width: min(760px, 100%);
   box-sizing: border-box;
   padding: 16px 18px;
   border-radius: 8px;
@@ -1947,6 +1955,8 @@ export default {
   margin-bottom: 12px;
 }
 .seg-list {
+  width: 100%;
+  max-width: min(760px, 100%);
   max-height: 56vh;
   overflow-y: auto;
   border-radius: 12px;

@@ -983,10 +983,28 @@ async function main() {
       'deactivation and destroy must both cancel a pending transcript restore frame'
     );
     assert.ok(
-      /\.t-summary\s*\{[\s\S]{0,220}width:\s*100%;[\s\S]{0,220}max-width:\s*760px/.test(
+      /\.t-summary\s*\{[\s\S]{0,260}display:\s*inline-block;[\s\S]{0,260}width:\s*fit-content;[\s\S]{0,260}max-width:\s*min\(760px,\s*100%\)/.test(
         panelSource
       ),
-      'the summary reading surface must be bounded to the text column'
+      'the summary surface must shrink to short content and remain bounded to the reading column'
+    );
+    assert.ok(
+      /\.seg-list\s*\{[\s\S]{0,180}width:\s*100%;[\s\S]{0,180}max-width:\s*min\(760px,\s*100%\)/.test(
+        panelSource
+      ),
+      'the transcript list background must stay within the same reading column'
+    );
+    assert.ok(
+      /\.transcript-section\.expanded\s*\{[\s\S]{0,1200}\.t-transcript-view\s*\{[\s\S]{0,360}display:\s*flex;[\s\S]{0,360}flex:\s*1\s+1\s+auto;[\s\S]{0,360}min-height:\s*0/.test(
+        panelSource
+      ),
+      'the expanded transcript view must provide a constrained flex height for its internal scroll list'
+    );
+    assert.ok(
+      /toggleExpand\(\)[\s\S]{0,280}this\.expanded\s*=\s*!this\.expanded;[\s\S]{0,360}this\.restoreTranscriptList\(\)/.test(
+        panelSource
+      ),
+      'expand and collapse must remeasure the virtual list after the layout frame'
     );
     assert.ok(!panelSource.includes('t-top-link'));
     assert.ok(panelSource.includes('shouldApplyTranscriptSummaryResult'));
