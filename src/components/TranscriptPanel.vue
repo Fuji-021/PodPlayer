@@ -1100,10 +1100,7 @@ export default {
       const segmentCount = this.segments.length;
       this.showAiTools = false;
       if (!this.aiKey) {
-        this.$store.dispatch(
-          'showToast',
-          '请先在「设置」里填入 DeepSeek API Key'
-        );
+        this.$store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
         if (this.$router) this.$router.push('/settings').catch(() => {});
         return;
       }

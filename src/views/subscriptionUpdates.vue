@@ -161,7 +161,7 @@
         <div class="msg">
           确定要删除已下载的
           <b>{{ deleteDownloadTarget.title }}</b>
-          吗？单集进度和文字稿不会被删除。
+          吗？只会删除本地音频文件；收听进度、文字稿、精修稿和总结都会保留。
         </div>
         <div class="dialog-actions">
           <button class="secondary-action" @click="deleteDownloadTarget = null"

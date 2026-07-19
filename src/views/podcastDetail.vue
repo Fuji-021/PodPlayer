@@ -266,7 +266,7 @@
         <div class="msg">
           确定要删除已下载的
           <b>"{{ dlDeleteTarget.title }}"</b>
-          吗？<br />本地音频文件会被删除，单集听过的进度不会被删除。
+          吗？<br />只会删除本地音频文件；收听进度、文字稿、精修稿和总结都会保留。
         </div>
         <div class="actions">
           <button class="btn-secondary" @click="dlDeleteTarget = null">

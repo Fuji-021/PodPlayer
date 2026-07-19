@@ -631,7 +631,7 @@ export async function startAiRefine(
 ) {
   const cfg = getAiServiceConfig();
   if (!hasOpenAiKey(cfg)) {
-    store.dispatch('showToast', '请先在设置里填入 DeepSeek API Key');
+    store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
     return { ok: false, reason: 'no-key' };
   }
   _aiCancel = '';

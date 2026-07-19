@@ -729,6 +729,31 @@ async function main() {
       'utf8'
     );
     assert.ok(panelSource.includes('async onGenerateSummary()'));
+    assert.ok(panelSource.includes('@click="onGenerateSummary"'));
+    assert.ok(panelSource.includes('请先在设置中配置联网 AI 服务'));
+    assert.ok(
+      !panelSource.includes('填入 DeepSeek API Key'),
+      'AI actions must use the provider-neutral service wording'
+    );
+    const transcriptsSource = fs.readFileSync(
+      path.join(root, 'src/utils/podcast/transcripts.js'),
+      'utf8'
+    );
+    assert.ok(
+      !transcriptsSource.includes('填入 DeepSeek API Key'),
+      'the shared AI entry must use the provider-neutral service wording'
+    );
+    assert.strictEqual(
+      (panelSource.match(/startTranscriptSummary\(/g) || []).length,
+      1,
+      'the summary request must have one explicit UI entry only'
+    );
+    assert.ok(
+      /async onGenerateSummary\(\)[\s\S]{0,900}startTranscriptSummary\(/.test(
+        panelSource
+      ),
+      'the summary request must remain inside the explicit generate action'
+    );
     assert.ok(
       !/mounted\(\)[\s\S]{0,500}startTranscriptSummary/.test(panelSource)
     );
@@ -775,6 +800,17 @@ async function main() {
       detailSource.includes('文字稿、精修稿和总结都会保留'),
       'download deletion copy must not imply transcript data is removed'
     );
+    [
+      'src/views/podcastDetail.vue',
+      'src/views/downloadsList.vue',
+      'src/views/subscriptionUpdates.vue',
+    ].forEach(file => {
+      const source = fs.readFileSync(path.join(root, file), 'utf8');
+      assert.ok(
+        source.includes('文字稿、精修稿和总结都会保留'),
+        file + ' must preserve the same download deletion data boundary'
+      );
+    });
     const settingsSource = fs.readFileSync(
       path.join(root, 'src/views/settings.vue'),
       'utf8'
