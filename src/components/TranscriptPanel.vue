@@ -107,7 +107,7 @@
         模型。请先到设置页完成模型部署或选择本地模型目录。
       </div>
       <div v-else class="t-guide-body">
-        PodPlayer 0.5.0 的本地转文字稿仅验证 Windows x64。
+        PodPlayer 0.6.0 的本地转文字稿仅验证 Windows x64。
       </div>
       <button
         v-if="platformSupported"

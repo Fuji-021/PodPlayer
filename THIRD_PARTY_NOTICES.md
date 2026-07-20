@@ -46,7 +46,7 @@ the shared model directory.
   <https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.3/LICENSE>
 - Included snapshot: `third_party/licenses/sherpa-onnx-Apache-2.0.txt`
 
-PodPlayer 0.5.0 packages and validates the ASR runtime on Windows x64. The app
+PodPlayer 0.6.0 packages and validates the ASR runtime on Windows x64. The app
 does not claim that local ASR is verified on macOS or Linux in this release.
 
 ## FFmpeg
@@ -66,4 +66,4 @@ original `ffmpeg.exe.LICENSE` and `ffmpeg.exe.README` files next to the binary.
 
 Other application dependencies remain governed by the license metadata and
 license files shipped with their respective packages. This notice focuses on the
-native ASR and model artifacts added for PodPlayer 0.5.0.
+native ASR and model artifacts shipped by PodPlayer 0.6.0.

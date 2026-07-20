@@ -1191,13 +1191,13 @@ export default {
       if (this.asrDownloadAvailable)
         return '联网下载约 240 MB 并校验 SenseVoiceSmall 模型';
       if (!this.asrModel.platformSupported)
-        return 'PodPlayer 0.5.0 的本地转文字稿仅验证 Windows x64';
+        return 'PodPlayer 0.6.0 的本地转文字稿仅验证 Windows x64';
       return '当前无法使用远程部署，请稍后重试或选择本地模型目录';
     },
     asrModelStatusText() {
       if (this.asrModel.installing) return '正在部署模型';
       if (!this.asrModel.platformSupported) {
-        return '当前平台暂不支持。本地转文字稿在 0.5.0 仅验证 Windows x64。';
+        return '当前平台暂不支持。本地转文字稿在 0.6.0 仅验证 Windows x64。';
       }
       if (this.asrModel.error) {
         return '模型不可用，请重新校验或选择本地模型目录';
