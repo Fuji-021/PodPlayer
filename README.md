@@ -83,6 +83,8 @@ scripts/start-dev.bat
 yarn electron:serve
 ```
 
+> 多 worktree 的 GUI 验收请先部署 `scripts/dev-launcher/`，再用其 source selector 固定目标 worktree、分支和完整 HEAD；不要以 `scripts/start-dev.bat` 作为跨 worktree 的验收入口。启动后的 `runtime-receipt.json` 是运行来源证据，不等同于 GUI 功能验收。
+
 ## 多实例隔离
 
 用环境变量 `PODPLAYER_PROFILE` 驱动「身份 → 用户数据目录 → 数据库 → 端口」整套隔离，三个实例可同时运行、互不抢占同一个数据库：
