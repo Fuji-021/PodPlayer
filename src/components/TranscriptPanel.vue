@@ -720,7 +720,11 @@ export default {
     },
   },
   watch: {
-    episodeId() {
+    episodeId(nextEpisodeId, previousEpisodeId) {
+      if (previousEpisodeId && previousEpisodeId !== nextEpisodeId) {
+        cancelTranscriptSummary(previousEpisodeId);
+        cancelAiRefine(previousEpisodeId);
+      }
       this.init();
     },
     downloadLocalPath(path, previousPath) {
@@ -1065,10 +1069,16 @@ export default {
         )
           return;
         // 同 promptVer 且段数未变(续转会追加段→下标平移)才用缓存，否则视为陈旧丢弃
+        const coverageReady =
+          !row ||
+          row.expectedCount == null ||
+          Number(row.coverageCount) >= Number(row.expectedCount);
         if (
           row &&
           row.promptVer === aiPromptVersion &&
           row.segs &&
+          row.status !== 'partial' &&
+          coverageReady &&
           (!row.segCount || row.segCount === segmentCount)
         ) {
           this.aiMap = row.segs;
@@ -1152,7 +1162,7 @@ export default {
         segmentCount
       );
       if (episodeId !== this.episodeId) return;
-      if (res && res.ok) {
+      if (res && res.ok && res.complete) {
         await this.loadAiRefine();
         this.viewMode = 'ai';
         this.$nextTick(() => this.updateHighlight());
@@ -1329,7 +1339,9 @@ export default {
     async onDelete() {
       const ok =
         typeof window.confirm !== 'function' ||
-        window.confirm('确定删除本集文字稿？（可重新生成）');
+        window.confirm(
+          '确定删除本集文字稿？精修稿和本集总结也会删除；音频不会受影响。'
+        );
       if (!ok) return;
       const res = await deleteTranscript(this.episodeId);
       if (!res || !res.ok) {

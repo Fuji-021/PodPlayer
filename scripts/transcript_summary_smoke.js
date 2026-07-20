@@ -129,6 +129,7 @@ function table(name) {
 }
 export const db = {
   transcripts: table('transcripts'),
+  transcriptDict: table('transcriptDict'),
   transcriptAi: table('transcriptAi'),
   transcriptSummaries: table('transcriptSummaries'),
   transaction(...args) { return args[args.length - 1](); },
@@ -153,7 +154,14 @@ export function refineEpisode(...args) {
   const state = global.__transcriptSummaryHarness;
   state.refineCalls.push(args);
   if (state.refine) return state.refine(...args);
-  return Promise.resolve({ map: {}, changedIdx: [], stats: { accepted: 0, rejected: 0 } });
+  return Promise.resolve({
+    map: {},
+    changedIdx: [],
+    stats: { accepted: 0, rejected: 0 },
+    coverageCount: 0,
+    expectedCount: 0,
+    complete: true,
+  });
 }\n`
   );
   fs.writeFileSync(
@@ -332,6 +340,7 @@ async function testTranscriptStateMachine(summary) {
     transcriptSummaries: new Map(),
     transcriptAi: new Map(),
     transcripts: new Map(),
+    transcriptDict: new Map(),
     getGates: new Map(),
     putGates: new Map(),
     putCalls: 0,
@@ -366,6 +375,9 @@ async function testTranscriptStateMachine(summary) {
       map: { 0: '校对稿' },
       changedIdx: [],
       stats: { accepted: 0, rejected: 0 },
+      coverageCount: 1,
+      expectedCount: 1,
+      complete: true,
     });
   };
   const refined = await transcripts.startAiRefine(
@@ -391,6 +403,9 @@ async function testTranscriptStateMachine(summary) {
           map: { 0: '保留原文' },
           changedIdx: [],
           stats: { accepted: 0, rejected: 0 },
+          coverageCount: 1,
+          expectedCount: 1,
+          complete: false,
         });
       });
     });
@@ -413,6 +428,11 @@ async function testTranscriptStateMachine(summary) {
     'cancel must abort the active request'
   );
   assert.strictEqual(canceledRefine.canceled, true);
+  assert.strictEqual(
+    harness.transcriptAi.get('refine-cancel').status,
+    'partial',
+    'canceled refine work may be retained only as explicit resumable partial data'
+  );
 
   const privateRefineError = 'internal-refine-error-do-not-display';
   harness.toasts.length = 0;
@@ -507,15 +527,148 @@ async function testTranscriptStateMachine(summary) {
     'same episode writes one cached row'
   );
 
+  const globalA = deferred();
+  const globalB = deferred();
+  let globalStarts = 0;
+  const globalSegmentsA = [segment('summary global A', 0)];
+  const globalSegmentsB = [segment('summary global B', 0)];
+  harness.generate = options => {
+    globalStarts += 1;
+    return options.segments[0].display === 'summary global A'
+      ? globalA.promise
+      : globalB.promise;
+  };
+  const startGlobalA = transcripts.startTranscriptSummary(
+    'global-a',
+    'podcast',
+    globalSegmentsA
+  );
+  await waitFor(
+    () => globalStarts === 1,
+    'the first episode must own the only active summary request'
+  );
+  const startGlobalB = transcripts.startTranscriptSummary(
+    'global-b',
+    'podcast',
+    globalSegmentsB
+  );
+  assert.strictEqual(
+    globalStarts,
+    1,
+    'a second episode must wait for the first summary task to settle'
+  );
+  globalA.resolve({
+    summary: 'stale A summary',
+    sourceHash: JSON.stringify(['summary global A']),
+    promptVersion: 'summary-test-v1',
+    provider: 'mock',
+    model: 'mock-model',
+    usage: {},
+    chunkCount: 1,
+  });
+  const globalAResult = await startGlobalA;
+  assert.strictEqual(
+    globalAResult.canceled,
+    true,
+    'switching from A to B must cancel A rather than leaving it invisible'
+  );
+  await waitFor(
+    () => globalStarts === 2,
+    'B may start only after the canceled A task has settled'
+  );
+  globalB.resolve({
+    summary: 'current B summary',
+    sourceHash: JSON.stringify(['summary global B']),
+    promptVersion: 'summary-test-v1',
+    provider: 'mock',
+    model: 'mock-model',
+    usage: {},
+    chunkCount: 1,
+  });
+  const globalBResult = await startGlobalB;
+  assert.strictEqual(globalBResult.ok, true);
+  assert.strictEqual(
+    transcripts.transcriptSummaryState.episodeId,
+    'global-b',
+    'visible summary state must always identify the real active episode'
+  );
+
+  const deleteSummaryDeferred = deferred();
+  harness.generate = () => deleteSummaryDeferred.promise;
+  harness.transcriptDict.set('podcast:term', { id: 'podcast:term' });
+  const deleteSummary = transcripts.startTranscriptSummary(
+    'delete-summary',
+    'podcast',
+    segments
+  );
+  await waitFor(
+    () => harness.generateCalls >= 4,
+    'the summary delete race must reach an in-flight request'
+  );
+  const deleteResult = await transcripts.deleteTranscript('delete-summary');
+  assert.strictEqual(deleteResult.ok, true);
+  deleteSummaryDeferred.resolve({
+    summary: 'must not return after transcript delete',
+    sourceHash: JSON.stringify(['可总结的文字稿。']),
+    promptVersion: 'summary-test-v1',
+    provider: 'mock',
+    model: 'mock-model',
+    usage: {},
+    chunkCount: 1,
+  });
+  const deletedSummaryResult = await deleteSummary;
+  assert.strictEqual(deletedSummaryResult.canceled, true);
+  assert.strictEqual(
+    harness.transcriptSummaries.has('delete-summary'),
+    false,
+    'a deleted transcript must not be resurrected by a late summary response'
+  );
+  assert.strictEqual(
+    harness.transcriptDict.has('podcast:term'),
+    true,
+    'deleting one episode must preserve podcast-scoped dictionary entries'
+  );
+
+  const deleteRefineDeferred = deferred();
+  harness.refine = () => deleteRefineDeferred.promise;
+  const deleteRefine = transcripts.startAiRefine(
+    'delete-refine',
+    'podcast',
+    [{ idx: 0, text: 'delete refine source' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.length >= 4,
+    'the refine delete race must reach an in-flight request'
+  );
+  await transcripts.deleteTranscript('delete-refine');
+  deleteRefineDeferred.resolve({
+    map: { 0: 'delete refine result' },
+    changedIdx: [0],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const deletedRefineResult = await deleteRefine;
+  assert.strictEqual(deletedRefineResult.canceled, true);
+  assert.strictEqual(
+    harness.transcriptAi.has('delete-refine'),
+    false,
+    'a deleted transcript must not be resurrected by a late refine response'
+  );
+
   const canceled = deferred();
   harness.generate = () => canceled.promise;
+  const generatedBeforeCanceled = harness.generateCalls;
   const cancelPromise = transcripts.startTranscriptSummary(
     'canceled',
     'podcast',
     segments
   );
   await waitFor(
-    () => harness.generateCalls === 2,
+    () => harness.generateCalls === generatedBeforeCanceled + 1,
     'cancel test should start one controlled request'
   );
   transcripts.cancelTranscriptSummary('canceled');
@@ -757,9 +910,37 @@ async function testAiRefineRequestLayer() {
     );
     assert.strictEqual(
       invalid.map[1],
-      '原文',
-      'invalid structured data must retain the original segment'
+      undefined,
+      'invalid structured data must remain missing for a later resume'
     );
+    assert.strictEqual(invalid.complete, false);
+
+    let resumeRequests = 0;
+    harness.request = () => {
+      resumeRequests += 1;
+      return Promise.resolve({
+        data: { segs: [{ i: 1, text: 'second', changed: false }] },
+      });
+    };
+    const resumed = await refine.refineEpisode(
+      [
+        { idx: 0, text: 'first' },
+        { idx: 1, text: 'second' },
+      ],
+      [],
+      { key: 'mock-key-only', model: 'mock-model' },
+      null,
+      () => false,
+      { 0: 'first' }
+    );
+    assert.strictEqual(
+      resumeRequests,
+      1,
+      'resume must request only missing segments'
+    );
+    assert.strictEqual(resumed.coverageCount, 2);
+    assert.strictEqual(resumed.expectedCount, 2);
+    assert.strictEqual(resumed.complete, true);
   } finally {
     delete global.__aiRefineHarness;
   }
@@ -799,6 +980,34 @@ async function main() {
       }),
       'invalid-endpoint'
     );
+    await expectReject(
+      request.requestOpenAiJson(
+        { ...cfg, endpoint: 'http://ai.example.test' },
+        [],
+        { https: createHttps(() => {}) }
+      ),
+      'insecure-endpoint'
+    );
+
+    let localHttpOptions = null;
+    const localHttp = createHttps(({ options, onResponse }) => {
+      localHttpOptions = options;
+      loadResponse(
+        onResponse,
+        200,
+        JSON.stringify({
+          choices: [{ message: { content: '{"summary":"local only"}' } }],
+        })
+      );
+    });
+    const localHttpResult = await request.requestOpenAiJson(
+      { ...cfg, endpoint: 'http://127.0.0.1:11434/v1' },
+      [],
+      { http: localHttp }
+    );
+    assert.strictEqual(localHttpResult.data.summary, 'local only');
+    assert.strictEqual(localHttpOptions.protocol, 'http:');
+    assert.strictEqual(localHttpOptions.port, '11434');
 
     const validHttps = createHttps(({ onResponse }) => {
       loadResponse(
@@ -915,6 +1124,10 @@ async function main() {
     );
     assert.ok(panelSource.includes('async onGenerateSummary()'));
     assert.ok(panelSource.includes('@click="onGenerateSummary"'));
+    assert.ok(
+      panelSource.includes("row.status !== 'partial'"),
+      'partial AI refinement must never be treated as valid summary input'
+    );
     assert.ok(panelSource.includes('请先在设置中配置联网 AI 服务'));
     assert.ok(
       !panelSource.includes('填入 DeepSeek API Key'),

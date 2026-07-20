@@ -120,11 +120,20 @@ export async function refineEpisode(
   let accepted = 0;
   let rejected = 0;
   // 只送未缓存、且非超长的段
-  const todo = segs.filter(
-    s => !(s.idx in map) && String(s.text || '').length <= LONG_SEG_LIMIT
+  const eligible = (segs || []).filter(
+    s => String(s.text || '').length <= LONG_SEG_LIMIT
   );
-  const total = todo.length;
-  let done = 0;
+  const hasOwn = (object, key) =>
+    Object.prototype.hasOwnProperty.call(object, key);
+  const coveredCount = () =>
+    eligible.reduce(
+      (count, segment) => count + (hasOwn(map, segment.idx) ? 1 : 0),
+      0
+    );
+  const todo = eligible.filter(segment => !hasOwn(map, segment.idx));
+  const total = eligible.length;
+  let done = coveredCount();
+  if (onProgress) onProgress(done, total);
   for (let b = 0; b < todo.length; b += BATCH) {
     if (isCanceled && isCanceled()) break;
     const batch = todo.slice(b, b + BATCH);
@@ -152,26 +161,47 @@ export async function refineEpisode(
       parsed = obj.segs;
     } catch (e) {
       // 单批失败：该批降级(全保留原文)，不中断整集；记录后继续
+      if (
+        (isCanceled && isCanceled()) ||
+        (opts.signal && opts.signal.aborted)
+      ) {
+        break;
+      }
       parsed = null;
     }
     sent += batch.length;
     // 段数铁律：输出段数必须 = 输入段数，否则整批不采(降级原文)
     const valid =
       parsed && Array.isArray(parsed) && parsed.length === batch.length;
-    for (let k = 0; k < batch.length; k++) {
-      const orig = batch[k].text;
-      const out = valid ? parsed[k] && parsed[k].text : null;
-      const finalText = conservativeAccept(orig, out);
-      map[batch[k].idx] = finalText;
-      if (finalText !== orig) {
-        changedIdx.push(batch[k].idx);
-        accepted++;
-      } else if (out && out !== orig) {
-        rejected++; // LLM 改了但被保守采纳挡下
+    if (valid) {
+      for (let k = 0; k < batch.length; k++) {
+        const orig = batch[k].text;
+        const out = parsed[k] && parsed[k].text;
+        const finalText = conservativeAccept(orig, out);
+        map[batch[k].idx] = finalText;
+        if (finalText !== orig) {
+          changedIdx.push(batch[k].idx);
+          accepted++;
+        } else if (out && out !== orig) {
+          rejected++;
+        }
       }
+    } else {
+      rejected += batch.length;
     }
-    done += batch.length;
+    done = coveredCount();
     if (onProgress) onProgress(done, total);
   }
-  return { map, changedIdx, stats: { sent, accepted, rejected } };
+  const coverageCount = coveredCount();
+  return {
+    map,
+    changedIdx,
+    stats: { sent, accepted, rejected },
+    coverageCount,
+    expectedCount: total,
+    complete:
+      !(isCanceled && isCanceled()) &&
+      !(opts.signal && opts.signal.aborted) &&
+      coverageCount === total,
+  };
 }

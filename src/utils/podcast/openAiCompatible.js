@@ -20,13 +20,20 @@ function requestError(code, message, details) {
   return new OpenAiRequestError(code, message, details);
 }
 
-function getHttps(explicitHttps) {
-  if (explicitHttps) return explicitHttps;
+function getNodeTransport(name, explicitTransport) {
+  if (explicitTransport) return explicitTransport;
   try {
-    return window.require('https');
+    return window.require(name);
   } catch (e) {
     throw requestError('desktop-only', '联网 AI 仅桌面版可用');
   }
+}
+
+function isLoopbackHost(hostname) {
+  const host = String(hostname || '')
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
 export function resolveOpenAiChatUrl(endpoint) {
@@ -39,6 +46,12 @@ export function resolveOpenAiChatUrl(endpoint) {
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw requestError('invalid-endpoint', 'AI 服务地址无效');
+  }
+  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+    throw requestError(
+      'insecure-endpoint',
+      '仅允许使用 HTTPS 服务地址；HTTP 仅限本机服务'
+    );
   }
   const path = (url.pathname || '').replace(/\/+$/, '');
   if (!/\/chat\/completions$/i.test(path)) {
@@ -68,8 +81,8 @@ function isAbortSignal(signal) {
   return !!(signal && typeof signal.addEventListener === 'function');
 }
 
-// `options.https` is intentionally injectable for isolated smoke tests. The
-// production call path always resolves Electron's Node https module above.
+// `options.https` / `options.http` are intentionally injectable for isolated
+// smoke tests. Production resolves Electron's Node transport from the URL.
 export function requestOpenAiChat(cfg, messages, options) {
   const opts = options || {};
   const signal = opts.signal;
@@ -79,11 +92,14 @@ export function requestOpenAiChat(cfg, messages, options) {
   if (signal && signal.aborted) {
     return Promise.reject(requestError('canceled', '已取消 AI 请求'));
   }
-  let https;
+  let transport;
   let url;
   try {
-    https = getHttps(opts.https);
     url = resolveOpenAiChatUrl(cfg && cfg.endpoint);
+    transport = getNodeTransport(
+      url.protocol === 'http:' ? 'http' : 'https',
+      url.protocol === 'http:' ? opts.http : opts.https
+    );
   } catch (e) {
     return Promise.reject(e);
   }
@@ -119,7 +135,7 @@ export function requestOpenAiChat(cfg, messages, options) {
     abortHandler = abort;
 
     try {
-      req = https.request(
+      req = transport.request(
         {
           protocol: url.protocol,
           hostname: url.hostname,
