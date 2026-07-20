@@ -32,7 +32,7 @@ async function main() {
         mode: 'no-model',
         hasLocalFile: false,
       }),
-      { reason: 'unsupported', action: 'focus', shouldScroll: true }
+      { reason: 'unsupported', action: 'focus', shouldScroll: false }
     );
     assert.deepStrictEqual(
       policy.getTranscriptEntryBehavior({

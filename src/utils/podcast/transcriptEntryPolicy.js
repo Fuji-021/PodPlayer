@@ -3,7 +3,8 @@ export function getTranscriptEntryBehavior(state) {
     return { reason: 'loading', action: 'focus', shouldScroll: false };
   }
   if (!state.platformSupported) {
-    return { reason: 'unsupported', action: 'focus', shouldScroll: true };
+    // 无文字稿时不再渲染空面板，详情入口以明确降级提示完成交互。
+    return { reason: 'unsupported', action: 'focus', shouldScroll: false };
   }
   if (!state.modelReady) {
     return { reason: 'no-model', action: 'settings', shouldScroll: false };

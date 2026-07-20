@@ -13,11 +13,7 @@
       @click.stop="$emit('open-episode', episode)"
       @dblclick.stop
     >
-      <PodImage
-        class="update-cover"
-        :src="episode.podcastCoverUrl || episode.episodeCoverUrl"
-        loading="eager"
-      />
+      <SubscriptionEpisodeCover class="update-cover" :episode="episode" />
     </button>
     <div class="update-episode-main">
       <div class="update-episode-meta">
@@ -60,15 +56,6 @@
     </div>
     <div class="update-episode-actions">
       <button
-        v-tip="'更多操作'"
-        class="podcast-episode-action"
-        aria-label="更多操作"
-        @click.stop="$emit('menu', $event, episode)"
-        @dblclick.stop
-      >
-        <svg-icon icon-class="menu-dots-vertical" />
-      </button>
-      <button
         v-tip="runtime.isPlaying ? '暂停' : '播放'"
         class="podcast-episode-action"
         :aria-label="runtime.isPlaying ? '暂停' : '播放'"
@@ -77,14 +64,23 @@
       >
         <svg-icon :icon-class="runtime.isPlaying ? 'pause' : 'play-circle'" />
       </button>
+      <button
+        v-tip="'更多操作'"
+        class="podcast-episode-action"
+        aria-label="更多操作"
+        @click.stop="$emit('menu', $event, episode)"
+        @dblclick.stop
+      >
+        <svg-icon icon-class="menu-dots-vertical" />
+      </button>
     </div>
   </article>
 </template>
 
 <script>
-import PodImage from '@/components/PodImage.vue';
 import SvgIcon from '@/components/SvgIcon.vue';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
+import SubscriptionEpisodeCover from './SubscriptionEpisodeCover.vue';
 
 function formatDuration(value) {
   const total = Math.max(0, Number(value) || 0);
@@ -114,7 +110,7 @@ function formatPublished(value) {
 
 export default {
   name: 'SubscriptionEpisodeRow',
-  components: { PodImage, SvgIcon },
+  components: { SubscriptionEpisodeCover, SvgIcon },
   props: {
     episode: { type: Object, required: true },
     getEpisodeState: { type: Function, required: true },

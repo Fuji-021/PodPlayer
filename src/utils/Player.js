@@ -28,6 +28,12 @@ import {
   tickListenBatch,
   resetEpisodeListening,
 } from '@/utils/podcast/listening';
+import {
+  advanceListenCoverage,
+  createListenCoverageAnchor,
+  flushListenBuffer,
+  shouldFlushListenBuffer,
+} from '@/utils/podcast/listenCoverage';
 import { removeDownload } from '@/utils/podcast/downloads';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
 import { Howl, Howler } from 'howler';
@@ -76,6 +82,7 @@ const delay = ms =>
   });
 const excludeSaveKeys = [
   '_playing',
+  '_listenCoverageAnchor',
   '_personalFMLoading',
   '_personalFMNextLoading',
 ];
@@ -137,6 +144,8 @@ export default class {
     this._personalFMTrack = { id: 0 }; // 私人FM当前歌曲
     // [T15] 睡眠「本集结束」队列边界：Vue 层激活 end 模式时置 true；_nextTrackCallback 据此跳过自动续播
     this._sleepEndMode = false;
+    this._sleepEndCompletionHandler = null;
+    this._sleepEndCompletionToken = 0;
     this._personalFMNextTrack = {
       id: 0,
     }; // 私人FM下一首歌曲信息（为了快速加载下一首）
@@ -162,6 +171,12 @@ export default class {
     Object.defineProperty(this, '_handledPowerResumeToken', {
       enumerable: false,
     });
+    Object.defineProperty(this, '_sleepEndCompletionHandler', {
+      enumerable: false,
+    });
+    Object.defineProperty(this, '_sleepEndCompletionToken', {
+      enumerable: false,
+    });
 
     // init
     this._init();
@@ -169,6 +184,7 @@ export default class {
     // [B69-F5 降频] 收听统计批量缓冲（每秒 tick 累积、节流落盘）。退出/刷新前尽力 flush 一次
     //   （best-effort：IndexedDB 写异步，未必赶在卸载前提交；暂停/切集已各自 flush 兜底）。
     this._listenBuf = null;
+    this._listenCoverageAnchor = null;
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => this._flushListenBuf());
     }
@@ -284,6 +300,7 @@ export default class {
     return this._progress;
   }
   set progress(value) {
+    this._invalidateListenCoverage();
     if (this._howler) {
       // [bug 修复] howler 未 loaded 时 seek 不会生效，要等 'load' 再做
       const applySeek = () => {
@@ -366,8 +383,14 @@ export default class {
     // [C3 音量渐入] 记录最后一次播放态切换时刻(play/pause/切歌/停止都经此)，供下次 play 判"久未播/隔天"。
     this._lastPlayAt = Date.now();
     // [B69-F5 降频] 暂停/停止(playing true→false) → 把未落盘的收听缓冲写出，避免丢本窗口统计。
-    if (!isPlaying && this._playing) this._flushListenBuf();
+    if (!isPlaying && this._playing) {
+      this._flushListenBuf();
+      this._invalidateListenCoverage();
+    }
     this._playing = isPlaying;
+    if (isPlaying && !this._listenCoverageAnchor) {
+      this._primeListenCoverage();
+    }
     // [审P2-1] 同步系统媒体卡片(SMTC / mediaSession)的播放态——否则暂停后系统"正在播放"卡片仍显
     //   播放中、且 OS 据错误态发反向动作。播放时顺带刷新一次位置锚点(OS 据 playbackRate 外推进度条)。
     if ('mediaSession' in navigator) {
@@ -378,27 +401,34 @@ export default class {
       ipcRenderer?.send('updateTrayPlayState', this._playing);
     }
   }
+  _invalidateListenCoverage() {
+    this._listenCoverageAnchor = null;
+  }
+  _primeListenCoverage() {
+    const track = this._currentTrack;
+    if (!track || !track.podcastEpisodeId) {
+      this._invalidateListenCoverage();
+      return;
+    }
+    let position = this._progress;
+    try {
+      const current = this._howler && this._howler.seek();
+      if (typeof current === 'number' && Number.isFinite(current)) {
+        position = current;
+      }
+    } catch (e) {
+      /* keep the latest stable progress */
+    }
+    this._listenCoverageAnchor = createListenCoverageAnchor(position);
+  }
   // [B69-F5 降频] 把累积的收听窗口批量落盘 + 据返回 row 广播 5% 步进/完成给 UI（沿用原逐秒 bump 逻辑）。
   _flushListenBuf() {
-    const buf = this._listenBuf;
-    if (!buf || !buf.count) return Promise.resolve(); // [审P1-4] 返回 Promise 供退出前 await
-    const id = buf.id;
-    const totalSec = buf.totalSec;
-    const payload = {
-      secs: buf.secs,
-      wallDeltaSec: buf.wall,
-      contentDeltaSec: buf.content,
-    };
+    const batch = flushListenBuffer(this._listenBuf, tickListenBatch);
+    if (!batch) return Promise.resolve(); // [审P1-4] 返回 Promise 供退出前 await
+    const { id } = batch.nextBuffer;
     // 同步取出后立即重置窗口(保留 id/totalSec)，防异步落盘期间新 tick 串改本批数据。
-    this._listenBuf = {
-      id,
-      totalSec,
-      secs: [],
-      wall: 0,
-      content: 0,
-      count: 0,
-    };
-    return tickListenBatch(id, totalSec, payload) // [审P1-4] 返回链供退出前 await commit
+    this._listenBuf = batch.nextBuffer;
+    return batch.promise // [审P1-4] 返回链供退出前 await commit
       .then(row => {
         if (!row) return;
         const stepNow = Math.floor(
@@ -439,6 +469,8 @@ export default class {
     return Promise.all(tasks).catch(() => {});
   }
   handleSystemSuspend(event) {
+    this._flushListenBuf();
+    this._invalidateListenCoverage();
     const payload = event || {};
     const track = this._currentTrack || {};
     let progress = Math.max(0, Number(this._progress) || 0);
@@ -473,6 +505,7 @@ export default class {
     return this._powerSuspendSnapshot;
   }
   handleSystemResume(event) {
+    this._invalidateListenCoverage();
     const snapshot = this._powerSuspendSnapshot;
     const track = this._currentTrack || {};
     const currentTrackId = track.podcastEpisodeId || track.id;
@@ -626,7 +659,6 @@ export default class {
 
         // [播客改造] 真实收听统计：每秒 tick
         if (this._playing) {
-          const sec = Math.floor(this._progress);
           let totalSec = Math.floor((t.dt || 0) / 1000);
           // [B-64] 单集时长未知(dt=0，如 RSS 缺 itunes:duration)时用 howler 解码时长兜底，
           //   否则 totalSec=0 → 整块跳过 → 收听统计/每日聚合完全不记录。
@@ -642,35 +674,39 @@ export default class {
             }
           }
           if (totalSec > 0) {
-            const lastSec = this._lastListenSec;
-            const jump = lastSec >= 0 ? Math.abs(sec - lastSec) : 0;
-            // 阈值 = max(45, totalSec * 30%)。前进 30 / 后退 15 总在阈值内。
-            const bigJumpTh = Math.max(45, Math.floor(totalSec * 0.3));
-            const isBigJump = lastSec >= 0 && jump > bigJumpTh;
             const rate = this._playbackRate || 1;
+            const coverage = advanceListenCoverage(this._listenCoverageAnchor, {
+              position: this._progress,
+              playbackRate: rate,
+              totalSec,
+            });
+            this._listenCoverageAnchor = coverage.anchor;
             // [B69-F5 降频] 不再每秒各开 2 个 Dexie rw 事务，改为内存累积本窗口
             //   (记 bit 的秒位置 + 墙钟/内容增量)，每 LISTEN_FLUSH_SEC 秒批量落盘(_flushListenBuf)。
             //   切集(id 变)在此 flush 旧集；暂停由 _setPlaying、退出由 beforeunload 兜底 flush。
-            let buf = this._listenBuf;
-            if (!buf || buf.id !== t.podcastEpisodeId) {
-              if (buf) this._flushListenBuf(); // 切集 → 先把上一集缓冲落盘
-              buf = this._listenBuf = {
-                id: t.podcastEpisodeId,
-                totalSec,
-                secs: [],
-                wall: 0,
-                content: 0,
-                count: 0,
-              };
+            if (coverage.continuous) {
+              let buf = this._listenBuf;
+              if (!buf || buf.id !== t.podcastEpisodeId) {
+                if (buf) this._flushListenBuf(); // 切集 → 先把上一集缓冲落盘
+                buf = this._listenBuf = {
+                  id: t.podcastEpisodeId,
+                  totalSec,
+                  secs: [],
+                  wall: 0,
+                  content: 0,
+                  count: 0,
+                };
+              }
+              buf.totalSec = totalSec; // dt 可能从 0(未知)变为已知
+              // 只记录连续播放实际跨过的内容秒；倍速时补齐中间整数秒。
+              if (coverage.secs.length) buf.secs.push(...coverage.secs);
+              buf.wall += coverage.wallDeltaSec;
+              buf.content += coverage.contentDeltaSec;
+              buf.count += 1;
+              // 后台延迟 tick 也按真实墙钟窗口及时落盘，不能等待更多回调。
+              if (shouldFlushListenBuffer(buf, LISTEN_FLUSH_SEC))
+                this._flushListenBuf();
             }
-            buf.totalSec = totalSec; // dt 可能从 0(未知)变为已知
-            // 大跳那一秒不记 bit、不计内容秒（=原 recordBit:!isBigJump / contentDeltaSec:0）
-            if (!isBigJump && sec >= 0 && sec < totalSec) buf.secs.push(sec);
-            buf.wall += 1; // 真实流逝 1 秒
-            buf.content += isBigJump ? 0 : rate; // 节目时长域：按倍速
-            buf.count += 1;
-            this._lastListenSec = sec;
-            if (buf.count >= LISTEN_FLUSH_SEC) this._flushListenBuf();
           }
         }
       }
@@ -753,6 +789,7 @@ export default class {
     }
   }
   async _playAudioSource(source, autoplay = true, seekToOnLoad = 0) {
+    this._invalidateListenCoverage();
     // [S1 修复 bug-A] 并发令牌：每次调用 +1。如果在 await 期间被新的调用接替，
     // 旧的就此返回，避免两个 howler 同时创建/播放（用户报告"两条音频在响"的根因）
     const myToken = ++this._playSourceToken;
@@ -966,6 +1003,7 @@ export default class {
   //   不能与 _progress 取 max(否则向后拖会被旧位置吃掉)；exact=false(故障自愈)：seek() 可能回 0，
   //   取 max(pos, seek, _progress) 防归零。
   _recoverCurrentSource(pos, exact = false, options = null) {
+    this._invalidateListenCoverage();
     const opts = options || {};
     if (!opts.resolveFresh && this._nasSourceActive)
       return this._failoverNasToCdn();
@@ -1239,6 +1277,7 @@ export default class {
     // 若是别的播客 id（A-7.5 加入播放列表后才会发生），目前简单 noop。
     if (typeof id === 'string' && String(id).startsWith('pod:')) {
       if (this._currentTrack && this._currentTrack.id === id) {
+        this._invalidateListenCoverage();
         this._howler?.seek(0);
         if (autoplay) this.play();
         return Promise.resolve(true);
@@ -1460,11 +1499,41 @@ export default class {
   setSleepEndMode(active) {
     this._sleepEndMode = !!active;
   }
+  // Vue 层只通过这个公开回调接收自然结束，不需要读取播放器内部睡眠标志。
+  setSleepEndCompletionHandler(handler) {
+    this._sleepEndCompletionHandler =
+      typeof handler === 'function' ? handler : null;
+  }
+  _emitSleepEndCompletion() {
+    const handler = this._sleepEndCompletionHandler;
+    if (!handler) return;
+    const payload = {
+      reason: 'natural-end',
+      token: ++this._sleepEndCompletionToken,
+      trackId:
+        (this._currentTrack &&
+          (this._currentTrack.podcastEpisodeId || this._currentTrack.id)) ||
+        null,
+    };
+    try {
+      handler(payload);
+    } catch (error) {
+      console.error('[player] sleep end completion handler failed', error);
+    }
+  }
   _nextTrackCallback() {
+    // Howler 的 onend 不保证紧随最后一个 1s tick；先排空已有缓冲，
+    // 再决定普通续播、单曲循环或睡眠“本集结束”的分支。
+    this._flushListenBuf();
+    this._invalidateListenCoverage();
     this._scrobble(this._currentTrack, 0, true);
-    // [T15] end 模式：自然播完后不续播队列，让 Vue 层的 1s interval 检测到 leftSec<=2 → fireSleep()
+    // [T15] end 模式：自然播完后不续播队列，并通知 Vue 层收口睡眠 UI。
     if (this._sleepEndMode) {
       this._sleepEndMode = false;
+      this._setPlaying(false);
+      store.commit('setAudioBuffering', false);
+      setTitle(null);
+      this._emitSleepEndCompletion();
       return;
     }
     if (!this.isPersonalFM && this.repeatMode === 'one') {
@@ -1726,6 +1795,7 @@ export default class {
       ipcRenderer?.send('seeked', time);
     }
     if (time !== null) {
+      this._invalidateListenCoverage();
       // [B-81 修] howler 未 loaded 时直接 seek 会被忽略(时间戳/快进"点了不动"真因之一)。
       //   与 progress setter(224) 同范式：loaded 才立即 seek，否则挂 once('load') 等加载完成再 seek。
       // [播放期坏元素防从0] 与 set progress 对称：底层 <audio> 已 error/掉到不可播时绝不原地 seek
@@ -2012,6 +2082,7 @@ export default class {
     //   此刻 _listenBuf 仍持上一集 id，落盘正确(本方法此前 _currentTrack 已是新集，但缓冲只由 tick 更新)。
     this._flushListenBuf();
     this._listenBuf = null;
+    this._invalidateListenCoverage();
 
     // [播客改造 progress-bug] 立即调 setTitle 让 document.title 含节目名
     // → state.title 一定与原默认值"PodPlayer"不同 → Vue 重渲染读到正确 _progress
@@ -2049,8 +2120,6 @@ export default class {
           ? Math.min(Math.floor(startAt), trackDurSec - 2)
           : Math.floor(startAt);
     }
-    // 每次切到新单集，重置 listening tick 的 lastSec（让首秒不会被错判为跳跃）
-    this._lastListenSec = -1;
     // [T5] 切集：若上一集已听完且用户开启自动清理，在此删除其本地下载文件（此时文件已不在播放中，安全）。
     //   仅当切到「不同单集」时触发，避免重播同集时误删。
     if (this._lastListenCompleted) {

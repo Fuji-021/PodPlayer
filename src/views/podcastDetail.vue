@@ -266,7 +266,7 @@
         <div class="msg">
           确定要删除已下载的
           <b>"{{ dlDeleteTarget.title }}"</b>
-          吗？<br />本地音频文件会被删除，单集听过的进度不会被删除。
+          吗？<br />只会删除本地音频文件；收听进度、文字稿、精修稿和总结都会保留。
         </div>
         <div class="actions">
           <button class="btn-secondary" @click="dlDeleteTarget = null">
@@ -301,6 +301,8 @@
         </div>
       </div>
     </div>
+
+    <MainScrollBackToTop />
   </div>
 </template>
 
@@ -342,6 +344,7 @@ import {
 } from '@/utils/podcast/nasSource';
 import SvgIcon from '@/components/SvgIcon.vue';
 import BouncingDots from '@/components/BouncingDots.vue';
+import MainScrollBackToTop from '@/components/MainScrollBackToTop.vue';
 
 // [F1·方案C] 单集行固定高度兜底(px)。真实值 mounted 后测量并写 localStorage，此处仅供首帧 spacer 估算。
 const ROW_H_FALLBACK = 69;
@@ -363,7 +366,7 @@ let pendingRestore = null;
 
 export default {
   name: 'PodcastDetail',
-  components: { SvgIcon, BouncingDots },
+  components: { SvgIcon, BouncingDots, MainScrollBackToTop },
   data() {
     return {
       podcast: null,

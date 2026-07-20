@@ -4,6 +4,7 @@
 //   网络走 node https(渲染端 nodeIntegration) → 无 CORS、无需主进程(不必重启 dev、不打扰转录)。
 //   只在段内改字词；段边界/段数/时间戳全不动 → 点读/高亮/虚拟滚动复用现有逻辑(同 D 段落重组)。
 import { pinyin } from 'pinyin-pro';
+import { requestOpenAiJson } from './openAiCompatible';
 
 // 改 prompt / 采纳规则务必改此号 → 旧缓存(Dexie transcriptAi.promptVer)自动失效、重算。
 //   v2: 修 UTF-8 跨 chunk 乱码 + 上下文加大(前后各~3段/200字) → 旧乱码缓存自动作废重跑。
@@ -78,74 +79,6 @@ export function conservativeAccept(orig, refined) {
   return refined;
 }
 
-// ---- DeepSeek 调用(node https；超时/错误抛出，由上层降级) ----
-function chatCompletion(cfg, messages) {
-  return new Promise((resolve, reject) => {
-    let https;
-    try {
-      https = window.require('https'); // node https(渲染端 nodeIntegration)→ 无 CORS
-    } catch (e) {
-      reject(new Error('AI 精修仅桌面版可用'));
-      return;
-    }
-    const base = String(cfg.endpoint || 'https://api.deepseek.com').replace(
-      /\/+$/,
-      ''
-    );
-    let u;
-    try {
-      u = new URL(base + '/chat/completions'); // 浏览器全局 URL
-    } catch (e) {
-      reject(new Error('endpoint 非法'));
-      return;
-    }
-    const payload = JSON.stringify({
-      model: cfg.model || 'deepseek-chat',
-      messages: messages,
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
-    });
-    const clen = new TextEncoder().encode(payload).length; // UTF-8 字节数(避免 Buffer 依赖)
-    const req = https.request(
-      {
-        protocol: u.protocol,
-        hostname: u.hostname,
-        port: u.port || 443,
-        path: u.pathname + (u.search || ''),
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': clen,
-          Authorization: 'Bearer ' + cfg.key,
-        },
-      },
-      res => {
-        let buf = '';
-        res.setEncoding('utf8'); // [必修] Node 处理跨 chunk 多字节 → 汉字不再被切成 �
-        res.on('data', d => (buf += d));
-        res.on('end', () => {
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            try {
-              resolve(JSON.parse(buf));
-            } catch (e) {
-              reject(new Error('返回非法 JSON'));
-            }
-          } else {
-            // 不回显 key；截断响应体
-            reject(
-              new Error('HTTP ' + res.statusCode + ' ' + buf.slice(0, 160))
-            );
-          }
-        });
-      }
-    );
-    req.on('error', e => reject(new Error('网络错误: ' + (e && e.message))));
-    req.setTimeout(90000, () => req.destroy(new Error('请求超时')));
-    req.write(payload);
-    req.end();
-  });
-}
-
 function buildUser(batchSegs, prevText, nextText, anchors) {
   const nouns = anchors && anchors.length ? anchors.join('、') : '(无)';
   const numbered = batchSegs.map((s, i) => i + 1 + '. ' + s.text).join('\n');
@@ -176,20 +109,31 @@ export async function refineEpisode(
   cfg,
   onProgress,
   isCanceled,
-  existing
+  existing,
+  options
 ) {
-  if (!cfg || !cfg.key) throw new Error('未配置 DeepSeek API Key');
+  const opts = options || {};
+  if (!cfg || !cfg.key) throw new Error('请先配置联网 AI 服务');
   const map = Object.assign({}, existing || {});
   const changedIdx = [];
   let sent = 0;
   let accepted = 0;
   let rejected = 0;
   // 只送未缓存、且非超长的段
-  const todo = segs.filter(
-    s => !(s.idx in map) && String(s.text || '').length <= LONG_SEG_LIMIT
+  const eligible = (segs || []).filter(
+    s => String(s.text || '').length <= LONG_SEG_LIMIT
   );
-  const total = todo.length;
-  let done = 0;
+  const hasOwn = (object, key) =>
+    Object.prototype.hasOwnProperty.call(object, key);
+  const coveredCount = () =>
+    eligible.reduce(
+      (count, segment) => count + (hasOwn(map, segment.idx) ? 1 : 0),
+      0
+    );
+  const todo = eligible.filter(segment => !hasOwn(map, segment.idx));
+  const total = eligible.length;
+  let done = coveredCount();
+  if (onProgress) onProgress(done, total);
   for (let b = 0; b < todo.length; b += BATCH) {
     if (isCanceled && isCanceled()) break;
     const batch = todo.slice(b, b + BATCH);
@@ -205,36 +149,59 @@ export async function refineEpisode(
     const user = buildUser(batch, prevText, nextText, anchors);
     let parsed = null;
     try {
-      const resp = await chatCompletion(cfg, [
-        { role: 'system', content: SYSTEM },
-        { role: 'user', content: user },
-      ]);
-      const content =
-        resp.choices && resp.choices[0] && resp.choices[0].message.content;
-      const obj = JSON.parse(content);
+      const resp = await requestOpenAiJson(
+        cfg,
+        [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: user },
+        ],
+        { signal: opts.signal }
+      );
+      const obj = resp.data;
       parsed = obj.segs;
     } catch (e) {
       // 单批失败：该批降级(全保留原文)，不中断整集；记录后继续
+      if (
+        (isCanceled && isCanceled()) ||
+        (opts.signal && opts.signal.aborted)
+      ) {
+        break;
+      }
       parsed = null;
     }
     sent += batch.length;
     // 段数铁律：输出段数必须 = 输入段数，否则整批不采(降级原文)
     const valid =
       parsed && Array.isArray(parsed) && parsed.length === batch.length;
-    for (let k = 0; k < batch.length; k++) {
-      const orig = batch[k].text;
-      const out = valid ? parsed[k] && parsed[k].text : null;
-      const finalText = conservativeAccept(orig, out);
-      map[batch[k].idx] = finalText;
-      if (finalText !== orig) {
-        changedIdx.push(batch[k].idx);
-        accepted++;
-      } else if (out && out !== orig) {
-        rejected++; // LLM 改了但被保守采纳挡下
+    if (valid) {
+      for (let k = 0; k < batch.length; k++) {
+        const orig = batch[k].text;
+        const out = parsed[k] && parsed[k].text;
+        const finalText = conservativeAccept(orig, out);
+        map[batch[k].idx] = finalText;
+        if (finalText !== orig) {
+          changedIdx.push(batch[k].idx);
+          accepted++;
+        } else if (out && out !== orig) {
+          rejected++;
+        }
       }
+    } else {
+      rejected += batch.length;
     }
-    done += batch.length;
+    done = coveredCount();
     if (onProgress) onProgress(done, total);
   }
-  return { map, changedIdx, stats: { sent, accepted, rejected } };
+  const coverageCount = coveredCount();
+  return {
+    map,
+    changedIdx,
+    stats: { sent, accepted, rejected },
+    coverageCount,
+    expectedCount: total,
+    complete:
+      !(isCanceled && isCanceled()) &&
+      !(opts.signal && opts.signal.aborted) &&
+      coverageCount === total,
+  };
 }

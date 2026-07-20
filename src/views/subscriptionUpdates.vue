@@ -41,6 +41,7 @@
 
     <template v-else>
       <SubscriptionProgramRail
+        ref="programRail"
         :podcasts="railPodcasts"
         :selected-podcast-id="selectedPodcastId"
         @select="selectPodcast"
@@ -160,7 +161,7 @@
         <div class="msg">
           确定要删除已下载的
           <b>{{ deleteDownloadTarget.title }}</b>
-          吗？单集进度和文字稿不会被删除。
+          吗？只会删除本地音频文件；收听进度、文字稿、精修稿和总结都会保留。
         </div>
         <div class="dialog-actions">
           <button class="secondary-action" @click="deleteDownloadTarget = null"
@@ -199,10 +200,12 @@ import {
 import { refreshSubscribedPodcasts } from '@/utils/podcast/subscriptionRefresh';
 import {
   countPendingSubscriptionEpisodes,
+  rankSubscriptionRail,
   resolveSubscriptionSelection,
 } from '@/utils/podcast/subscriptionUpdatesRules';
 import {
   markAllSubscriptionsEntryFromUpdates,
+  onSubscriptionUpdatesScrollTop,
   onSubscriptionUpdatesChanged,
 } from '@/utils/podcast/subscriptionNavigation';
 
@@ -244,6 +247,7 @@ export default {
       loadingError: '',
       listNow: Date.now(),
       liveListenByEpisode: {},
+      railOrderIds: [],
       nasByPodcast: {},
       menuEpisode: null,
       deleteDownloadTarget: null,
@@ -257,7 +261,11 @@ export default {
       return this.snapshot.podcastCount || 0;
     },
     railPodcasts() {
-      return this.snapshot.podcasts || [];
+      const podcasts = this.snapshot.podcasts || [];
+      if (!this.railOrderIds.length) return podcasts;
+      const byId = new Map(podcasts.map(podcast => [podcast.id, podcast]));
+      const ordered = this.railOrderIds.map(id => byId.get(id)).filter(Boolean);
+      return ordered.length === podcasts.length ? ordered : podcasts;
     },
     currentView() {
       return (
@@ -318,10 +326,18 @@ export default {
     '$store.state.podcastListening.listenTick'() {
       this.syncListeningState();
     },
+    currentEpisodeId() {
+      this.refreshRailOrdering({ force: true });
+    },
+    playerPlaying(playing, wasPlaying) {
+      if (wasPlaying && !playing) this.refreshRailOrdering({ force: true });
+    },
   },
   created() {
     this._destroyed = false;
     this._isActive = true;
+    this._railListenWallByPodcast = new Map();
+    this._railOrderDirty = false;
     this._removeSubscriptionUpdatesChanged = onSubscriptionUpdatesChanged(
       () => {
         markSubscriptionUpdatesDirty();
@@ -329,6 +345,9 @@ export default {
         this.listNow = Date.now();
         this.loadSnapshot({ preserveNewItems: true });
       }
+    );
+    this._removeSubscriptionUpdatesScrollTop = onSubscriptionUpdatesScrollTop(
+      () => this.handleSubscriptionUpdatesScrollTop()
     );
     this.loadInitialSnapshot();
     this.scheduleLocalDayRefresh();
@@ -339,7 +358,9 @@ export default {
       this.listNow = Date.now();
       this.$parent?.$refs?.scrollbar?.restorePosition();
       // Cached snapshots return synchronously without reading Dexie again.
-      this.loadSnapshot({ preserveNewItems: true });
+      this.loadSnapshot({ preserveNewItems: true }).then(() =>
+        this.refreshRailOrdering({ force: true })
+      );
       this.checkBackgroundRefresh();
     }
     this._wasActivated = true;
@@ -359,9 +380,26 @@ export default {
       this._removeSubscriptionUpdatesChanged();
       this._removeSubscriptionUpdatesChanged = null;
     }
+    if (this._removeSubscriptionUpdatesScrollTop) {
+      this._removeSubscriptionUpdatesScrollTop();
+      this._removeSubscriptionUpdatesScrollTop = null;
+    }
     if (this._dayRefreshTimer) clearTimeout(this._dayRefreshTimer);
   },
   methods: {
+    handleSubscriptionUpdatesScrollTop() {
+      if (
+        this._destroyed ||
+        !this._isActive ||
+        this.$route.name !== 'library'
+      ) {
+        return;
+      }
+      const feed = this.$refs.episodeFeed;
+      if (feed && typeof feed.scrollToTopSmooth === 'function') {
+        feed.scrollToTopSmooth();
+      }
+    },
     async loadInitialSnapshot() {
       await this.loadSnapshot();
       this.checkBackgroundRefresh();
@@ -399,12 +437,59 @@ export default {
     },
     applySnapshot(snapshot) {
       this.snapshot = snapshot || emptySnapshot();
+      this.syncRailOrderFromSnapshot();
       this.selectedPodcastId = resolveSubscriptionSelection(
         this.railPodcasts,
         this.selectedPodcastId
       );
       this.pendingSnapshot = null;
       this.pendingNewCount = 0;
+    },
+    syncRailOrderFromSnapshot() {
+      const podcastIds = (this.snapshot.podcasts || [])
+        .map(podcast => podcast.id)
+        .filter(Boolean);
+      this.railOrderIds = podcastIds;
+      const validIds = new Set(podcastIds);
+      const live = this.getRailListenWallByPodcast();
+      Array.from(live.keys()).forEach(id => {
+        if (!validIds.has(id)) live.delete(id);
+      });
+      this._railOrderDirty = live.size > 0;
+    },
+    getRailListenWallByPodcast() {
+      if (!this._railListenWallByPodcast) {
+        this._railListenWallByPodcast = new Map();
+      }
+      return this._railListenWallByPodcast;
+    },
+    getLiveRailPodcasts() {
+      const live = this.getRailListenWallByPodcast();
+      return (this.snapshot.podcasts || []).map(podcast => {
+        const listenWallSec = live.get(podcast.id);
+        return Number.isFinite(listenWallSec)
+          ? { ...podcast, listenWallSec }
+          : podcast;
+      });
+    },
+    refreshRailOrdering({ force = false } = {}) {
+      if (!force && !this._railOrderDirty) return;
+      const ranked = rankSubscriptionRail(
+        this.getLiveRailPodcasts(),
+        this.listNow
+      );
+      const nextIds = ranked.map(podcast => podcast.id);
+      const sameOrder =
+        nextIds.length === this.railOrderIds.length &&
+        nextIds.every((id, index) => id === this.railOrderIds[index]);
+      this._railOrderDirty = false;
+      if (sameOrder) return;
+      this.railOrderIds = nextIds;
+      if (this.selectedPodcastId) {
+        this.$nextTick(() => {
+          this.$refs.programRail?.ensureSelectedVisible(this.selectedPodcastId);
+        });
+      }
     },
     freshEpisodeCount(snapshot) {
       if (!snapshot || !this.snapshot || !this.snapshot.episodes) return 0;
@@ -748,12 +833,42 @@ export default {
         const listenStats = await getListenStats(episodeId);
         if (this._destroyed || token !== this._listenSyncToken) return;
         const completed = !!(listenStats && listenStats.completed);
+        const previousLive = this.liveListenByEpisode[episodeId];
+        const previousListenWallSec = Number.isFinite(
+          Number(previousLive && previousLive.listenWallSec)
+        )
+          ? Number(previousLive.listenWallSec)
+          : Number(oldEpisode.listenWallSec) || 0;
+        const nextListenWallSec = Number(
+          listenStats && listenStats.totalPlayWallSec
+        );
         this.$set(this.liveListenByEpisode, episodeId, {
           listenStats,
           completed,
           listenedSec:
             Number(signal.listenedSec) || oldEpisode.listenedSec || 0,
+          listenWallSec: Number.isFinite(nextListenWallSec)
+            ? nextListenWallSec
+            : previousListenWallSec,
         });
+        if (Number.isFinite(nextListenWallSec)) {
+          const railPodcast = (this.snapshot.podcasts || []).find(
+            podcast => podcast.id === oldEpisode.podcastId
+          );
+          if (railPodcast) {
+            const live = this.getRailListenWallByPodcast();
+            const currentAggregate = Number.isFinite(
+              Number(live.get(oldEpisode.podcastId))
+            )
+              ? Number(live.get(oldEpisode.podcastId))
+              : Number(railPodcast.listenWallSec) || 0;
+            const delta = nextListenWallSec - previousListenWallSec;
+            if (delta) {
+              live.set(oldEpisode.podcastId, currentAggregate + delta);
+              this._railOrderDirty = true;
+            }
+          }
+        }
         if (completed !== oldEpisode.completed) {
           this.snapshot = applySubscriptionUpdateCompletion(
             this.snapshot,
@@ -761,6 +876,7 @@ export default {
             completed,
             this.listNow
           );
+          this.refreshRailOrdering({ force: true });
         }
       } catch (error) {
         // Keep the cached row; the next listening signal can reconcile it.

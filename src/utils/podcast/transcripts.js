@@ -7,6 +7,13 @@ import { db } from '@/utils/db';
 import store from '@/store';
 import { getDownload } from '@/utils/podcast/downloads';
 import { refineEpisode, AI_PROMPT_VERSION } from '@/utils/podcast/aiRefine';
+import {
+  buildSummaryParagraphs,
+  generateTranscriptSummary,
+  hashTranscriptSummarySource,
+  TRANSCRIPT_SUMMARY_PROMPT_VERSION,
+} from '@/utils/podcast/transcriptSummary';
+import { hasOpenAiKey } from '@/utils/podcast/openAiCompatible';
 
 const ipcRenderer = window.require
   ? window.require('electron').ipcRenderer
@@ -32,6 +39,7 @@ function guardTranscriptDelete(episodeId) {
   const timer = setTimeout(() => {
     transcriptDeleteGuards.delete(episodeId);
   }, 30000);
+  if (timer && typeof timer.unref === 'function') timer.unref();
   transcriptDeleteGuards.set(episodeId, timer);
 }
 
@@ -98,6 +106,7 @@ export function updateTranscript(episodeId, patch) {
 }
 
 export async function deleteTranscript(episodeId) {
+  invalidateTranscriptDerivedTasks(episodeId);
   guardTranscriptDelete(episodeId);
   let ipcResult = { ok: true };
   try {
@@ -112,10 +121,19 @@ export async function deleteTranscript(episodeId) {
     return ipcResult || { ok: false, error: 'transcript-delete-failed' };
   }
   try {
-    await db.transaction('rw', db.transcripts, db.transcriptAi, async () => {
-      await db.transcripts.delete(episodeId);
-      await db.transcriptAi.delete(episodeId);
-    });
+    await db.transaction(
+      'rw',
+      db.transcripts,
+      db.transcriptAi,
+      db.transcriptSummaries,
+      async () => {
+        await db.transcripts.delete(episodeId);
+        await db.transcriptAi.delete(episodeId);
+        await db.transcriptSummaries.delete(episodeId);
+        // transcriptDict is podcast-scoped user vocabulary, not an episode
+        // derivative; deleting one transcript must leave it intact.
+      }
+    );
   } catch (e) {
     clearTranscriptDeleteGuard(episodeId);
     return { ok: false, error: String((e && e.message) || e) };
@@ -563,7 +581,30 @@ export const aiRefineState = Vue.observable({
   rejected: 0,
   error: '',
 });
-let _aiCancel = '';
+const aiRefineJobs = new Map();
+
+function isCurrentAiRefineJob(job) {
+  return !!(job && aiRefineJobs.get(job.episodeId) === job && !job.invalidated);
+}
+
+function releaseAiRefineJob(job) {
+  if (job && aiRefineJobs.get(job.episodeId) === job) {
+    aiRefineJobs.delete(job.episodeId);
+  }
+}
+
+// 总结任务与精修任务彼此独立。总结不会在转写完成、页面打开或播放时自动启动。
+export const transcriptSummaryState = Vue.observable({
+  episodeId: '',
+  status: 'idle', // idle | running | done | error | canceled
+  done: 0,
+  total: 0,
+  error: '',
+});
+const summaryJobs = new Map();
+const summaryStarts = new Map();
+let activeSummaryJob = null;
+let summarySerial = Promise.resolve();
 
 export function getAiRefine(episodeId) {
   return db.transcriptAi.get(episodeId);
@@ -571,11 +612,29 @@ export function getAiRefine(episodeId) {
 export function deleteAiRefine(episodeId) {
   return db.transcriptAi.delete(episodeId).catch(() => {});
 }
-export function cancelAiRefine(episodeId) {
-  _aiCancel = episodeId || aiRefineState.episodeId;
+export function getTranscriptSummary(episodeId) {
+  return db.transcriptSummaries.get(episodeId);
+}
+export function deleteTranscriptSummary(episodeId) {
+  return db.transcriptSummaries.delete(episodeId).catch(() => {});
+}
+export function cancelAiRefine(episodeId, options) {
+  const id = episodeId || aiRefineState.episodeId;
+  const job = aiRefineJobs.get(id);
+  if (!job) return false;
+  job.canceled = true;
+  if (options && options.invalidate) job.invalidated = true;
+  if (job.controller && typeof job.controller.abort === 'function') {
+    job.controller.abort();
+  }
+  if (aiRefineState.episodeId === id) {
+    aiRefineState.status = 'canceled';
+    aiRefineState.error = '';
+  }
+  return true;
 }
 
-function aiConfig() {
+export function getAiServiceConfig() {
   const s = (store.state && store.state.settings) || {};
   return {
     key: String(s.deepseekKey || '').trim(),
@@ -585,7 +644,7 @@ function aiConfig() {
   };
 }
 export function hasAiKey() {
-  return !!aiConfig().key;
+  return hasOpenAiKey(getAiServiceConfig());
 }
 export const aiPromptVersion = AI_PROMPT_VERSION;
 
@@ -598,12 +657,21 @@ export async function startAiRefine(
   anchors,
   baseSegCount
 ) {
-  const cfg = aiConfig();
-  if (!cfg.key) {
-    store.dispatch('showToast', '请先在设置里填入 DeepSeek API Key');
+  const cfg = getAiServiceConfig();
+  if (!hasOpenAiKey(cfg)) {
+    store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
     return { ok: false, reason: 'no-key' };
   }
-  _aiCancel = '';
+  const controller =
+    typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const job = {
+    episodeId,
+    controller,
+    canceled: false,
+    invalidated: false,
+    promise: null,
+  };
+  aiRefineJobs.set(episodeId, job);
   aiRefineState.episodeId = episodeId;
   aiRefineState.status = 'running';
   aiRefineState.done = 0;
@@ -612,8 +680,10 @@ export async function startAiRefine(
   aiRefineState.rejected = 0;
   aiRefineState.error = '';
   let existing = {};
+  let existingRow = null;
   try {
     const row = await getAiRefine(episodeId);
+    existingRow = row || null;
     if (row && row.promptVer === AI_PROMPT_VERSION && row.segs)
       existing = row.segs;
   } catch (e) {
@@ -625,38 +695,75 @@ export async function startAiRefine(
       speechSegs,
       anchors,
       cfg,
-      done => {
+      (done, total) => {
+        if (!isCurrentAiRefineJob(job)) return;
         aiRefineState.done = done;
+        aiRefineState.total = total;
       },
-      () => _aiCancel === episodeId,
-      existing
+      () => job.canceled || job.invalidated,
+      existing,
+      { signal: controller && controller.signal }
     );
   } catch (e) {
+    const canceled =
+      job.canceled || job.invalidated || (e && e.code === 'canceled');
+    if (canceled) {
+      if (aiRefineState.episodeId === episodeId) {
+        aiRefineState.status = 'canceled';
+        aiRefineState.error = '';
+      }
+      releaseAiRefineJob(job);
+      return { ok: false, canceled: true };
+    }
+    const message = aiServiceErrorMessage(e, 'refine');
     aiRefineState.status = 'error';
-    aiRefineState.error = String((e && e.message) || e);
-    store.dispatch('showToast', 'AI 精修失败：' + aiRefineState.error);
+    aiRefineState.error = message;
+    store.dispatch('showToast', message);
+    releaseAiRefineJob(job);
     return { ok: false, error: aiRefineState.error };
   }
+  if (!isCurrentAiRefineJob(job)) {
+    releaseAiRefineJob(job);
+    return { ok: false, canceled: true };
+  }
+  const completed = !!res.complete && !job.canceled;
   try {
     await db.transcriptAi.put({
       id: episodeId,
       podcastId: podcastId,
       promptVer: AI_PROMPT_VERSION,
+      status: completed ? 'ready' : 'partial',
       segCount: baseSegCount || 0, // 基于的总段数；段数变(续转)即弃旧缓存防下标错位
+      coverageCount: res.coverageCount || 0,
+      expectedCount: res.expectedCount || 0,
       segs: res.map,
       changedIdx: res.changedIdx,
       stats: res.stats,
-      createdAt: Date.now(),
+      createdAt: (existingRow && existingRow.createdAt) || Date.now(),
       updatedAt: Date.now(),
     });
   } catch (e) {
     /* ignore */
   }
-  const canceled = _aiCancel === episodeId;
+  if (!isCurrentAiRefineJob(job)) {
+    if (job.invalidated) {
+      await db.transcriptAi.delete(episodeId).catch(() => {});
+    }
+    releaseAiRefineJob(job);
+    return { ok: false, canceled: true };
+  }
+  const canceled = job.canceled || job.invalidated;
   aiRefineState.accepted = res.stats.accepted;
   aiRefineState.rejected = res.stats.rejected;
-  aiRefineState.status = canceled ? 'idle' : 'done';
-  if (!canceled) {
+  if (!completed) {
+    aiRefineState.status = canceled ? 'canceled' : 'error';
+    aiRefineState.error = canceled ? '' : 'AI 精修未完成，可重新继续';
+    if (!canceled) store.dispatch('showToast', aiRefineState.error);
+    releaseAiRefineJob(job);
+    return { ok: false, canceled, partial: true, segs: res.map };
+  }
+  aiRefineState.status = 'done';
+  if (completed) {
     store.dispatch(
       'showToast',
       'AI 精修完成：纠正 ' +
@@ -667,5 +774,233 @@ export async function startAiRefine(
           : '')
     );
   }
-  return { ok: true, changedIdx: res.changedIdx, segs: res.map, canceled };
+  releaseAiRefineJob(job);
+  return {
+    ok: true,
+    complete: true,
+    changedIdx: res.changedIdx,
+    segs: res.map,
+    canceled: false,
+  };
+}
+
+function aiServiceErrorMessage(error, action) {
+  const code = error && error.code;
+  if (code === 'timeout') return 'AI 服务请求超时，请稍后重试';
+  if (code === 'canceled') {
+    return action === 'refine' ? '已取消 AI 精修' : '已取消本集总结';
+  }
+  if (code === 'invalid-json' || code === 'invalid-summary') {
+    return 'AI 服务返回的数据无法识别，请重试';
+  }
+  if (code === 'invalid-endpoint') return 'AI 服务地址无效';
+  if (code === 'insecure-endpoint') {
+    return 'AI 服务地址需使用 HTTPS；HTTP 仅限本机服务';
+  }
+  if (code === 'network') return 'AI 服务连接失败，请检查网络或服务配置';
+  if (code === 'http') return 'AI 服务请求失败，请稍后重试';
+  return action === 'refine'
+    ? 'AI 精修失败，请稍后重试'
+    : '生成本集总结失败，请稍后重试';
+}
+
+function summaryErrorMessage(error) {
+  return aiServiceErrorMessage(error, 'summary');
+}
+
+export function cancelTranscriptSummary(episodeId, options) {
+  const id = episodeId || transcriptSummaryState.episodeId;
+  const job = summaryJobs.get(id) || summaryStarts.get(id);
+  if (!job) return;
+  job.canceled = true;
+  if (options && options.invalidate) job.invalidated = true;
+  if (job.controller && job.controller.abort) job.controller.abort();
+  if (transcriptSummaryState.episodeId === id) {
+    transcriptSummaryState.status = 'canceled';
+    transcriptSummaryState.error = '';
+  }
+}
+
+export function invalidateTranscriptDerivedTasks(episodeId) {
+  if (!episodeId) return;
+  cancelTranscriptSummary(episodeId, { invalidate: true });
+  cancelAiRefine(episodeId, { invalidate: true });
+}
+
+function cancelOtherTranscriptSummaries(episodeId) {
+  const ids = new Set([
+    ...Array.from(summaryStarts.keys()),
+    ...Array.from(summaryJobs.keys()),
+  ]);
+  ids.forEach(id => {
+    if (id !== episodeId) cancelTranscriptSummary(id);
+  });
+}
+
+// `segments` must already be the effective source chosen by the caller:
+// valid AI-refined text first, otherwise rule-processed proofread text.
+// This function never reads audio, starts ASR, or queues a download.
+export async function startTranscriptSummary(
+  episodeId,
+  podcastId,
+  segments,
+  options
+) {
+  const opts = options || {};
+  const paragraphs = buildSummaryParagraphs(segments);
+  if (!paragraphs.length) {
+    return { ok: false, reason: 'no-transcript' };
+  }
+  const sourceHash = hashTranscriptSummarySource(paragraphs);
+  const cfg = getAiServiceConfig();
+  if (!hasOpenAiKey(cfg)) {
+    store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
+    return { ok: false, reason: 'no-key' };
+  }
+  cancelOtherTranscriptSummaries(episodeId);
+  const existingJob =
+    summaryJobs.get(episodeId) || summaryStarts.get(episodeId);
+  if (existingJob) return existingJob.promise;
+  const start = {
+    episodeId,
+    canceled: false,
+    invalidated: false,
+    promise: null,
+  };
+  summaryStarts.set(episodeId, start);
+  start.promise = summarySerial.then(async () => {
+    if (start.canceled || start.invalidated) {
+      return { ok: false, canceled: true };
+    }
+    activeSummaryJob = start;
+    let existing = null;
+    try {
+      existing = await getTranscriptSummary(episodeId);
+    } catch (e) {
+      existing = null;
+    }
+    if (start.canceled || start.invalidated) {
+      return { ok: false, canceled: true };
+    }
+    if (
+      !opts.force &&
+      existing &&
+      existing.sourceHash === sourceHash &&
+      existing.promptVersion === TRANSCRIPT_SUMMARY_PROMPT_VERSION &&
+      existing.summary
+    ) {
+      transcriptSummaryState.episodeId = episodeId;
+      transcriptSummaryState.status = 'done';
+      transcriptSummaryState.done = 1;
+      transcriptSummaryState.total = 1;
+      transcriptSummaryState.error = '';
+      return { ok: true, cached: true, row: existing };
+    }
+
+    const job = start;
+    const controller =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
+    job.controller = controller;
+    if (job.canceled || job.invalidated) {
+      return { ok: false, canceled: true };
+    }
+    transcriptSummaryState.episodeId = episodeId;
+    transcriptSummaryState.status = 'running';
+    transcriptSummaryState.done = 0;
+    transcriptSummaryState.total = 0;
+    transcriptSummaryState.error = '';
+    summaryJobs.set(episodeId, job);
+
+    job.promise = (async () => {
+      try {
+        const result = await generateTranscriptSummary({
+          cfg,
+          segments,
+          signal: controller && controller.signal,
+          isCanceled: () => job.canceled || job.invalidated,
+          onProgress: (done, total) => {
+            if (
+              summaryJobs.get(episodeId) !== job ||
+              job.canceled ||
+              job.invalidated
+            )
+              return;
+            if (transcriptSummaryState.episodeId === episodeId) {
+              transcriptSummaryState.done = done;
+              transcriptSummaryState.total = total;
+            }
+          },
+        });
+        if (
+          job.canceled ||
+          job.invalidated ||
+          summaryJobs.get(episodeId) !== job
+        ) {
+          return { ok: false, canceled: true };
+        }
+        const now = Date.now();
+        const row = {
+          id: episodeId,
+          podcastId,
+          summary: result.summary,
+          sourceHash: result.sourceHash,
+          sourceKind: opts.sourceKind || 'proofread',
+          promptVersion: result.promptVersion,
+          provider: result.provider,
+          model: result.model,
+          usage: result.usage,
+          chunkCount: result.chunkCount,
+          createdAt: (existing && existing.createdAt) || now,
+          updatedAt: now,
+        };
+        await db.transcriptSummaries.put(row);
+        // IndexedDB may finish after a user pressed cancel. Preserve a prior
+        // ready summary rather than exposing the late result as current.
+        if (
+          job.canceled ||
+          job.invalidated ||
+          summaryJobs.get(episodeId) !== job
+        ) {
+          if (job.invalidated) {
+            await db.transcriptSummaries.delete(episodeId);
+          } else if (existing) {
+            await db.transcriptSummaries.put(existing);
+          } else {
+            await db.transcriptSummaries.delete(episodeId);
+          }
+          return { ok: false, canceled: true };
+        }
+        if (transcriptSummaryState.episodeId === episodeId) {
+          transcriptSummaryState.status = 'done';
+          transcriptSummaryState.done = transcriptSummaryState.total || 1;
+          transcriptSummaryState.error = '';
+        }
+        store.dispatch('showToast', '本集总结已生成');
+        return { ok: true, row };
+      } catch (e) {
+        const canceled =
+          job.canceled || job.invalidated || (e && e.code === 'canceled');
+        if (transcriptSummaryState.episodeId === episodeId) {
+          transcriptSummaryState.status = canceled ? 'canceled' : 'error';
+          transcriptSummaryState.error = canceled ? '' : summaryErrorMessage(e);
+        }
+        if (!canceled) store.dispatch('showToast', summaryErrorMessage(e));
+        return {
+          ok: false,
+          canceled,
+          error: canceled ? '' : summaryErrorMessage(e),
+        };
+      } finally {
+        if (summaryJobs.get(episodeId) === job) summaryJobs.delete(episodeId);
+      }
+    })();
+    return job.promise;
+  });
+  summarySerial = start.promise.catch(() => {});
+  try {
+    return await start.promise;
+  } finally {
+    if (summaryStarts.get(episodeId) === start) summaryStarts.delete(episodeId);
+    if (activeSummaryJob === start) activeSummaryJob = null;
+  }
 }

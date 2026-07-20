@@ -21,6 +21,28 @@ function transformOffset(transform) {
   return match ? Number(match[1]) : 0;
 }
 
+function createInputEvent(type, { key = '', target = null } = {}) {
+  return {
+    type,
+    key,
+    code: key,
+    target,
+    currentTarget: target,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    defaultPrevented: false,
+    propagationStopped: false,
+    appHandled: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
+    stopPropagation() {
+      this.propagationStopped = true;
+    },
+  };
+}
+
 function createRafClock() {
   let nextId = 1;
   const callbacks = new Map();
@@ -80,6 +102,7 @@ function buildRailHarness(
   const rootClasses = new Set();
   let vm;
   let railLeft = scrollLeft;
+  const viewportAttributes = {};
 
   const viewport = {
     get clientWidth() {
@@ -111,6 +134,28 @@ function buildRailHarness(
         right: pageLeft + viewportWidth,
         width: viewportWidth,
       };
+    },
+    focus(options) {
+      this.focusOptions = options || null;
+      this.focusCalls = (this.focusCalls || 0) + 1;
+      global.document.focusElement(this);
+    },
+    blur() {
+      this.blurCalls = (this.blurCalls || 0) + 1;
+      if (global.document.activeElement === this) {
+        global.document.focusElement(null);
+      }
+    },
+    setAttribute(name, value) {
+      viewportAttributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(viewportAttributes, name)
+        ? viewportAttributes[name]
+        : null;
+    },
+    removeAttribute(name) {
+      delete viewportAttributes[name];
     },
   };
   const rootAttributes = {};
@@ -158,7 +203,13 @@ function buildRailHarness(
       focus(options) {
         this.focusCalls += 1;
         this.focusOptions = options || null;
-        global.document.activeElement = this;
+        global.document.focusElement(this);
+      },
+      blur() {
+        this.blurCalls = (this.blurCalls || 0) + 1;
+        if (global.document.activeElement === this) {
+          global.document.focusElement(null);
+        }
       },
       setAttribute(name, value) {
         attributes[name] = String(value);
@@ -188,7 +239,8 @@ function buildRailHarness(
   const items = Object.keys(positions)
     .filter(id => id !== 'all')
     .map(id => makeItem(id, positions[id]));
-  viewport.contains = target => target === allItem || items.includes(target);
+  viewport.contains = target =>
+    target === viewport || target === allItem || items.includes(target);
   const emitted = [];
   const data = component.data.call({});
 
@@ -326,6 +378,28 @@ async function main() {
     removeEventListener(name) {
       listeners.delete(name);
     },
+    dispatchEvent(event) {
+      const listener = listeners.get(event.type);
+      if (listener) listener(event);
+      return !event.defaultPrevented;
+    },
+    focusElement(target) {
+      const previous = this.activeElement;
+      if (previous === target) return;
+      if (previous && activeHarness) {
+        activeHarness.vm.handleRailFocusOut({
+          target: previous,
+          relatedTarget: target,
+        });
+      }
+      this.activeElement = target;
+      if (target && activeHarness && activeHarness.viewport.contains(target)) {
+        activeHarness.vm.handleRailFocusIn({
+          target,
+          relatedTarget: previous,
+        });
+      }
+    },
   };
   global.window = {
     matchMedia() {
@@ -349,17 +423,8 @@ async function main() {
     const component = built.component;
     const source = built.source;
     activeHarness = buildRailHarness(component);
-    const {
-      vm,
-      root,
-      viewport,
-      track,
-      thumb,
-      raf,
-      timerCalls,
-      emitted,
-      allItem,
-    } = activeHarness;
+    const { vm, viewport, track, thumb, raf, timerCalls, emitted, allItem } =
+      activeHarness;
     vm.updateMetrics();
 
     // C is at the left edge while B is hidden. Its offsetParent is not the
@@ -398,93 +463,198 @@ async function main() {
     const cItem = activeHarness.items.find(
       item => item.dataset.podcastId === 'C'
     );
-    vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
-    assert.deepStrictEqual(
-      cItem.focusOptions,
-      { preventScroll: true },
-      'rail item focus must not compete with contextual rail scrolling'
+    const dispatchDocumentKey = (type, key, target) => {
+      const event = createInputEvent(type, { key, target });
+      global.document.dispatchEvent(event);
+      return event;
+    };
+    const dispatchRailKey = (target, key) => {
+      const event = dispatchDocumentKey('keydown', key, target);
+      event.currentTarget = viewport;
+      if (key === 'ArrowLeft' || key === 'ArrowRight') {
+        event.preventDefault();
+        event.stopPropagation();
+        vm.moveRailFocus(key === 'ArrowLeft' ? -1 : 1);
+      } else if (key === 'Home' || key === 'End') {
+        vm.handleRailEdgeKey(event, key === 'End');
+      }
+      if (
+        !event.propagationStopped &&
+        ['ArrowDown', 'Home', 'End'].includes(key)
+      ) {
+        event.appHandled = true;
+        event.preventDefault();
+      }
+      return event;
+    };
+    const dispatchPointerSelect = (target, podcastId) => {
+      const pointerEvent = createInputEvent('pointerdown', { target });
+      pointerEvent.currentTarget = viewport;
+      vm.handleRailPointerDown(pointerEvent);
+      if (!pointerEvent.defaultPrevented) target.focus();
+      vm.select(podcastId);
+      return pointerEvent;
+    };
+
+    vm.bindRailTabTracking();
+    assert.ok(
+      listeners.has('keydown') && listeners.has('keyup'),
+      'active rail must register only paired Tab intent listeners'
     );
+    assert.ok(
+      !listeners.has('pointerdown') && !listeners.has('wheel'),
+      'document pointer and wheel compensation must be removed'
+    );
+
+    // A: native pointer focus is allowed, but it never receives a keyboard
+    // marker. ArrowDown/wheel then Home must yield to App.vue page scrolling.
+    vm.selectedPodcastId = '';
+    const cFocusBeforePointer = cItem.focusCalls;
+    dispatchPointerSelect(cItem, 'C');
     assert.strictEqual(
       cItem.focusCalls,
-      1,
-      'pointer preparation should focus a rail item exactly once'
+      cFocusBeforePointer + 1,
+      'pointer selection must rely on the browser default focus exactly once'
     );
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
-      'pointer',
-      'pointer focus should be recorded on the stable rail root'
-    );
-    vm.select('C', { currentTarget: cItem });
-    assert.strictEqual(
-      cItem.focusCalls,
-      1,
-      'click selection must not repeat pointer focus'
-    );
-    vm.handleRailFocusOut({ relatedTarget: allItem });
-    assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
-      'pointer',
-      'moving focus within the rail must retain the pointer origin'
-    );
-    vm.handleRailFocusOut({ relatedTarget: null });
-    assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
-      'pointer',
-      'a transient null relatedTarget must not clear pointer origin before focus settles'
-    );
-    const returnFocusFrame = vm._pointerFocusClearRaf;
-    assert.ok(returnFocusFrame, 'transient focusout must schedule a settle frame');
-    global.document.activeElement = cItem;
-    assert.ok(
-      raf.flushId(returnFocusFrame, 16),
-      'pointer focus settle frame should run'
-    );
-    assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
-      'pointer',
-      'focus returning to the rail in the same frame must keep the pointer origin'
-    );
-    global.document.activeElement = {};
-    vm.handleRailFocusOut({ relatedTarget: null });
-    const outsideFocusFrame = vm._pointerFocusClearRaf;
-    assert.ok(
-      raf.flushId(outsideFocusFrame, 32),
-      'outside focus settle frame should run'
-    );
-    assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      cItem.getAttribute('data-rail-keyboard-focus'),
       null,
-      'leaving the rail after focus settles must clear the pointer focus origin'
+      'mouse-focused program C must not receive a keyboard outline marker'
     );
-    vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
-    vm.handleRailFocusIn({ target: cItem });
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
-      'pointer',
-      'the pointer-origin focus must survive its own focusin event'
-    );
-    vm.handleRailKeyboardInput();
-    assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      allItem.getAttribute('data-rail-keyboard-focus'),
       null,
-      'keyboard input inside the rail must restore its visible focus outline'
+      'mouse selection must not leave an outline marker on all programs'
     );
-    vm.prepareRailItemFocus({ currentTarget: cItem, pointerType: 'mouse' });
-    vm.handleRailFocusIn({ target: allItem });
+    const arrowDown = dispatchRailKey(cItem, 'ArrowDown');
     assert.strictEqual(
-      root.getAttribute('data-rail-focus-origin'),
+      arrowDown.appHandled,
+      true,
+      'ArrowDown after mouse selection must remain a page scroll command'
+    );
+    global.document.dispatchEvent(
+      createInputEvent('wheel', { target: { id: 'page-outside-rail' } })
+    );
+    const pointerHome = dispatchRailKey(cItem, 'Home');
+    assert.strictEqual(
+      pointerHome.appHandled,
+      true,
+      'Home after mouse selection must yield to App.vue page scroll'
+    );
+    assert.strictEqual(
+      allItem.getAttribute('data-rail-keyboard-focus'),
       null,
-      'keyboard focus entering another rail item must restore its outline'
+      'scrolling away and returning must not create an all-programs outline'
+    );
+
+    // B: a scrollbar pointer path lives outside the rail and therefore cannot
+    // manufacture a marker when the page leaves and returns.
+    global.document.dispatchEvent(
+      createInputEvent('pointerdown', { target: { id: 'page-scrollbar' } })
+    );
+    assert.strictEqual(
+      allItem.getAttribute('data-rail-keyboard-focus'),
+      null,
+      'scrollbar round trips must leave all programs unmarked'
+    );
+
+    // C: a real Tab intent is captured before focus moves into the rail. Left
+    // and right navigation transfer the explicit marker to the focused item.
+    cItem.blur();
+    dispatchDocumentKey('keydown', 'Tab', { id: 'before-rail' });
+    viewport.focus({ preventScroll: true });
+    dispatchDocumentKey('keyup', 'Tab', viewport);
+    assert.strictEqual(
+      viewport.getAttribute('data-rail-keyboard-focus'),
+      'true',
+      'Tab entry must mark the exact focused rail element'
+    );
+    const arrowRight = dispatchRailKey(viewport, 'ArrowRight');
+    const keyboardTarget = global.document.activeElement;
+    assert.strictEqual(arrowRight.propagationStopped, true);
+    assert.strictEqual(
+      viewport.getAttribute('data-rail-keyboard-focus'),
+      null,
+      'arrow navigation must clear the prior element marker'
+    );
+    assert.strictEqual(
+      keyboardTarget.getAttribute('data-rail-keyboard-focus'),
+      'true',
+      'arrow navigation must mark only the newly focused program'
+    );
+
+    // D: Home/End act on the rail only while that exact element carries the
+    // keyboard marker, and they stop App.vue from scrolling at the same time.
+    const endKey = dispatchRailKey(keyboardTarget, 'End');
+    assert.strictEqual(endKey.appHandled, false);
+    assert.strictEqual(endKey.defaultPrevented, true);
+    assert.strictEqual(endKey.propagationStopped, true);
+    const lastItem = activeHarness.items[activeHarness.items.length - 1];
+    assert.strictEqual(global.document.activeElement, lastItem);
+    assert.strictEqual(
+      lastItem.getAttribute('data-rail-keyboard-focus'),
+      'true'
+    );
+    const homeKey = dispatchRailKey(lastItem, 'Home');
+    assert.strictEqual(homeKey.appHandled, false);
+    assert.strictEqual(homeKey.defaultPrevented, true);
+    assert.strictEqual(homeKey.propagationStopped, true);
+    assert.strictEqual(global.document.activeElement, allItem);
+    assert.strictEqual(
+      allItem.getAttribute('data-rail-keyboard-focus'),
+      'true'
+    );
+
+    dispatchPointerSelect(cItem, 'C');
+    assert.strictEqual(
+      allItem.getAttribute('data-rail-keyboard-focus'),
+      null,
+      'mouse input must clear the prior keyboard marker immediately'
+    );
+    assert.strictEqual(
+      cItem.getAttribute('data-rail-keyboard-focus'),
+      null,
+      'browser pointer focus must remain visually unmarked'
+    );
+    cItem.blur();
+    assert.strictEqual(
+      vm._railKeyboardFocusTarget,
+      null,
+      'focusout must clear the element-level keyboard focus state'
+    );
+
+    vm.deactivateRail();
+    assert.ok(
+      !listeners.has('keydown') && !listeners.has('keyup'),
+      'keep-alive deactivation must release both Tab intent listeners'
+    );
+    vm.activateRail();
+    assert.ok(
+      listeners.has('keydown') && listeners.has('keyup'),
+      'keep-alive activation must register one fresh Tab listener pair'
     );
     assert.ok(
-      source.includes(
-        ".program-rail[data-rail-focus-origin='pointer'] .rail-item:focus-visible"
-      ),
-      'only a rail-level pointer origin may suppress the local outline'
+      source.includes("[data-rail-keyboard-focus='true']:focus"),
+      'visible focus must be scoped to an explicitly marked element'
     );
     assert.ok(
-      source.includes('&:focus-visible'),
-      'keyboard focus-visible outline must remain in the component'
+      !source.includes('data-rail-input-mode') &&
+        !source.includes('prepareRailItemFocus') &&
+        !source.includes('_railDocumentWheelListener') &&
+        !source.includes('_railDocumentPointerListener') &&
+        !source.includes('Date.now() - startedAt <= 750'),
+      'shared input mode, pointer focus, document compensation and timed intent must be removed'
+    );
+    assert.ok(
+      !source.includes(':focus-visible') && source.includes('&:focus {'),
+      'browser focus heuristics must not bypass the explicit element marker'
+    );
+    assert.ok(
+      source.includes('<PodImage class="rail-cover-image"') &&
+        !source.includes('draggable="false"') &&
+        !source.includes('-webkit-user-drag: none') &&
+        !source.includes('@dragstart.prevent'),
+      'native foreground cover drag must remain enabled'
     );
     assert.ok(
       !Object.prototype.hasOwnProperty.call(vm, 'previewPodcastId') &&
@@ -637,8 +807,8 @@ async function main() {
     vm.finishDrag({ pointerId: 7 });
     assert.strictEqual(
       listeners.size,
-      0,
-      'drag cleanup must remove document listeners'
+      2,
+      'drag cleanup must remove only its temporary listeners and retain the active rail input listeners'
     );
 
     // Resize changes geometry only at the explicit measurement boundary. First
@@ -696,6 +866,12 @@ async function main() {
       hoverItem.halo.style.backgroundImage,
       '',
       'unselected hover must release its halo image after pointer leave'
+    );
+    vm.deactivateRail();
+    assert.strictEqual(
+      listeners.size,
+      0,
+      'final keep-alive cleanup must release every document listener'
     );
 
     console.log('subscription program rail component contract smoke passed');

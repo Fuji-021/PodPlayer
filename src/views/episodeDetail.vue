@@ -107,7 +107,7 @@
         <div class="msg">
           确定要删除已下载的
           <b>"{{ episode && episode.title }}"</b>
-          吗？<br />本地音频文件会被删除，单集听过的进度不会被删除。
+          吗？<br />只会删除本地音频文件；收听进度、文字稿、精修稿和总结都会保留。
         </div>
         <div class="actions">
           <button class="btn-secondary" @click="showDeleteDlConfirm = false">
@@ -119,6 +119,16 @@
         </div>
       </div>
     </div>
+
+    <!-- [转文字稿] 优先于 show notes，避免长正文把已生成的文字稿埋到页面底部。 -->
+    <TranscriptPanel
+      v-if="episode"
+      ref="transcriptPanel"
+      :episode="episode"
+      :episode-id="episodeId"
+      @entry-action="onTranscriptEntryAction"
+      @seek="seekToTimestamp"
+    />
 
     <div
       v-if="episode"
@@ -138,16 +148,7 @@
       <div v-else class="empty">这一集没有提供 show notes / 节目简介。</div>
     </div>
 
-    <!-- [转文字稿] 单集文字稿面板：状态机（未转录/转录中/已完成/已暂停/失败/缺模型）+
-         虚拟滚动 + 跟随高亮 + 点段跳播（@seek 复用本页 seekToTimestamp 的播放/seek 逻辑）。 -->
-    <TranscriptPanel
-      v-if="episode"
-      ref="transcriptPanel"
-      :episode="episode"
-      :episode-id="episodeId"
-      @entry-action="onTranscriptEntryAction"
-      @seek="seekToTimestamp"
-    />
+    <MainScrollBackToTop />
   </div>
 </template>
 
@@ -168,14 +169,16 @@ import {
   removeDownload,
 } from '@/utils/podcast/downloads';
 import { sanitizeHtml } from '@/utils/podcast/sanitizeHtml';
+import { normalizeShownotesReaderMedia } from '@/utils/podcast/shownotesReaderMedia';
 import { getCoverColor } from '@/utils/podcast/coverColor';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import SvgIcon from '@/components/SvgIcon.vue';
 import TranscriptPanel from '@/components/TranscriptPanel.vue';
+import MainScrollBackToTop from '@/components/MainScrollBackToTop.vue';
 
 export default {
   name: 'EpisodeDetail',
-  components: { SvgIcon, TranscriptPanel },
+  components: { SvgIcon, TranscriptPanel, MainScrollBackToTop },
   data() {
     return {
       podcast: null,
@@ -219,6 +222,7 @@ export default {
         const div = document.createElement('div');
         div.innerHTML = html;
         this.linkifyTimestamps(div);
+        normalizeShownotesReaderMedia(div);
         return div.innerHTML;
       } catch (e) {
         return html; // 解析异常兜底用原文
@@ -1011,6 +1015,33 @@ export default {
       padding: 1px 6px;
       border-radius: 4px;
       font-size: 0.92em;
+    }
+    img.pp-shownotes-reader-media--block {
+      display: block;
+      width: auto;
+      height: auto;
+      max-width: min(760px, 100%);
+      max-height: min(58vh, 620px);
+      margin: 18px 0;
+      object-fit: contain;
+      object-position: left center;
+    }
+    a.pp-shownotes-reader-media-link {
+      display: block;
+      width: fit-content;
+      max-width: 100%;
+      margin: 18px 0;
+
+      > img.pp-shownotes-reader-media--block {
+        margin: 0;
+      }
+    }
+    .pp-shownotes-reader-media-flow {
+      display: flow-root;
+      margin: 0;
+      figcaption {
+        margin-top: 8px;
+      }
     }
   }
   .empty {
