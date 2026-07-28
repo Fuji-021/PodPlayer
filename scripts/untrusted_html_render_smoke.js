@@ -23,7 +23,10 @@ async function loadMetadata() {
 async function main() {
   const metadata = await loadMetadata();
   const payload = '<img src=x onerror="window.pwned=1"><script>bad()</script>';
-  const copywriter = metadata.getCoverRowSubText({ copywriter: payload }, 'copywriter');
+  const copywriter = metadata.getCoverRowSubText(
+    { copywriter: payload },
+    'copywriter'
+  );
   assert.deepStrictEqual(copywriter, { text: payload, to: '' });
 
   const artist = metadata.getCoverRowSubText(
@@ -40,8 +43,14 @@ async function main() {
 
   ['src/components/CoverRow.vue', 'src/components/MvRow.vue'].forEach(file => {
     const source = fs.readFileSync(path.join(root, file), 'utf8');
-    assert.ok(!source.includes('v-html'), file + ' must not render remote HTML');
-    assert.ok(source.includes('router-link'), file + ' must render structured links');
+    assert.ok(
+      !source.includes('v-html'),
+      file + ' must not render remote HTML'
+    );
+    assert.ok(
+      source.includes('router-link'),
+      file + ' must render structured links'
+    );
   });
 
   console.log('untrusted HTML rendering smoke passed');

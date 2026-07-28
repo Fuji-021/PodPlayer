@@ -37,7 +37,10 @@ import { getMvSubtitle } from '@/utils/presentationMetadata';
 export default {
   name: 'CoverVideo',
   props: {
-    mvs: Array,
+    mvs: {
+      type: Array,
+      default: () => [],
+    },
     subtitle: {
       type: String,
       default: 'artist',
