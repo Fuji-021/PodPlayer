@@ -723,7 +723,7 @@ export default {
     episodeId(nextEpisodeId, previousEpisodeId) {
       if (previousEpisodeId && previousEpisodeId !== nextEpisodeId) {
         cancelTranscriptSummary(previousEpisodeId);
-        cancelAiRefine(previousEpisodeId);
+        cancelAiRefine(previousEpisodeId, { invalidate: true });
       }
       this.init();
     },
@@ -787,6 +787,7 @@ export default {
   },
   deactivated() {
     this.cancelTranscriptRestoreFrame();
+    cancelAiRefine(this.episodeId, { invalidate: true });
   },
   beforeDestroy() {
     this._initReq = (this._initReq || 0) + 1;
@@ -807,6 +808,7 @@ export default {
     ) {
       cancelTranscriptSummary(this.episodeId);
     }
+    cancelAiRefine(this.episodeId, { invalidate: true });
   },
   methods: {
     cancelTranscriptRestoreFrame() {
@@ -1077,7 +1079,7 @@ export default {
           row &&
           row.promptVer === aiPromptVersion &&
           row.segs &&
-          row.status !== 'partial' &&
+          row.status === 'ready' &&
           coverageReady &&
           (!row.segCount || row.segCount === segmentCount)
         ) {

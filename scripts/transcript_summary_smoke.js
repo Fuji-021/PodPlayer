@@ -77,10 +77,12 @@ async function expectReject(promise, code) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise(done => {
-    resolve = done;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function waitFor(check, message) {
@@ -453,6 +455,188 @@ async function testTranscriptStateMachine(summary) {
       toast => !String(toast.value || '').includes(privateRefineError)
     ),
     'AI refine errors must not expose internal request details'
+  );
+
+  const refineCallsBeforeDedupe = harness.refineCalls.length;
+  const sameRefine = deferred();
+  harness.refine = () => sameRefine.promise;
+  const refineFirst = transcripts.startAiRefine(
+    'refine-dedupe',
+    'podcast',
+    [{ idx: 0, text: '同集去重' }],
+    [],
+    1
+  );
+  const refineSecond = transcripts.startAiRefine(
+    'refine-dedupe',
+    'podcast',
+    [{ idx: 0, text: '同集去重' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.length === refineCallsBeforeDedupe + 1,
+    'same-episode refine must reuse one active request'
+  );
+  sameRefine.resolve({
+    map: { 0: '同集去重完成' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const dedupedResults = await Promise.all([refineFirst, refineSecond]);
+  assert.ok(dedupedResults.every(result => result.ok));
+  assert.strictEqual(
+    harness.refineCalls.length,
+    refineCallsBeforeDedupe + 1,
+    'same-episode refine must never duplicate network work'
+  );
+
+  const lateSuccessA = deferred();
+  const lateSuccessB = deferred();
+  harness.toasts.length = 0;
+  harness.refine = (...args) => {
+    const id = args[0][0].text;
+    return id === 'A-success' ? lateSuccessA.promise : lateSuccessB.promise;
+  };
+  const refineA = transcripts.startAiRefine(
+    'refine-A-success',
+    'podcast',
+    [{ idx: 0, text: 'A-success' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'A-success'),
+    'A refine must enter the controlled request'
+  );
+  const refineB = transcripts.startAiRefine(
+    'refine-B-success',
+    'podcast',
+    [{ idx: 0, text: 'B-success' }],
+    [],
+    1
+  );
+  lateSuccessA.resolve({
+    map: { 0: 'stale A' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'B-success'),
+    'B must start only after canceled A has converged'
+  );
+  lateSuccessB.resolve({
+    map: { 0: 'current B' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const lateSuccessResults = await Promise.all([refineA, refineB]);
+  assert.deepStrictEqual(lateSuccessResults[0], { ok: false, canceled: true });
+  assert.strictEqual(lateSuccessResults[1].ok, true);
+  assert.strictEqual(
+    harness.transcriptAi.has('refine-A-success'),
+    false,
+    'a late success from an invalidated episode must not write Dexie'
+  );
+  assert.strictEqual(
+    harness.transcriptAi.get('refine-B-success').segs[0],
+    'current B'
+  );
+  assert.ok(
+    harness.toasts.every(
+      toast => !String(toast.value || '').includes('stale A')
+    ),
+    'a late A success must not publish a completion toast'
+  );
+
+  const lateFailureA = deferred();
+  const lateFailureB = deferred();
+  harness.toasts.length = 0;
+  harness.refine = (...args) => {
+    const id = args[0][0].text;
+    return id === 'A-failure' ? lateFailureA.promise : lateFailureB.promise;
+  };
+  const refineFailureA = transcripts.startAiRefine(
+    'refine-A-failure',
+    'podcast',
+    [{ idx: 0, text: 'A-failure' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'A-failure'),
+    'A failure refine must enter the controlled request'
+  );
+  const refineFailureB = transcripts.startAiRefine(
+    'refine-B-failure',
+    'podcast',
+    [{ idx: 0, text: 'B-failure' }],
+    [],
+    1
+  );
+  lateFailureA.reject(new Error('stale A private failure'));
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'B-failure'),
+    'B must still start after A fails late'
+  );
+  lateFailureB.resolve({
+    map: { 0: 'current after failure' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const lateFailureResults = await Promise.all([
+    refineFailureA,
+    refineFailureB,
+  ]);
+  assert.strictEqual(lateFailureResults[0].canceled, true);
+  assert.strictEqual(lateFailureResults[1].ok, true);
+  assert.ok(
+    harness.toasts.every(
+      toast => !String(toast.value || '').includes('stale A private failure')
+    ),
+    'a late A failure must not publish an error toast'
+  );
+
+  const destroyedLate = deferred();
+  harness.refine = () => destroyedLate.promise;
+  const destroyedRefine = transcripts.startAiRefine(
+    'refine-destroyed',
+    'podcast',
+    [{ idx: 0, text: 'destroyed' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'destroyed'),
+    'the destroy simulation must reach its request'
+  );
+  transcripts.cancelAiRefine('refine-destroyed', { invalidate: true });
+  destroyedLate.resolve({
+    map: { 0: 'must not persist' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const destroyedResult = await destroyedRefine;
+  assert.strictEqual(destroyedResult.canceled, true);
+  assert.strictEqual(
+    harness.transcriptAi.has('refine-destroyed'),
+    false,
+    'an invalidated component must reject an Abort-late result before Dexie writes'
   );
 
   const cached = {
@@ -1125,8 +1309,8 @@ async function main() {
     assert.ok(panelSource.includes('async onGenerateSummary()'));
     assert.ok(panelSource.includes('@click="onGenerateSummary"'));
     assert.ok(
-      panelSource.includes("row.status !== 'partial'"),
-      'partial AI refinement must never be treated as valid summary input'
+      panelSource.includes("row.status === 'ready'"),
+      'only a completed AI refinement may be treated as valid summary input'
     );
     assert.ok(panelSource.includes('请先在设置中配置联网 AI 服务'));
     assert.ok(
@@ -1160,6 +1344,21 @@ async function main() {
     assert.ok(
       /async onAiRefine\(\)[\s\S]{0,1400}startAiRefine\(/.test(panelSource),
       'the refine request must remain inside the explicit user action'
+    );
+    assert.ok(
+      /episodeId\(nextEpisodeId, previousEpisodeId\)[\s\S]{0,360}cancelAiRefine\(previousEpisodeId, \{ invalidate: true \}\)/.test(
+        panelSource
+      ),
+      'switching episodes must invalidate the prior refine request'
+    );
+    assert.ok(
+      /deactivated\(\)[\s\S]{0,220}cancelAiRefine\(this\.episodeId, \{ invalidate: true \}\)/.test(
+        panelSource
+      ) &&
+        /beforeDestroy\(\)[\s\S]{0,1300}cancelAiRefine\(this\.episodeId, \{ invalidate: true \}\)/.test(
+          panelSource
+        ),
+      'deactivation and destroy must invalidate the visible episode refine task'
     );
     assert.ok(
       !/mounted\(\)[\s\S]{0,500}(startTranscriptSummary|startAiRefine)/.test(
