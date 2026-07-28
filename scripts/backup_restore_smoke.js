@@ -187,6 +187,14 @@ async function main() {
   assert.strictEqual(invalidBitsResult.code, 'invalid-backup-bits');
   assert.deepStrictEqual(invalidBits.events, []);
 
+  const invalidBitIndexes = resetHarness(
+    makeBackup({ episodeListenStats: [{ id: 'bad', bits: { 1: 1 } }] })
+  );
+  const invalidBitIndexesResult = await backupModule.restoreFromLatestBackup();
+  assert.strictEqual(invalidBitIndexesResult.ok, false);
+  assert.strictEqual(invalidBitIndexesResult.code, 'invalid-backup-bits');
+  assert.deepStrictEqual(invalidBitIndexes.events, []);
+
   const legacyPayload = makeBackup();
   delete legacyPayload.transcriptSummaries;
   const legacy = resetHarness(legacyPayload, {

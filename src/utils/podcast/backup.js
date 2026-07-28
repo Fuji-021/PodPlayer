@@ -93,11 +93,27 @@ function validatePrimaryKey(table, row) {
 
 function normalizeBits(bits) {
   if (bits == null || bits instanceof Uint8Array) return bits;
-  const values = Array.isArray(bits)
-    ? bits
-    : Object.keys(bits)
-        .sort((a, b) => Number(a) - Number(b))
-        .map(key => bits[key]);
+  let values = bits;
+  if (!Array.isArray(bits)) {
+    if (!bits || typeof bits !== 'object') {
+      throw restoreError(
+        'invalid-backup-bits',
+        '备份中的收听统计位图无法恢复。'
+      );
+    }
+    const keys = Object.keys(bits).sort((a, b) => Number(a) - Number(b));
+    if (
+      keys.some(
+        (key, index) => !/^(0|[1-9]\d*)$/.test(key) || Number(key) !== index
+      )
+    ) {
+      throw restoreError(
+        'invalid-backup-bits',
+        '备份中的收听统计位图索引已损坏。'
+      );
+    }
+    values = keys.map(key => bits[key]);
+  }
   if (!Array.isArray(values)) {
     throw restoreError('invalid-backup-bits', '备份中的收听统计位图无法恢复。');
   }
