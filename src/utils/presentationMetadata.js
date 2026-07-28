@@ -12,6 +12,16 @@ function year(value) {
   return Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
 }
 
+function playlistInfo(item) {
+  const creator = text(item && item.creator && item.creator.nickname);
+  const countValue = Number(item && item.trackCount);
+  const count =
+    Number.isInteger(countValue) && countValue >= 0
+      ? String(countValue) + ' \u9996'
+      : '';
+  return [creator, count].filter(Boolean).join(' \u00b7 ');
+}
+
 // Keep remote metadata structured until Vue renders it with text interpolation.
 // No caller should build HTML from these fields.
 export function getCoverRowSubText(item, kind) {
@@ -47,6 +57,7 @@ export function getCoverRowSubText(item, kind) {
     };
   }
   if (kind === 'appleMusic') return { text: 'by Apple Music', to: '' };
+  if (kind === 'title') return { text: playlistInfo(row), to: '' };
   return { text: '', to: '' };
 }
 
