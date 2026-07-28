@@ -1424,8 +1424,12 @@ async function main() {
     );
     assert.ok(dbSource.includes('db.version(16)'));
     assert.ok(dbSource.includes('transcriptSummaries'));
-    assert.ok(backupSource.includes("arr('transcriptSummaries')"));
-    assert.ok(backupSource.includes('db.transcriptSummaries'));
+    assert.ok(
+      backupSource.includes("'transcriptSummaries'") &&
+        backupSource.includes('RESTORE_TABLES'),
+      'full backups must continue to include transcript summaries'
+    );
+    assert.ok(backupSource.includes('normalizeBackupPayload'));
     const detailSource = fs.readFileSync(
       path.join(root, 'src/views/episodeDetail.vue'),
       'utf8'

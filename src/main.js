@@ -120,7 +120,15 @@ openDatabase()
 window.restoreFromBackup = async () => {
   const r = await restoreFromLatestBackup();
   // eslint-disable-next-line no-console
-  console.log('[restore] 已恢复:', r);
+  console.log('[restore] result:', r);
+  if (!r || !r.ok) {
+    if (typeof window.alert === 'function') {
+      window.alert(
+        `恢复未完成：${(r && r.error) || '未知错误'}\n${(r && r.action) || ''}`
+      );
+    }
+    return r;
+  }
   if (typeof window.alert === 'function') {
     window.alert(`已恢复 ${r.podcasts} 档订阅，即将刷新页面。`);
   }
@@ -133,7 +141,13 @@ window.restoreFromBackup = async () => {
 window.mergeRestoreHistory = async () => {
   const r = await mergeRestoreHistoryFromLatestBackup();
   // eslint-disable-next-line no-console
-  console.log('[merge-restore] 已合并恢复历史:', r);
+  console.log('[merge-restore] result:', r);
+  if (!r || !r.ok) {
+    if (typeof window.alert === 'function') {
+      window.alert(`历史合并未完成：${(r && r.error) || '未知错误'}`);
+    }
+    return r;
+  }
   if (typeof window.alert === 'function') {
     window.alert('已合并恢复收听历史，即将刷新页面。');
   }
