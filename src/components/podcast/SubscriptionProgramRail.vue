@@ -95,12 +95,15 @@ import PodImage from '@/components/PodImage.vue';
 import SvgIcon from '@/components/SvgIcon.vue';
 import { ensureTinyCover, peekTinyCover } from '@/utils/podcast/coverHalo';
 import {
-  getRailArrowGoal,
   getRailMetrics,
   getRailMotionDecision,
   getRailMotionStep,
   getRailPositionMetrics,
   RAIL_EDGE_EPSILON,
+  getRailSlotArrowGoal,
+  getRailSlotLayout,
+  getRailSlotSelectionTarget,
+  getRailSlotTarget,
   getRailSelectionContextTarget,
   getRailThumbDragTarget,
   getRailThumbGeometry,
@@ -124,7 +127,10 @@ export default {
   },
   watch: {
     podcasts() {
-      this.$nextTick(() => this.updateMetrics(true));
+      this.$nextTick(() => {
+        this.updateMetrics(true);
+        this.settleRailToSlot({ immediate: true });
+      });
     },
     selectedPodcastId(value) {
       const requestToken = this._selectionRequestToken || 0;
@@ -177,12 +183,15 @@ export default {
       this.$nextTick(() => {
         if (!this._railActive || this._destroyed) return;
         if (typeof ResizeObserver !== 'undefined') {
-          this._resizeObserver = new ResizeObserver(() => this.updateMetrics());
+          this._resizeObserver = new ResizeObserver(() => {
+            this.queueRailLayout();
+          });
           if (this.$refs.viewport)
             this._resizeObserver.observe(this.$refs.viewport);
           if (this.$refs.track) this._resizeObserver.observe(this.$refs.track);
         }
-        this.updateMetrics();
+        this.updateMetrics(true);
+        this.settleRailToSlot({ immediate: true });
         const selected = this.podcasts.find(
           item => item.id === this.selectedPodcastId
         );
@@ -209,7 +218,8 @@ export default {
       this.stopAnimation();
       this.finishDrag();
       this.cancelNativeRailFrame();
-      this.finishNativeRailMotion();
+      this.cancelRailLayoutFrame();
+      this.finishNativeRailMotion({ settle: false });
       if (this._resizeObserver) this._resizeObserver.disconnect();
       this._resizeObserver = null;
       this.setMotionClass('is-moving', false);
@@ -336,6 +346,49 @@ export default {
         target.focus();
       }
     },
+    measureRailSlotLayout() {
+      const viewport = this.$refs.viewport;
+      const items = this.$refs.items || [];
+      const allItem = this.$el && this.$el.querySelector('.rail-all');
+      const item = allItem || items[0];
+      if (!viewport || !item) return null;
+      const style =
+        typeof window !== 'undefined' && window.getComputedStyle
+          ? window.getComputedStyle(viewport)
+          : null;
+      const gap = Math.max(
+        0,
+        Number.parseFloat((style && (style.columnGap || style.gap)) || '0') || 0
+      );
+      const slotWidth = Math.max(0, Number(item.offsetWidth) || 0);
+      const firstCover =
+        items[0] && items[0].querySelector
+          ? items[0].querySelector('.rail-cover-image')
+          : null;
+      const coverSize = Math.max(
+        0,
+        Number((firstCover && firstCover.offsetWidth) || slotWidth - 8) || 0
+      );
+      return getRailSlotLayout({
+        availableWidth: viewport.clientWidth,
+        itemCount: items.length + (allItem ? 1 : 0),
+        slotWidth,
+        coverSize,
+        selectedScale: 1.055,
+        minimumGap: gap,
+      });
+    },
+    applyRailSlotLayout() {
+      const viewport = this.$refs.viewport;
+      const layout = this.measureRailSlotLayout();
+      if (!viewport || !layout) return null;
+      this._railSlotLayout = layout;
+      const gutter = `${layout.outerGutter}px`;
+      if (viewport.style && viewport.style.setProperty) {
+        viewport.style.setProperty('--rail-outer-gutter', gutter);
+      }
+      return layout;
+    },
     measure() {
       const viewport = this.$refs.viewport;
       if (!viewport) return getRailMetrics();
@@ -349,6 +402,28 @@ export default {
         clientWidth,
         scrollWidth,
       });
+    },
+    queueRailLayout() {
+      if (
+        this._railLayoutRaf ||
+        !this._railActive ||
+        this._destroyed ||
+        typeof requestAnimationFrame !== 'function'
+      ) {
+        return;
+      }
+      this._railLayoutRaf = requestAnimationFrame(() => {
+        this._railLayoutRaf = null;
+        if (!this._railActive || this._destroyed) return;
+        this.updateMetrics(true);
+        this.settleRailToSlot({ immediate: true });
+      });
+    },
+    cancelRailLayoutFrame() {
+      if (this._railLayoutRaf && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(this._railLayoutRaf);
+      }
+      this._railLayoutRaf = null;
     },
     setMotionClass(name, active) {
       const root = this.$refs.root;
@@ -380,8 +455,9 @@ export default {
       thumb.style.transform =
         'translate3d(' + geometry.travel * ratio + 'px, 0, 0)';
     },
-    updateMetrics() {
+    updateMetrics(recomputeSlots = true) {
       if (!this._railActive || this._destroyed) return;
+      if (recomputeSlots) this.applyRailSlotLayout();
       const metrics = this.measure();
       this.applyMeasuredMetrics(metrics);
     },
@@ -394,7 +470,7 @@ export default {
       this.syncRailState(metrics);
     },
     captureRailLayout() {
-      this.updateMetrics();
+      this.updateMetrics(true);
       return this._metrics;
     },
     syncRailState(metrics) {
@@ -466,10 +542,11 @@ export default {
         this.finishNativeRailMotion();
       }, 120);
     },
-    finishNativeRailMotion() {
+    finishNativeRailMotion({ settle = true } = {}) {
       this.clearNativeMotionStop();
       this._nativeInputActive = false;
       if (!this._controllerOwnsScroll && !this._isRailDragging) {
+        if (settle && this.settleRailToSlot()) return;
         this.setMotionClass('is-moving', false);
         this.refreshRetainedHalos();
       }
@@ -505,7 +582,8 @@ export default {
       this._expectedProgrammaticScroll = null;
       this.stopAnimation();
       this.cancelNativeRailFrame();
-      this.finishNativeRailMotion();
+      this.cancelRailLayoutFrame();
+      this.finishNativeRailMotion({ settle: false });
     },
     handleRailWheel(event) {
       const viewport = this.$refs.viewport;
@@ -541,12 +619,14 @@ export default {
           : this.captureRailLayout();
       if (!metrics.canScroll) return;
       const normalizedDirection = direction < 0 ? -1 : 1;
-      const goal = getRailArrowGoal({
+      const goal = getRailSlotArrowGoal({
         scrollLeft: this._railPosition,
         goal: this._railGoal,
         goalDirection: this._railGoalDirection,
         clientWidth: this._railViewportWidth,
-        scrollWidth: this._railScrollWidth,
+        maxScroll: metrics.maxScroll,
+        slotStride:
+          (this._railSlotLayout && this._railSlotLayout.slotStride) || 0,
         direction: normalizedDirection,
       });
       this.retargetRailMotion(goal, { direction: normalizedDirection });
@@ -576,7 +656,7 @@ export default {
         reducedMotion: this.prefersReducedMotion(),
       });
       this.cancelNativeRailFrame();
-      this.finishNativeRailMotion();
+      this.finishNativeRailMotion({ settle: false });
       this._railGoalDirection = direction;
       if (decision.immediate) {
         this.stopAnimation();
@@ -627,6 +707,36 @@ export default {
       this._animationRaf = null;
       this._lastAnimationAt = 0;
     },
+    settleRailToSlot({ immediate = false } = {}) {
+      const metrics = this._metrics;
+      const layout = this._railSlotLayout;
+      if (
+        !this._railActive ||
+        this._destroyed ||
+        !metrics ||
+        !metrics.canScroll ||
+        !layout ||
+        !layout.slotStride
+      ) {
+        return false;
+      }
+      const target = getRailSlotTarget({
+        scrollLeft: this._railPosition,
+        maxScroll: metrics.maxScroll,
+        slotStride: layout.slotStride,
+      });
+      if (Math.abs(target - this._railPosition) < RAIL_EDGE_EPSILON) {
+        return false;
+      }
+      if (immediate) {
+        this.stopAnimation();
+        this.commitRailFrame(target);
+        this.finishRailMotion();
+      } else {
+        this.retargetRailMotion(target);
+      }
+      return true;
+    },
     ensureSelectedVisible(podcastId) {
       const viewport = this.$refs.viewport;
       const items = this.$refs.items || [];
@@ -636,32 +746,27 @@ export default {
       const allItem = this.$el.querySelector('.rail-all');
       const railItems = [allItem, ...items].filter(Boolean);
       const index = railItems.indexOf(item);
-      const previous = railItems[index - 1];
-      const next = railItems[index + 1];
-      const viewportRect = viewport.getBoundingClientRect();
-      const itemRect = item.getBoundingClientRect();
-      const itemLeft = itemRect.left - viewportRect.left + metrics.scrollLeft;
-      let gap = 0;
-      if (previous) {
-        const previousRect = previous.getBoundingClientRect();
-        const previousLeft =
-          previousRect.left - viewportRect.left + metrics.scrollLeft;
-        gap = itemLeft - (previousLeft + previous.offsetWidth);
-      } else if (next) {
-        const nextRect = next.getBoundingClientRect();
-        const nextLeft = nextRect.left - viewportRect.left + metrics.scrollLeft;
-        gap = nextLeft - (itemLeft + item.offsetWidth);
-      }
-      const goal = getRailSelectionContextTarget({
-        scrollLeft: metrics.scrollLeft,
-        clientWidth: this._railViewportWidth,
-        scrollWidth: this._railScrollWidth,
-        itemLeft,
-        itemWidth: item.offsetWidth,
-        gap: Math.max(0, gap),
-        hasPrev: index > 0,
-        hasNext: index >= 0 && index < railItems.length - 1,
-      });
+      const layout = this._railSlotLayout;
+      const goal =
+        layout && layout.slotStride
+          ? getRailSlotSelectionTarget({
+              scrollLeft: metrics.scrollLeft,
+              maxScroll: metrics.maxScroll,
+              slotStride: layout.slotStride,
+              itemIndex: index,
+              itemCount: railItems.length,
+              visibleCount: layout.visibleCount,
+            })
+          : getRailSelectionContextTarget({
+              scrollLeft: metrics.scrollLeft,
+              clientWidth: this._railViewportWidth,
+              scrollWidth: this._railScrollWidth,
+              itemLeft: item.offsetLeft,
+              itemWidth: item.offsetWidth,
+              gap: 0,
+              hasPrev: index > 0,
+              hasNext: index >= 0 && index < railItems.length - 1,
+            });
       this.retargetRailMotion(goal);
     },
     handleRailEdgeKey(event, last) {
@@ -776,9 +881,11 @@ export default {
       this._dragTarget = null;
       this._controllerOwnsScroll = false;
       this.setMotionClass('is-dragging', false);
-      this.setMotionClass('is-moving', false);
-      this.updateMetrics();
-      this.refreshRetainedHalos();
+      this.updateMetrics(false);
+      if (!this.settleRailToSlot()) {
+        this.setMotionClass('is-moving', false);
+        this.refreshRetainedHalos();
+      }
       document.removeEventListener('pointermove', this.onDragMove);
       document.removeEventListener('pointerup', this.finishDrag);
       document.removeEventListener('pointercancel', this.finishDrag);
@@ -921,6 +1028,7 @@ export default {
 
 .rail-viewport {
   --rail-gap: 10px;
+  --rail-outer-gutter: 0px;
   display: flex;
   min-width: 0;
   gap: var(--rail-gap);
@@ -929,7 +1037,7 @@ export default {
   overscroll-behavior-x: contain;
   // The bottom padding is deliberate drawing room for the cover's compact
   // projection. The scroll container itself remains clipped and horizontal.
-  padding: 10px 0 30px;
+  padding: 10px var(--rail-outer-gutter) 30px;
   scrollbar-width: none;
   scroll-behavior: auto;
 

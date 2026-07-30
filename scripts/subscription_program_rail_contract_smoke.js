@@ -103,8 +103,17 @@ function buildRailHarness(
   let vm;
   let railLeft = scrollLeft;
   const viewportAttributes = {};
+  const viewportStyle = {};
 
   const viewport = {
+    style: {
+      setProperty(name, value) {
+        viewportStyle[name] = String(value);
+      },
+      getPropertyValue(name) {
+        return viewportStyle[name] || '';
+      },
+    },
     get clientWidth() {
       layoutReads.viewport += 1;
       return viewportWidth;
@@ -281,6 +290,7 @@ function buildRailHarness(
     vm,
     root,
     viewport,
+    viewportStyle,
     track,
     thumb,
     writes,
@@ -423,9 +433,37 @@ async function main() {
     const component = built.component;
     const source = built.source;
     activeHarness = buildRailHarness(component);
-    const { vm, viewport, track, thumb, raf, timerCalls, emitted, allItem } =
-      activeHarness;
+    const {
+      vm,
+      viewport,
+      viewportStyle,
+      track,
+      thumb,
+      raf,
+      timerCalls,
+      emitted,
+      allItem,
+    } = activeHarness;
     vm.updateMetrics();
+    assert.strictEqual(
+      viewportStyle['--rail-outer-gutter'],
+      '20px',
+      'stationary rail layout must assign symmetric outer gutter before measuring'
+    );
+    vm.queueRailLayout();
+    const layoutFrame = raf.size;
+    vm.queueRailLayout();
+    assert.strictEqual(
+      layoutFrame,
+      1,
+      'resize work must be coalesced into one rAF'
+    );
+    vm.cancelRailLayoutFrame();
+    assert.strictEqual(
+      raf.size,
+      0,
+      'layout rAF must be cancellable on teardown'
+    );
 
     // C is at the left edge while B is hidden. Its offsetParent is not the
     // viewport, so the contract catches page-relative offsetLeft regressions.
@@ -443,8 +481,8 @@ async function main() {
     vm.ensureSelectedVisible('F');
     assert.strictEqual(
       vm._railGoal,
-      320,
-      'right-edge F must move the rail right to reveal G in viewport coordinates'
+      360,
+      'right-edge F must move the rail right to reveal G on a full slot'
     );
     vm.interruptRailMotion();
 
@@ -747,7 +785,7 @@ async function main() {
     );
     assert.deepStrictEqual(
       emitted.map(item => item.goalAtEmit),
-      [90, 320, 180],
+      [90, 360, 180],
       'each user selection must calculate its own target before emit'
     );
     vm.interruptRailMotion();
@@ -784,6 +822,17 @@ async function main() {
       viewport.scrollLeft,
       230,
       'wheel frame should merge both deltas'
+    );
+    vm.finishNativeRailMotion();
+    assert.strictEqual(
+      vm._railGoal,
+      270,
+      'after native wheel stops, the controller must settle on the nearest full slot'
+    );
+    assert.strictEqual(
+      raf.size,
+      1,
+      'slot settling must reuse one controller rAF'
     );
     vm.interruptRailMotion();
 

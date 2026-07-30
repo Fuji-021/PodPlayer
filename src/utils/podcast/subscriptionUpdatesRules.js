@@ -297,6 +297,184 @@ export function getRailMetrics({
   return getRailPositionMetrics({ maxScroll, visibleRatio }, scrollLeft);
 }
 
+function finiteNonNegative(value) {
+  return Math.max(0, Number(value) || 0);
+}
+
+/**
+ * Calculates the stationary rail geometry before rendering. The visible row
+ * always contains complete slots; unused room becomes symmetric outer gutter
+ * instead of stretched gaps or a clipped final cover.
+ *
+ * `availableWidth` is the already-arrow-safe viewport width. Callers that
+ * measure a wider parent can supply `arrowSafety` to reserve both sides.
+ */
+export function getRailSlotLayout({
+  availableWidth = 0,
+  arrowSafety = 0,
+  itemCount = 0,
+  slotWidth = 0,
+  coverSize = 0,
+  selectedScale = 1,
+  minimumGap = 0,
+  gap = minimumGap,
+} = {}) {
+  const width = finiteNonNegative(availableWidth);
+  const safety = finiteNonNegative(arrowSafety);
+  const usableWidth = Math.max(0, width - safety * 2);
+  const count = Math.max(0, Math.floor(Number(itemCount) || 0));
+  const slot = finiteNonNegative(slotWidth);
+  const logicalGap = Math.max(
+    finiteNonNegative(minimumGap),
+    finiteNonNegative(gap)
+  );
+  const selectedFootprint =
+    finiteNonNegative(coverSize) * Math.max(1, Number(selectedScale) || 1);
+  const slotStride = slot + logicalGap;
+
+  if (!count || !slot || !usableWidth) {
+    return {
+      availableWidth: width,
+      arrowSafety: safety,
+      usableWidth,
+      itemCount: count,
+      slotWidth: slot,
+      coverSize: finiteNonNegative(coverSize),
+      selectedScale: Math.max(1, Number(selectedScale) || 1),
+      selectedFootprint,
+      selectedFitsSlot: selectedFootprint <= slot + RAIL_EDGE_EPSILON,
+      gap: logicalGap,
+      slotStride,
+      visibleCount: 0,
+      contentViewportWidth: 0,
+      outerGutter: 0,
+      contentWidth: 0,
+      maxScroll: 0,
+      maxStartIndex: 0,
+    };
+  }
+
+  const theoreticalVisible = Math.floor(
+    (usableWidth + logicalGap) / slotStride
+  );
+  const visibleCount = Math.min(count, Math.max(1, theoreticalVisible));
+  const contentViewportWidth =
+    visibleCount * slot + Math.max(0, visibleCount - 1) * logicalGap;
+  const outerGutter = Math.max(0, (usableWidth - contentViewportWidth) / 2);
+  const contentWidth =
+    count * slot + Math.max(0, count - 1) * logicalGap + outerGutter * 2;
+  const maxStartIndex = Math.max(0, count - visibleCount);
+
+  return {
+    availableWidth: width,
+    arrowSafety: safety,
+    usableWidth,
+    itemCount: count,
+    slotWidth: slot,
+    coverSize: finiteNonNegative(coverSize),
+    selectedScale: Math.max(1, Number(selectedScale) || 1),
+    selectedFootprint,
+    selectedFitsSlot: selectedFootprint <= slot + RAIL_EDGE_EPSILON,
+    gap: logicalGap,
+    slotStride,
+    visibleCount,
+    contentViewportWidth,
+    outerGutter,
+    contentWidth,
+    maxScroll: maxStartIndex * slotStride,
+    maxStartIndex,
+  };
+}
+
+export function getRailSlotTarget({
+  scrollLeft = 0,
+  maxScroll = 0,
+  slotStride = 0,
+} = {}) {
+  const max = finiteNonNegative(maxScroll);
+  const stride = finiteNonNegative(slotStride);
+  const current = clampRailPosition(scrollLeft, max);
+  if (!stride || !max) return current;
+  const slot = Math.round(current / stride);
+  return clampRailPosition(slot * stride, max);
+}
+
+export function getRailSlotArrowGoal({
+  scrollLeft = 0,
+  goal = null,
+  goalDirection = null,
+  clientWidth = 0,
+  maxScroll = 0,
+  slotStride = 0,
+  direction = 1,
+} = {}) {
+  const normalizedDirection = direction < 0 ? -1 : 1;
+  const max = finiteNonNegative(maxScroll);
+  const stride = finiteNonNegative(slotStride);
+  const canAccumulate =
+    Number.isFinite(goal) &&
+    (goalDirection == null || goalDirection === normalizedDirection);
+  const base = clampRailPosition(canAccumulate ? goal : scrollLeft, max);
+  if (!stride || !max) return base;
+
+  const pageSlots = Math.max(
+    1,
+    Math.round((finiteNonNegative(clientWidth) * 0.7) / stride)
+  );
+  const baseSlot =
+    normalizedDirection > 0
+      ? Math.ceil((base - RAIL_EDGE_EPSILON) / stride)
+      : Math.floor((base + RAIL_EDGE_EPSILON) / stride);
+  return clampRailPosition(
+    (baseSlot + normalizedDirection * pageSlots) * stride,
+    max
+  );
+}
+
+/**
+ * Keeps a selected program plus one neighbor where available while remaining
+ * on a whole-slot resting position. This preserves the existing contextual
+ * reveal without leaving a clipped card when the rail stops.
+ */
+export function getRailSlotSelectionTarget({
+  scrollLeft = 0,
+  maxScroll = 0,
+  slotStride = 0,
+  itemIndex = 0,
+  itemCount = 0,
+  visibleCount = 0,
+} = {}) {
+  const max = finiteNonNegative(maxScroll);
+  const stride = finiteNonNegative(slotStride);
+  const count = Math.max(0, Math.floor(Number(itemCount) || 0));
+  const visible = Math.max(1, Math.floor(Number(visibleCount) || 0));
+  if (!count || !stride) return clampRailPosition(scrollLeft, max);
+
+  const targetIndex = Math.max(
+    0,
+    Math.min(count - 1, Math.floor(Number(itemIndex) || 0))
+  );
+  const maxStart = Math.max(0, count - visible);
+  const start = Math.max(
+    0,
+    Math.min(maxStart, Math.round(clampRailPosition(scrollLeft, max) / stride))
+  );
+  const end = start + visible - 1;
+  let nextStart = start;
+
+  if (targetIndex < start) {
+    nextStart = Math.max(0, targetIndex - 1);
+  } else if (targetIndex > end) {
+    nextStart = Math.min(maxStart, targetIndex - visible + 2);
+  } else if (targetIndex === start && start > 0) {
+    nextStart = start - 1;
+  } else if (targetIndex === end && end < count - 1) {
+    nextStart = Math.min(maxStart, start + 1);
+  }
+
+  return clampRailPosition(nextStart * stride, max);
+}
+
 export function getRailThumbGeometry({
   trackWidth = 0,
   visibleRatio = 1,
