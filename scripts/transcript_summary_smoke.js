@@ -244,10 +244,12 @@ function table(name) {
 }
 export const db = {
   podcasts: table('podcasts'),
+  episodes: table('episodes'),
   favorites: table('favorites'),
   episodeProgress: table('episodeProgress'),
   episodeListenStats: table('episodeListenStats'),
   listenDaily: table('listenDaily'),
+  coverCache: table('coverCache'),
   episodeDownloads: table('episodeDownloads'),
   transcripts: table('transcripts'),
   transcriptDict: table('transcriptDict'),
@@ -949,10 +951,12 @@ async function testTranscriptStateMachine(summary) {
 async function testBackupCompatibility() {
   const tableNames = [
     'podcasts',
+    'episodes',
     'favorites',
     'episodeProgress',
     'episodeListenStats',
     'listenDaily',
+    'coverCache',
     'episodeDownloads',
     'transcripts',
     'transcriptDict',
@@ -965,7 +969,13 @@ async function testBackupCompatibility() {
     tables[name] = [];
     bulkPuts[name] = [];
   });
-  tables.podcasts = [{ id: 'podcast-1', title: '备份节目' }];
+  tables.podcasts = [
+    {
+      id: 'podcast-1',
+      title: '备份节目',
+      feedUrl: 'https://example.test/current-feed.xml',
+    },
+  ];
   tables.transcriptSummaries = [
     { id: 'episode-1', summary: '已备份的本集总结' },
   ];
@@ -983,6 +993,13 @@ async function testBackupCompatibility() {
       if (channel === 'podcast:backup:write') {
         harness.writes.push(payload);
         return { ok: true };
+      }
+      if (channel === 'podcast:backup:writeRecoverySnapshot') {
+        return {
+          ok: true,
+          name: 'pre-restore-legacy-fixture.json',
+          relativePath: 'backups/recovery/pre-restore-legacy-fixture.json',
+        };
       }
       if (channel === 'podcast:backup:readLatest') return harness.latestBackup;
       throw new Error('unexpected backup IPC: ' + channel);
@@ -1007,7 +1024,15 @@ async function testBackupCompatibility() {
     );
 
     const legacy = {
-      podcasts: [{ id: 'podcast-legacy', title: '旧备份节目' }],
+      podcasts: [
+        {
+          id: 'podcast-legacy',
+          title: '旧备份节目',
+          // feedUrl existed in the original backup schema; only transcript
+          // derivative tables are optional for pre-v16 backups.
+          feedUrl: 'https://example.test/legacy-feed.xml',
+        },
+      ],
       favorites: [],
       episodeProgress: [],
       episodeListenStats: [],
