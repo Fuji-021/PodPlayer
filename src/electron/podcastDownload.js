@@ -23,6 +23,10 @@ import http from 'http';
 import { URL } from 'url';
 import { shouldRecoverStalledDownload } from '@/utils/powerResumePolicy';
 import { inspectRangeResponse } from './downloadResumePolicy';
+import {
+  listRecoverySnapshots,
+  readRecoverySnapshot,
+} from './backupRecoveryFiles';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -796,13 +800,39 @@ export function registerPodcastDownloadIpc(getWindow) {
             // A failed retention cleanup must not invalidate the new snapshot.
           }
         }
-        return { ok: true, dir, name };
+        return {
+          ok: true,
+          dir,
+          name,
+          relativePath: `backups/recovery/${name}`,
+        };
       } catch (e) {
         try {
           if (fs.existsSync(temp)) fs.unlinkSync(temp);
         } catch (cleanupError) {
           /* ignore cleanup-only failure */
         }
+        return { ok: false, error: String((e && e.message) || e) };
+      }
+    }
+  );
+
+  ipcMain.handle('podcast:backup:listRecoverySnapshots', async () => {
+    try {
+      const dir = path.join(app.getPath('userData'), 'backups', 'recovery');
+      return { ok: true, snapshots: listRecoverySnapshots(fs, path, dir) };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  ipcMain.handle(
+    'podcast:backup:readRecoverySnapshot',
+    async (_e, { name } = {}) => {
+      try {
+        const dir = path.join(app.getPath('userData'), 'backups', 'recovery');
+        return { ok: true, ...readRecoverySnapshot(fs, path, dir, name) };
+      } catch (e) {
         return { ok: false, error: String((e && e.message) || e) };
       }
     }

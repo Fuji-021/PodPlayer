@@ -104,6 +104,8 @@ import {
   startBackupSchedule,
   restoreFromLatestBackup,
   mergeRestoreHistoryFromLatestBackup,
+  listPreRestoreSnapshots,
+  restoreFromRecoverySnapshot,
   maybeAutoRestore,
 } from '@/utils/podcast/backup';
 startBackupSchedule();
@@ -150,6 +152,57 @@ window.mergeRestoreHistory = async () => {
   }
   if (typeof window.alert === 'function') {
     window.alert('已合并恢复收听历史，即将刷新页面。');
+  }
+  window.location.reload();
+  return r;
+};
+
+// Recovery snapshots are deliberately separate from the normal backup rotation.
+// These two manual entries only accept a main-process-validated snapshot name;
+// they never accept an arbitrary filesystem path.
+window.listPreRestoreSnapshots = async () => {
+  const r = await listPreRestoreSnapshots();
+  // eslint-disable-next-line no-console
+  console.log('[pre-restore-snapshots] result:', r);
+  return r;
+};
+
+window.restorePreRestoreSnapshot = async name => {
+  const snapshots = await listPreRestoreSnapshots();
+  const snapshot =
+    snapshots && snapshots.ok
+      ? (snapshots.snapshots || []).find(item => item.name === name)
+      : null;
+  if (!snapshot) {
+    const r = {
+      ok: false,
+      code: 'recovery-snapshot-not-found',
+      error: '未找到指定的恢复前安全快照。请先运行 listPreRestoreSnapshots()。',
+    };
+    // eslint-disable-next-line no-console
+    console.log('[pre-restore] result:', r);
+    return r;
+  }
+  const ok =
+    typeof window.confirm === 'function' &&
+    window.confirm(
+      `将恢复安全快照 ${snapshot.name}。\n` +
+        '完整恢复会覆盖订阅、进度、统计、收藏、下载记录、文稿、词典、精修稿和本集总结；是否继续？'
+    );
+  if (!ok) return { ok: false, code: 'restore-canceled' };
+  const r = await restoreFromRecoverySnapshot(snapshot.name);
+  // eslint-disable-next-line no-console
+  console.log('[pre-restore] result:', r);
+  if (!r || !r.ok) {
+    if (typeof window.alert === 'function') {
+      window.alert(
+        `恢复未完成：${(r && r.error) || '未知错误'}\n${(r && r.action) || ''}`
+      );
+    }
+    return r;
+  }
+  if (typeof window.alert === 'function') {
+    window.alert(`已恢复安全快照 ${snapshot.name}，即将刷新页面。`);
   }
   window.location.reload();
   return r;

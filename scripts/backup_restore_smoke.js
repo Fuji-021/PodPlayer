@@ -58,6 +58,45 @@ function makeBackup(overrides) {
   };
 }
 
+function makeCurrentBackup(overrides) {
+  const backup = makeBackup(overrides);
+  backup._meta = {
+    app: 'PodPlayer',
+    v: 2,
+    backupVersion: 2,
+    schemaVersion: 16,
+    kind: 'scheduled-backup',
+    tables: [
+      'podcasts',
+      'favorites',
+      'episodeProgress',
+      'episodeListenStats',
+      'listenDaily',
+      'episodeDownloads',
+      'transcripts',
+      'transcriptDict',
+      'transcriptAi',
+      'transcriptSummaries',
+    ],
+  };
+  return backup;
+}
+
+function makeRecoverySnapshot(overrides) {
+  const snapshot = Object.assign(emptyTables(), makeCurrentBackup(overrides));
+  snapshot.episodes = [{ id: 'episode-snapshot' }];
+  snapshot.coverCache = [{ url: 'https://cover.test', data: 'cover' }];
+  snapshot._meta = {
+    app: 'PodPlayer',
+    v: 2,
+    backupVersion: 2,
+    schemaVersion: 16,
+    kind: 'pre-restore-snapshot',
+    tables,
+  };
+  return snapshot;
+}
+
 async function loadBackupModule() {
   const mockDir = path.join(tempDir, 'mocks');
   fs.mkdirSync(mockDir, { recursive: true });
@@ -75,7 +114,12 @@ function clone(value) {
 }
 function table(name) {
   return {
-    async toArray() { return clone(state().tables[name]); },
+    async toArray() {
+      if (state().shouldReadFail && state().shouldReadFail(name)) {
+        throw new Error('forced-read-' + name);
+      }
+      return clone(state().tables[name]);
+    },
     async bulkPut(rows) {
       state().events.push('bulk:' + name);
       if (state().shouldFail && state().shouldFail(name)) throw new Error('forced-' + name);
@@ -140,8 +184,12 @@ function resetHarness(backup, current) {
     tables: Object.assign(emptyTables(), clone(current || {})),
     events: [],
     recoverySnapshots: [],
+    recoveryFiles: {},
+    backupWrites: [],
     memCleared: false,
     shouldFail: null,
+    shouldReadFail: null,
+    failSnapshotPersist: false,
   };
   global.__backupRestoreHarness = state;
   return state;
@@ -157,11 +205,43 @@ async function main() {
             return Promise.resolve(state.backup);
           if (channel === 'podcast:backup:writeRecoverySnapshot') {
             state.events.push('recovery-snapshot');
+            if (state.failSnapshotPersist) {
+              return Promise.resolve({ ok: false, error: 'forced-snapshot' });
+            }
             state.recoverySnapshots.push(payload.json);
-            return Promise.resolve({ ok: true, name: 'pre-restore-test.json' });
+            return Promise.resolve({
+              ok: true,
+              name: 'pre-restore-2026-07-30T12-00-00-000Z.json',
+              relativePath:
+                'backups/recovery/pre-restore-2026-07-30T12-00-00-000Z.json',
+            });
           }
-          if (channel === 'podcast:backup:write')
+          if (channel === 'podcast:backup:listRecoverySnapshots') {
+            return Promise.resolve({
+              ok: true,
+              snapshots: Object.keys(state.recoveryFiles).map(name => ({
+                name,
+                relativePath: 'backups/recovery/' + name,
+              })),
+            });
+          }
+          if (channel === 'podcast:backup:readRecoverySnapshot') {
+            const json = state.recoveryFiles[payload && payload.name];
+            return Promise.resolve(
+              json
+                ? {
+                    ok: true,
+                    name: payload.name,
+                    json,
+                    relativePath: 'backups/recovery/' + payload.name,
+                  }
+                : { ok: false, error: 'recovery-snapshot-not-found' }
+            );
+          }
+          if (channel === 'podcast:backup:write') {
+            state.backupWrites.push(payload);
             return Promise.resolve({ ok: true });
+          }
           return Promise.resolve({
             ok: false,
             error: 'unexpected-ipc:' + channel,
@@ -171,6 +251,26 @@ async function main() {
     }),
   };
   const backupModule = await loadBackupModule();
+
+  const currentBackupWrite = resetHarness(makeBackup(), makeBackup());
+  const currentBackupWriteResult = await backupModule.runBackup();
+  assert.strictEqual(currentBackupWriteResult.ok, true);
+  const writtenBackup = JSON.parse(currentBackupWrite.backupWrites[0].json);
+  assert.strictEqual(writtenBackup._meta.backupVersion, 2);
+  assert.strictEqual(writtenBackup._meta.schemaVersion, 16);
+  assert.strictEqual(writtenBackup._meta.kind, 'scheduled-backup');
+  assert.deepStrictEqual(writtenBackup._meta.tables, [
+    'podcasts',
+    'favorites',
+    'episodeProgress',
+    'episodeListenStats',
+    'listenDaily',
+    'episodeDownloads',
+    'transcripts',
+    'transcriptDict',
+    'transcriptAi',
+    'transcriptSummaries',
+  ]);
 
   const malformed = resetHarness(makeBackup());
   malformed.backup.json = '{not-json';
@@ -195,18 +295,82 @@ async function main() {
   assert.strictEqual(invalidBitIndexesResult.code, 'invalid-backup-bits');
   assert.deepStrictEqual(invalidBitIndexes.events, []);
 
+  const missingCorePayload = makeBackup();
+  delete missingCorePayload.podcasts;
+  const missingCore = resetHarness(missingCorePayload);
+  const missingCoreResult = await backupModule.restoreFromLatestBackup();
+  assert.strictEqual(missingCoreResult.ok, false);
+  assert.strictEqual(missingCoreResult.state, 'preflight-failed');
+  assert.strictEqual(missingCoreResult.code, 'missing-backup-table');
+  assert.deepStrictEqual(
+    missingCore.events,
+    [],
+    'missing a historical core table must fail before snapshot or database writes'
+  );
+
+  const invalidTable = resetHarness(makeBackup({ favorites: {} }));
+  const invalidTableResult = await backupModule.restoreFromLatestBackup();
+  assert.strictEqual(invalidTableResult.ok, false);
+  assert.strictEqual(invalidTableResult.code, 'invalid-backup-table');
+  assert.deepStrictEqual(invalidTable.events, []);
+
+  const currentMissingTablePayload = makeCurrentBackup();
+  delete currentMissingTablePayload.transcriptSummaries;
+  const currentMissingTable = resetHarness(currentMissingTablePayload);
+  const currentMissingTableResult =
+    await backupModule.restoreFromLatestBackup();
+  assert.strictEqual(currentMissingTableResult.ok, false);
+  assert.strictEqual(currentMissingTableResult.code, 'missing-backup-table');
+  assert.deepStrictEqual(currentMissingTable.events, []);
+
   const legacyPayload = makeBackup();
+  delete legacyPayload.transcripts;
+  delete legacyPayload.transcriptDict;
+  delete legacyPayload.transcriptAi;
   delete legacyPayload.transcriptSummaries;
   const legacy = resetHarness(legacyPayload, {
     transcripts: [{ id: 'old-transcript', text: 'old' }],
   });
   const legacyResult = await backupModule.restoreFromLatestBackup();
   assert.strictEqual(legacyResult.ok, true);
+  assert.strictEqual(legacyResult.transcripts, 0);
+  assert.strictEqual(legacyResult.transcriptDict, 0);
+  assert.strictEqual(legacyResult.transcriptAi, 0);
   assert.strictEqual(legacyResult.transcriptSummaries, 0);
   assert.ok(legacy.recoverySnapshots.length === 1);
   assert.deepStrictEqual(
     Array.from(legacy.tables.episodeListenStats[0].bits),
     [1, 2]
+  );
+
+  const captureFailure = resetHarness(makeBackup(), {
+    podcasts: [{ id: 'current-podcast', feedUrl: 'https://current.test' }],
+  });
+  captureFailure.shouldReadFail = table => table === 'coverCache';
+  const captureFailureResult = await backupModule.restoreFromLatestBackup();
+  assert.strictEqual(captureFailureResult.ok, false);
+  assert.strictEqual(captureFailureResult.state, 'snapshot-failed');
+  assert.strictEqual(captureFailureResult.code, 'pre-restore-capture-failed');
+  assert.strictEqual(captureFailureResult.dataChanged, false);
+  assert.strictEqual(
+    captureFailure.events.includes('delete'),
+    false,
+    'capture failure must leave IndexedDB untouched'
+  );
+
+  const persistFailure = resetHarness(makeBackup(), {
+    podcasts: [{ id: 'current-podcast', feedUrl: 'https://current.test' }],
+  });
+  persistFailure.failSnapshotPersist = true;
+  const persistFailureResult = await backupModule.restoreFromLatestBackup();
+  assert.strictEqual(persistFailureResult.ok, false);
+  assert.strictEqual(persistFailureResult.state, 'snapshot-failed');
+  assert.strictEqual(persistFailureResult.code, 'pre-restore-snapshot-failed');
+  assert.strictEqual(persistFailureResult.dataChanged, false);
+  assert.strictEqual(
+    persistFailure.events.includes('delete'),
+    false,
+    'snapshot persistence failure must leave IndexedDB untouched'
   );
 
   const currentTranscriptAssets = {
@@ -278,6 +442,10 @@ async function main() {
   };
   const restoreFailureResult = await backupModule.restoreFromLatestBackup();
   assert.strictEqual(restoreFailureResult.ok, false);
+  assert.strictEqual(
+    restoreFailureResult.state,
+    'restore-failed-rollback-succeeded'
+  );
   assert.strictEqual(restoreFailureResult.code, 'restore-failed-rolled-back');
   assert.deepStrictEqual(restoreFailure.tables, beforeRestoreFailure);
   assert.ok(
@@ -306,7 +474,40 @@ async function main() {
     rollbackFailureResult.code,
     'restore-failed-rollback-failed'
   );
+  assert.strictEqual(
+    rollbackFailureResult.state,
+    'restore-failed-rollback-failed'
+  );
+  assert.strictEqual(rollbackFailureResult.dataChanged, true);
   assert.ok(rollbackFailureResult.rollbackError);
+  assert.match(rollbackFailureResult.action, /listPreRestoreSnapshots/);
+
+  const recoveryName = 'pre-restore-2026-07-30T12-00-00-123Z.json';
+  const recovery = resetHarness(makeBackup(), {
+    podcasts: [{ id: 'current-podcast', feedUrl: 'https://current.test' }],
+  });
+  recovery.recoveryFiles[recoveryName] = JSON.stringify(makeRecoverySnapshot());
+  const recoveryList = await backupModule.listPreRestoreSnapshots();
+  assert.strictEqual(recoveryList.ok, true);
+  assert.strictEqual(recoveryList.snapshots[0].name, recoveryName);
+  const recoveryResult = await backupModule.restoreFromRecoverySnapshot(
+    recoveryName
+  );
+  assert.strictEqual(recoveryResult.ok, true);
+  assert.strictEqual(recoveryResult.state, 'restored');
+  assert.deepStrictEqual(recovery.tables.episodes, [
+    { id: 'episode-snapshot' },
+  ]);
+  const missingRecoveryResult = await backupModule.restoreFromRecoverySnapshot(
+    '../outside.json'
+  );
+  assert.strictEqual(missingRecoveryResult.ok, false);
+  assert.strictEqual(missingRecoveryResult.state, 'preflight-failed');
+  assert.deepStrictEqual(
+    recovery.events.filter(event => event === 'delete'),
+    ['delete'],
+    'an invalid recovery snapshot name must not start a second restore'
+  );
 
   process.stdout.write('backup restore smoke: PASS\n');
 }
