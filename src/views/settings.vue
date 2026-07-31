@@ -328,7 +328,7 @@
               </div>
             </div>
             <div class="description">
-              部署模型后，可在已下载单集上手动生成文字稿。
+              部署模型后，可在已下载单集详情页手动生成文字稿；生成后可在沉浸页点击封面查看。
             </div>
           </div>
           <div class="right settings-feature-actions">

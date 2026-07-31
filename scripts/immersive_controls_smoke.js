@@ -10,6 +10,8 @@ const playerPath = path.join(
   'Player.vue'
 );
 const source = fs.readFileSync(playerPath, 'utf8');
+const settingsPath = path.join(__dirname, '..', 'src', 'views', 'settings.vue');
+const settingsSource = fs.readFileSync(settingsPath, 'utf8');
 
 function expect(pattern, message) {
   assert(pattern.test(source), message);
@@ -34,6 +36,37 @@ expect(
 expect(
   /class="imm-pod"\s+data-selection="content"\s+@click="immClickPodcast\(\$event\)"/,
   'podcast title must retain content selection and detail navigation'
+);
+expectAbsent(
+  /\.imm-ep\s*\{[\s\S]*?&:hover\s*\{[\s\S]*?text-decoration:\s*underline;/,
+  'immersive episode title must not add a hover underline'
+);
+expectAbsent(
+  /\.imm-pod\s*\{[\s\S]*?&:hover\s*\{[\s\S]*?text-decoration:\s*underline;/,
+  'immersive podcast title must not add a hover underline'
+);
+const toggleImmTranscript = source.match(
+  /toggleImmTranscript\(\) \{([\s\S]*?)\n[ ]{4}\},\n[ ]{4}\/\/ 文稿点句跳播/
+);
+assert(
+  toggleImmTranscript,
+  'toggleImmTranscript implementation must remain present'
+);
+expect(
+  /if \(!this\.immTranscriptAvailable\) \{\s*return;\s*\}/,
+  'a missing transcript must be a silent no-op in immersive mode'
+);
+assert(
+  !/showToast/.test(toggleImmTranscript[1]),
+  'a missing transcript must not show an immersive toast'
+);
+expect(
+  /immTranscriptOpen = !this\.immTranscriptOpen;/,
+  'an available transcript must keep its existing cover-toggle behavior'
+);
+assert(
+  settingsSource.includes('生成后可在沉浸页点击封面查看。'),
+  'the local transcript settings copy must explain the immersive entry point'
 );
 expect(
   /class="imm-top"\s+:class="\{ 'is-playing': playing \}"/,

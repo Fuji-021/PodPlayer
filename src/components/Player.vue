@@ -463,7 +463,7 @@
     <!-- ============ [沉浸式播放页 P0] 全屏沉浸 overlay ============
          背景=C 混合(模糊封面打底 + 三色柔和径向渐变 + 磨砂层，静态)；大封面居中 + 细胶囊进度条 +
          一行控制(三大金刚居中、倍速/队列/睡眠在左、音量在右)。所有控制复用本组件方法与状态。
-         P1 已落地：全屏 maximize/ESC 退出(单击退出/双击最小化)/顶部 hover 提示气泡；P2 动态背景。 -->
+         P1 已落地：全屏 maximize/ESC 退出(单击退出/双击最小化)/顶部关闭热区；P2 动态背景。 -->
     <transition name="imm-fade">
       <div v-if="immersiveOpen" class="immersive">
         <!-- 背景三层(静态) -->
@@ -2190,13 +2190,9 @@ export default {
         this.immTranscriptMounted = false;
       }
     },
-    // 点封面切换文稿：有文稿→开关；无文稿→软提示(不展开)。组件已在进沉浸页时预挂载。
+    // 点封面切换文稿：有文稿→开关；无文稿静默保持沉浸体验。组件已在进沉浸页时预挂载。
     toggleImmTranscript() {
       if (!this.immTranscriptAvailable) {
-        this.$store.dispatch(
-          'showToast',
-          this.isPodcastTrack ? '本集暂无文字稿' : '该内容不支持文字稿'
-        );
         return;
       }
       this.immTranscriptMounted = true; // 兜底(预挂载未及时)
@@ -3450,9 +3446,6 @@ export default {
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
-    &:hover {
-      text-decoration: underline;
-    }
   }
   .imm-pod {
     margin-top: 4px;
@@ -3462,10 +3455,6 @@ export default {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    &:hover {
-      text-decoration: underline;
-      color: var(--imm-text-2nd);
-    }
   }
 }
 
