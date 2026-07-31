@@ -114,24 +114,84 @@ async function main() {
       scrollLeft: 180,
       maxScroll: narrow.maxScroll,
       slotStride: narrow.slotStride,
+      slotWidth: narrow.slotWidth,
+      contentViewportWidth: narrow.contentViewportWidth,
       itemIndex: 2,
       itemCount: 7,
       visibleCount: narrow.visibleCount,
     }),
-    90,
-    'a left-edge selection must reveal its prior neighbor on a full slot'
+    180,
+    'a fully visible left-edge item must not move the rail'
   );
   assert.strictEqual(
     rules.getRailSlotSelectionTarget({
-      scrollLeft: 260,
+      scrollLeft: 180,
       maxScroll: narrow.maxScroll,
       slotStride: narrow.slotStride,
+      slotWidth: narrow.slotWidth,
+      contentViewportWidth: narrow.contentViewportWidth,
+      itemIndex: 4,
+      itemCount: 7,
+      visibleCount: narrow.visibleCount,
+    }),
+    180,
+    'a fully visible right-edge item must not move the rail'
+  );
+  assert.strictEqual(
+    rules.getRailSlotSelectionTarget({
+      scrollLeft: 190,
+      maxScroll: narrow.maxScroll,
+      slotStride: narrow.slotStride,
+      slotWidth: narrow.slotWidth,
+      contentViewportWidth: narrow.contentViewportWidth,
+      itemIndex: 2,
+      itemCount: 7,
+      visibleCount: narrow.visibleCount,
+    }),
+    180,
+    'a left-clipped item must take the shortest whole-slot reveal'
+  );
+  assert.strictEqual(
+    rules.getRailSlotSelectionTarget({
+      scrollLeft: 170,
+      maxScroll: narrow.maxScroll,
+      slotStride: narrow.slotStride,
+      slotWidth: narrow.slotWidth,
+      contentViewportWidth: narrow.contentViewportWidth,
+      itemIndex: 4,
+      itemCount: 7,
+      visibleCount: narrow.visibleCount,
+    }),
+    180,
+    'a right-clipped item must take the shortest whole-slot reveal'
+  );
+  assert.strictEqual(
+    rules.getRailSlotSelectionTarget({
+      scrollLeft: 180,
+      maxScroll: narrow.maxScroll,
+      slotStride: narrow.slotStride,
+      slotWidth: narrow.slotWidth,
+      contentViewportWidth: narrow.contentViewportWidth,
+      itemIndex: 1,
+      itemCount: 7,
+      visibleCount: narrow.visibleCount,
+    }),
+    90,
+    'a hidden item on the left must reveal at the nearest full slot'
+  );
+  assert.strictEqual(
+    rules.getRailSlotSelectionTarget({
+      scrollLeft: 180,
+      maxScroll: narrow.maxScroll,
+      slotStride: narrow.slotStride,
+      slotWidth: narrow.slotWidth,
+      contentViewportWidth: narrow.contentViewportWidth,
       itemIndex: 5,
       itemCount: 7,
       visibleCount: narrow.visibleCount,
     }),
-    360,
-    'a right-edge selection must reveal its next neighbor on a full slot'
+    270,
+    'a hidden item on the right must reveal at the nearest full slot'
   );
   assert.strictEqual(
     rules.getRailSlotTarget({
@@ -148,6 +208,7 @@ async function main() {
       clientWidth: 300,
       maxScroll: narrow.maxScroll,
       slotStride: narrow.slotStride,
+      visibleCount: narrow.visibleCount,
       direction: 1,
     }),
     360,
@@ -161,10 +222,56 @@ async function main() {
       clientWidth: 300,
       maxScroll: narrow.maxScroll,
       slotStride: narrow.slotStride,
+      visibleCount: narrow.visibleCount,
       direction: -1,
     }),
     180,
     'reversing arrow direction must retarget from the visible slot'
+  );
+  assert.strictEqual(
+    rules.getRailSlotArrowGoal({
+      scrollLeft: 90,
+      goal: 180,
+      goalDirection: 1,
+      maxScroll: narrow.maxScroll,
+      slotStride: narrow.slotStride,
+      visibleCount: narrow.visibleCount,
+      direction: 1,
+    }),
+    360,
+    'same-direction arrow clicks may accumulate from the active paging target'
+  );
+  assert.strictEqual(
+    rules.getRailSlotArrowGoal({
+      scrollLeft: 90,
+      goal: 180,
+      goalDirection: null,
+      maxScroll: narrow.maxScroll,
+      slotStride: narrow.slotStride,
+      visibleCount: narrow.visibleCount,
+      direction: 1,
+    }),
+    270,
+    'an unrelated selection goal must not become an arrow paging base'
+  );
+  closeTo(
+    rules.getRailLogicalPosition({
+      scrollLeft: 135,
+      maxScroll: narrow.maxScroll,
+      slotStride: narrow.slotStride,
+    }),
+    1.5,
+    'logical position must retain in-flight fractional wheel/thumb movement'
+  );
+  closeTo(
+    rules.getRailSlotThumbProgress({
+      scrollLeft: 135,
+      maxScroll: narrow.maxScroll,
+      slotStride: narrow.slotStride,
+      maxStartSlot: narrow.maxStartSlot,
+    }),
+    0.375,
+    'thumb progress must share the logical slot coordinate'
   );
 
   const metrics = rules.getRailMetrics({

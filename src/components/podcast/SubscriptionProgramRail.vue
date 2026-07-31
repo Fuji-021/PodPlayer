@@ -38,6 +38,7 @@
           :aria-selected="!selectedPodcastId"
           :tabindex="!selectedPodcastId ? 0 : -1"
           aria-label="全部节目"
+          data-podcast-id=""
           role="option"
           @click="select('', $event)"
         >
@@ -104,7 +105,7 @@ import {
   getRailSlotLayout,
   getRailSlotSelectionTarget,
   getRailSlotTarget,
-  getRailSelectionContextTarget,
+  getRailSlotThumbProgress,
   getRailThumbDragTarget,
   getRailThumbGeometry,
 } from '@/utils/podcast/subscriptionUpdatesRules';
@@ -130,6 +131,7 @@ export default {
       this.$nextTick(() => {
         this.updateMetrics(true);
         this.settleRailToSlot({ immediate: true });
+        this.ensureSelectedVisible(this.selectedPodcastId);
       });
     },
     selectedPodcastId(value) {
@@ -152,7 +154,7 @@ export default {
           if (pendingSelection && pendingSelection.token === requestToken) {
             this._pendingUserSelection = null;
           }
-          if (value) this.ensureSelectedVisible(value);
+          this.ensureSelectedVisible(value);
         }
         const podcast = this.podcasts.find(item => item.id === value);
         this.syncSelectedHalo(podcast);
@@ -192,6 +194,7 @@ export default {
         }
         this.updateMetrics(true);
         this.settleRailToSlot({ immediate: true });
+        this.ensureSelectedVisible(this.selectedPodcastId);
         const selected = this.podcasts.find(
           item => item.id === this.selectedPodcastId
         );
@@ -226,14 +229,12 @@ export default {
       this.setMotionClass('is-dragging', false);
     },
     select(podcastId) {
-      if (podcastId === this.selectedPodcastId) {
-        if (podcastId) this.ensureSelectedVisible(podcastId);
-        return;
-      }
+      if (podcastId === this.selectedPodcastId) return;
       const token = (this._selectionRequestToken || 0) + 1;
       this._selectionRequestToken = token;
-      this._pendingUserSelection = podcastId ? { id: podcastId, token } : null;
-      if (podcastId) this.ensureSelectedVisible(podcastId);
+      this._pendingUserSelection = { id: podcastId, token };
+      this.interruptRailMotion();
+      this.ensureSelectedVisible(podcastId);
       this.$emit('select', podcastId);
     },
     handleRailPointerDown() {
@@ -338,6 +339,7 @@ export default {
         typeof document !== 'undefined' &&
         document.activeElement === target
       ) {
+        this.ensureRailItemVisible(target);
         return;
       }
       try {
@@ -345,12 +347,12 @@ export default {
       } catch (error) {
         target.focus();
       }
+      this.ensureRailItemVisible(target);
     },
     measureRailSlotLayout() {
       const viewport = this.$refs.viewport;
-      const items = this.$refs.items || [];
-      const allItem = this.$el && this.$el.querySelector('.rail-all');
-      const item = allItem || items[0];
+      const items = this.getRailItems();
+      const item = items[0];
       if (!viewport || !item) return null;
       const style =
         typeof window !== 'undefined' && window.getComputedStyle
@@ -362,8 +364,8 @@ export default {
       );
       const slotWidth = Math.max(0, Number(item.offsetWidth) || 0);
       const firstCover =
-        items[0] && items[0].querySelector
-          ? items[0].querySelector('.rail-cover-image')
+        items[1] && items[1].querySelector
+          ? items[1].querySelector('.rail-cover-image')
           : null;
       const coverSize = Math.max(
         0,
@@ -371,7 +373,7 @@ export default {
       );
       return getRailSlotLayout({
         availableWidth: viewport.clientWidth,
-        itemCount: items.length + (allItem ? 1 : 0),
+        itemCount: items.length,
         slotWidth,
         coverSize,
         selectedScale: 1.055,
@@ -395,8 +397,17 @@ export default {
       const scrollLeft = viewport.scrollLeft;
       const clientWidth = viewport.clientWidth;
       const scrollWidth = viewport.scrollWidth;
-      this._railViewportWidth = clientWidth;
-      this._railScrollWidth = scrollWidth;
+      const layout = this._railSlotLayout;
+      if (layout && layout.contentWidth) {
+        const visibleRatio = Math.min(1, clientWidth / layout.contentWidth);
+        return getRailPositionMetrics(
+          {
+            maxScroll: layout.maxScroll,
+            visibleRatio,
+          },
+          scrollLeft
+        );
+      }
       return getRailMetrics({
         scrollLeft,
         clientWidth,
@@ -450,7 +461,18 @@ export default {
         thumb.style.transform = 'translate3d(0, 0, 0)';
         return;
       }
-      const ratio = metrics.maxScroll ? scrollLeft / metrics.maxScroll : 0;
+      const layout = this._railSlotLayout;
+      const ratio =
+        layout && layout.slotStride
+          ? getRailSlotThumbProgress({
+              scrollLeft,
+              maxScroll: layout.maxScroll,
+              slotStride: layout.slotStride,
+              maxStartSlot: layout.maxStartSlot,
+            })
+          : metrics.maxScroll
+          ? scrollLeft / metrics.maxScroll
+          : 0;
       thumb.style.width = geometry.width + 'px';
       thumb.style.transform =
         'translate3d(' + geometry.travel * ratio + 'px, 0, 0)';
@@ -627,6 +649,8 @@ export default {
         maxScroll: metrics.maxScroll,
         slotStride:
           (this._railSlotLayout && this._railSlotLayout.slotStride) || 0,
+        visibleCount:
+          (this._railSlotLayout && this._railSlotLayout.visibleCount) || 0,
         direction: normalizedDirection,
       });
       this.retargetRailMotion(goal, { direction: normalizedDirection });
@@ -738,36 +762,30 @@ export default {
       return true;
     },
     ensureSelectedVisible(podcastId) {
-      const viewport = this.$refs.viewport;
-      const items = this.$refs.items || [];
-      const item = items.find(node => node.dataset.podcastId === podcastId);
-      if (!viewport || !item) return;
+      return this.ensureRailItemVisible(this.getRailItem(podcastId));
+    },
+    ensureRailItemVisible(item) {
+      if (!item) return false;
       const metrics = this.captureRailLayout();
-      const allItem = this.$el.querySelector('.rail-all');
-      const railItems = [allItem, ...items].filter(Boolean);
+      const railItems = this.getRailItems();
       const index = railItems.indexOf(item);
       const layout = this._railSlotLayout;
-      const goal =
-        layout && layout.slotStride
-          ? getRailSlotSelectionTarget({
-              scrollLeft: metrics.scrollLeft,
-              maxScroll: metrics.maxScroll,
-              slotStride: layout.slotStride,
-              itemIndex: index,
-              itemCount: railItems.length,
-              visibleCount: layout.visibleCount,
-            })
-          : getRailSelectionContextTarget({
-              scrollLeft: metrics.scrollLeft,
-              clientWidth: this._railViewportWidth,
-              scrollWidth: this._railScrollWidth,
-              itemLeft: item.offsetLeft,
-              itemWidth: item.offsetWidth,
-              gap: 0,
-              hasPrev: index > 0,
-              hasNext: index >= 0 && index < railItems.length - 1,
-            });
+      if (!metrics || !layout || !layout.slotStride || index < 0) return false;
+      const goal = getRailSlotSelectionTarget({
+        scrollLeft: metrics.scrollLeft,
+        maxScroll: metrics.maxScroll,
+        slotStride: layout.slotStride,
+        slotWidth: layout.slotWidth,
+        contentViewportWidth: layout.contentViewportWidth,
+        itemIndex: index,
+        itemCount: railItems.length,
+        visibleCount: layout.visibleCount,
+      });
+      if (Math.abs(goal - metrics.scrollLeft) < RAIL_EDGE_EPSILON) {
+        return false;
+      }
       this.retargetRailMotion(goal);
+      return true;
     },
     handleRailEdgeKey(event, last) {
       const activeElement =
@@ -785,16 +803,13 @@ export default {
       this.focusRailEdge(last);
     },
     focusRailEdge(last) {
-      const items = this.$refs.items || [];
-      const target = last
-        ? items[items.length - 1]
-        : this.$el.querySelector('.rail-all');
+      const items = this.getRailItems();
+      const target = last ? items[items.length - 1] : items[0];
       this.focusRailItem(target);
       this.markRailKeyboardFocus(target);
     },
     moveRailFocus(direction) {
-      const all = this.$el.querySelector('.rail-all');
-      const items = [all, ...(this.$refs.items || [])].filter(Boolean);
+      const items = this.getRailItems();
       if (!items.length) return;
       const current = document.activeElement;
       const currentIndex = items.indexOf(current);
@@ -891,10 +906,12 @@ export default {
       document.removeEventListener('pointercancel', this.finishDrag);
     },
     getRailItem(podcastId) {
-      if (!podcastId) return null;
-      return (this.$refs.items || []).find(
-        node => node.dataset.podcastId === podcastId
-      );
+      const id = podcastId || '';
+      return this.getRailItems().find(node => node.dataset.podcastId === id);
+    },
+    getRailItems() {
+      const allItem = this.$el && this.$el.querySelector('.rail-all');
+      return [allItem, ...(this.$refs.items || [])].filter(Boolean);
     },
     getRailHalo(target) {
       if (!target || !target.querySelector) return null;

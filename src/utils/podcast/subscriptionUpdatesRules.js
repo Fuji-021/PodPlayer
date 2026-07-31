@@ -351,6 +351,7 @@ export function getRailSlotLayout({
       contentWidth: 0,
       maxScroll: 0,
       maxStartIndex: 0,
+      maxStartSlot: 0,
     };
   }
 
@@ -383,7 +384,39 @@ export function getRailSlotLayout({
     contentWidth,
     maxScroll: maxStartIndex * slotStride,
     maxStartIndex,
+    maxStartSlot: maxStartIndex,
   };
+}
+
+/**
+ * Converts the controller's physical scroll position to the rail's sole
+ * logical coordinate system. The result intentionally remains fractional
+ * while wheel and thumb input is in flight; only resting positions snap.
+ */
+export function getRailLogicalPosition({
+  scrollLeft = 0,
+  maxScroll = 0,
+  slotStride = 0,
+} = {}) {
+  const stride = finiteNonNegative(slotStride);
+  if (!stride) return 0;
+  return clampRailPosition(scrollLeft, maxScroll) / stride;
+}
+
+export function getRailSlotThumbProgress({
+  scrollLeft = 0,
+  maxScroll = 0,
+  slotStride = 0,
+  maxStartSlot = 0,
+} = {}) {
+  const maxStart = finiteNonNegative(maxStartSlot);
+  if (!maxStart) return 0;
+  const logicalPosition = getRailLogicalPosition({
+    scrollLeft,
+    maxScroll,
+    slotStride,
+  });
+  return Math.max(0, Math.min(1, logicalPosition / maxStart));
 }
 
 export function getRailSlotTarget({
@@ -403,24 +436,20 @@ export function getRailSlotArrowGoal({
   scrollLeft = 0,
   goal = null,
   goalDirection = null,
-  clientWidth = 0,
   maxScroll = 0,
   slotStride = 0,
+  visibleCount = 0,
   direction = 1,
 } = {}) {
   const normalizedDirection = direction < 0 ? -1 : 1;
   const max = finiteNonNegative(maxScroll);
   const stride = finiteNonNegative(slotStride);
   const canAccumulate =
-    Number.isFinite(goal) &&
-    (goalDirection == null || goalDirection === normalizedDirection);
+    Number.isFinite(goal) && goalDirection === normalizedDirection;
   const base = clampRailPosition(canAccumulate ? goal : scrollLeft, max);
   if (!stride || !max) return base;
 
-  const pageSlots = Math.max(
-    1,
-    Math.round((finiteNonNegative(clientWidth) * 0.7) / stride)
-  );
+  const pageSlots = Math.max(1, Math.floor(Number(visibleCount) || 0) - 1);
   const baseSlot =
     normalizedDirection > 0
       ? Math.ceil((base - RAIL_EDGE_EPSILON) / stride)
@@ -432,47 +461,53 @@ export function getRailSlotArrowGoal({
 }
 
 /**
- * Keeps a selected program plus one neighbor where available while remaining
- * on a whole-slot resting position. This preserves the existing contextual
- * reveal without leaving a clipped card when the rail stops.
+ * Reveals an item only when it is clipped. A fully visible item keeps the
+ * current physical position exactly, so selection never doubles as paging.
  */
 export function getRailSlotSelectionTarget({
   scrollLeft = 0,
   maxScroll = 0,
   slotStride = 0,
+  slotWidth = 0,
+  contentViewportWidth = 0,
   itemIndex = 0,
   itemCount = 0,
   visibleCount = 0,
+  epsilon = RAIL_EDGE_EPSILON,
 } = {}) {
   const max = finiteNonNegative(maxScroll);
   const stride = finiteNonNegative(slotStride);
+  const slot = finiteNonNegative(slotWidth);
   const count = Math.max(0, Math.floor(Number(itemCount) || 0));
   const visible = Math.max(1, Math.floor(Number(visibleCount) || 0));
-  if (!count || !stride) return clampRailPosition(scrollLeft, max);
+  const current = clampRailPosition(scrollLeft, max);
+  if (!count || !stride || !slot) return current;
 
   const targetIndex = Math.max(
     0,
     Math.min(count - 1, Math.floor(Number(itemIndex) || 0))
   );
-  const maxStart = Math.max(0, count - visible);
-  const start = Math.max(
-    0,
-    Math.min(maxStart, Math.round(clampRailPosition(scrollLeft, max) / stride))
+  const viewportWidth = Math.max(
+    slot,
+    finiteNonNegative(contentViewportWidth) ||
+      visible * stride - Math.max(0, stride - slot)
   );
-  const end = start + visible - 1;
-  let nextStart = start;
+  const tolerance = finiteNonNegative(epsilon);
+  const itemLeft = targetIndex * stride;
+  const itemRight = itemLeft + slot;
+  const viewportRight = current + viewportWidth;
 
-  if (targetIndex < start) {
-    nextStart = Math.max(0, targetIndex - 1);
-  } else if (targetIndex > end) {
-    nextStart = Math.min(maxStart, targetIndex - visible + 2);
-  } else if (targetIndex === start && start > 0) {
-    nextStart = start - 1;
-  } else if (targetIndex === end && end < count - 1) {
-    nextStart = Math.min(maxStart, start + 1);
+  if (
+    itemLeft >= current - tolerance &&
+    itemRight <= viewportRight + tolerance
+  ) {
+    return current;
   }
 
-  return clampRailPosition(nextStart * stride, max);
+  const nearestEdge = itemLeft < current ? itemLeft : itemRight - viewportWidth;
+  const wholeSlot = Math.round(nearestEdge / stride) * stride;
+
+  return clampRailPosition(wholeSlot, max);
 }
 
 export function getRailThumbGeometry({
@@ -522,63 +557,6 @@ export function getRailArrowGoal({
     scrollWidth,
     direction: normalizedDirection,
   });
-}
-
-/**
- * The amount of neighboring context we keep visible when selecting a rail
- * item. It is intentionally mirrored on both sides: one cover plus its gap,
- * capped to half of the remaining viewport so narrow rails stay usable.
- */
-export function getRailSelectionContextDistance({
-  clientWidth = 0,
-  itemWidth = 0,
-  gap = 0,
-} = {}) {
-  const viewport = Math.max(0, Number(clientWidth) || 0);
-  const cover = Math.max(0, Number(itemWidth) || 0);
-  const spacing = Math.max(0, Number(gap) || 0);
-  return Math.max(0, Math.min(cover + spacing, (viewport - cover) / 2));
-}
-
-/**
- * Returns the scroll position that keeps a selected item inside a symmetric
- * safe zone and, where possible, fully reveals one neighboring cover. The
- * DOM is measured only by the caller at selection time; rAF frames only use
- * the result as a target.
- */
-export function getRailSelectionContextTarget({
-  scrollLeft = 0,
-  clientWidth = 0,
-  scrollWidth = 0,
-  itemLeft = 0,
-  itemWidth = 0,
-  gap = 0,
-  hasPrev = false,
-  hasNext = false,
-  epsilon = RAIL_EDGE_EPSILON,
-} = {}) {
-  const metrics = getRailMetrics({ scrollLeft, clientWidth, scrollWidth });
-  const viewport = Math.max(0, Number(clientWidth) || 0);
-  const left = Math.max(0, Number(itemLeft) || 0);
-  const width = Math.max(0, Number(itemWidth) || 0);
-  const right = left + width;
-  const context = getRailSelectionContextDistance({
-    clientWidth: viewport,
-    itemWidth: width,
-    gap,
-  });
-  const tolerance = Math.max(0, Number(epsilon) || 0);
-  const safeLeft = metrics.scrollLeft + (hasPrev ? context : 0);
-  const safeRight = metrics.scrollLeft + viewport - (hasNext ? context : 0);
-  let target = metrics.scrollLeft;
-
-  if (left < safeLeft - tolerance) {
-    target = left - (hasPrev ? context : 0);
-  } else if (right > safeRight + tolerance) {
-    target = right - viewport + (hasNext ? context : 0);
-  }
-
-  return clampRailPosition(target, metrics.maxScroll);
 }
 
 /**

@@ -244,7 +244,7 @@ function buildRailHarness(
       },
     };
   };
-  const allItem = makeItem('all', positions.all);
+  const allItem = makeItem('', positions.all);
   const items = Object.keys(positions)
     .filter(id => id !== 'all')
     .map(id => makeItem(id, positions[id]));
@@ -465,38 +465,55 @@ async function main() {
       'layout rAF must be cancellable on teardown'
     );
 
-    // C is at the left edge while B is hidden. Its offsetParent is not the
-    // viewport, so the contract catches page-relative offsetLeft regressions.
+    // C is fully visible at the left edge. Selection is not paging, so its
+    // page-relative offsetLeft must not manufacture a scroll target.
+    const initialThumbTransform = thumb.style.transform;
+    const initialWriteCount = activeHarness.writes.length;
+    vm.ensureSelectedVisible('C');
+    assert.ok(
+      !Number.isFinite(vm._railGoal),
+      'a fully visible left-edge item must not queue a controller goal'
+    );
+    assert.strictEqual(
+      activeHarness.writes.length,
+      initialWriteCount,
+      'a fully visible selection must not write scrollLeft'
+    );
+    assert.strictEqual(
+      thumb.style.transform,
+      initialThumbTransform,
+      'a fully visible selection must not move the thumb'
+    );
+
+    activeHarness.scrollLeft = 170;
+    vm.updateMetrics();
+    vm.ensureSelectedVisible('E');
+    assert.strictEqual(
+      vm._railGoal,
+      180,
+      'a right-clipped item must take the shortest full-slot reveal'
+    );
+    vm.interruptRailMotion();
+
+    activeHarness.scrollLeft = 190;
+    vm.updateMetrics();
     vm.ensureSelectedVisible('C');
     assert.strictEqual(
       vm._railGoal,
-      90,
-      'left-edge C must move the rail left to reveal B in viewport coordinates; actual goal=' +
-        vm._railGoal
+      180,
+      'a left-clipped item must take the shortest full-slot reveal'
     );
     vm.interruptRailMotion();
 
-    activeHarness.scrollLeft = 260;
-    vm.updateMetrics();
-    vm.ensureSelectedVisible('F');
-    assert.strictEqual(
-      vm._railGoal,
-      360,
-      'right-edge F must move the rail right to reveal G on a full slot'
-    );
-    vm.interruptRailMotion();
-
-    // Selection scroll must be prepared before the parent receives the filter
-    // update, otherwise the watcher can retarget after the list has changed.
+    // The parent receives the filter update after selection positioning, but a
+    // fully visible click must preserve both scroll and thumb state.
     activeHarness.scrollLeft = 180;
     vm.updateMetrics();
     vm.select('C');
-    assert.strictEqual(
-      emitted[0].goalAtEmit,
-      90,
-      'user selection must calculate its contextual rail target before emit'
+    assert.ok(
+      !Number.isFinite(emitted[0].goalAtEmit),
+      'a fully visible user selection must emit without a scroll target'
     );
-    vm.interruptRailMotion();
 
     const cItem = activeHarness.items.find(
       item => item.dataset.podcastId === 'C'
@@ -533,6 +550,52 @@ async function main() {
       vm.select(podcastId);
       return pointerEvent;
     };
+
+    // The real pointerdown -> click/select -> parent prop write -> watcher ->
+    // rAF chain reveals only a clipped item. The controller owns the matching
+    // thumb frame; the click does not need a second watcher correction.
+    const fItem = activeHarness.items.find(
+      item => item.dataset.podcastId === 'F'
+    );
+    activeHarness.scrollLeft = 180;
+    vm.updateMetrics();
+    const thumbBeforeClippedSelect = thumb.style.transform;
+    dispatchPointerSelect(fItem, 'F');
+    assert.strictEqual(
+      vm._railGoal,
+      270,
+      'a clipped pointer-selected item must receive its nearest reveal goal'
+    );
+    assert.strictEqual(
+      raf.size,
+      1,
+      'a clipped selection uses one controller rAF'
+    );
+    assert.ok(raf.flush(16), 'the clipped selection must commit through rAF');
+    assert.ok(
+      viewport.scrollLeft > 180 && viewport.scrollLeft < 270,
+      'the reveal animation must begin from the actual position without a snap'
+    );
+    assert.notStrictEqual(
+      thumb.style.transform,
+      thumbBeforeClippedSelect,
+      'the thumb must move in the same controller frame as the rail'
+    );
+    vm.interruptRailMotion();
+    const repeatWriteCount = activeHarness.writes.length;
+    vm.selectedPodcastId = 'F';
+    vm.select('F');
+    assert.strictEqual(
+      activeHarness.writes.length,
+      repeatWriteCount,
+      'reselecting the current item must not move the rail'
+    );
+    assert.strictEqual(
+      raf.size,
+      0,
+      'reselecting the current item must not animate'
+    );
+    vm.selectedPodcastId = '';
 
     vm.bindRailTabTracking();
     assert.ok(
@@ -680,7 +743,8 @@ async function main() {
         !source.includes('prepareRailItemFocus') &&
         !source.includes('_railDocumentWheelListener') &&
         !source.includes('_railDocumentPointerListener') &&
-        !source.includes('Date.now() - startedAt <= 750'),
+        !source.includes('Date.now() - startedAt <= 750') &&
+        !source.includes('getRailSelectionContextTarget'),
       'shared input mode, pointer focus, document compensation and timed intent must be removed'
     );
     assert.ok(
@@ -693,6 +757,10 @@ async function main() {
         !source.includes('-webkit-user-drag: none') &&
         !source.includes('@dragstart.prevent'),
       'native foreground cover drag must remain enabled'
+    );
+    assert.ok(
+      source.includes('data-podcast-id=""'),
+      'the all-programs item must share the rail slot identity contract'
     );
     assert.ok(
       !Object.prototype.hasOwnProperty.call(vm, 'previewPodcastId') &&
@@ -763,8 +831,24 @@ async function main() {
       'interrupt must finish the rail motion class once'
     );
 
-    // The newest selection wins before the next animation frame; stale watcher
-    // work must not overwrite it.
+    // Arrow paging is independent from selection: it advances visibleCount -
+    // one slots, accumulates only in the same direction, and reverses from the
+    // live visual position rather than an obsolete goal.
+    activeHarness.scrollLeft = 180;
+    vm.updateMetrics();
+    vm.scrollRail(1);
+    assert.strictEqual(vm._railGoal, 360, 'forward arrow must page two slots');
+    vm.scrollRail(-1);
+    assert.strictEqual(
+      vm._railGoal,
+      0,
+      'reverse arrow must retarget from the current visible position'
+    );
+    vm.interruptRailMotion();
+
+    // The newest selection wins before the next animation frame. C and F are
+    // retargeted from the same live position, while the final fully visible D
+    // cancels those obsolete goals instead of making the rail oscillate.
     activeHarness.scrollLeft = 260;
     vm.updateMetrics();
     vm.selectedPodcastId = '';
@@ -772,23 +856,20 @@ async function main() {
     vm.select('C');
     vm.select('F');
     vm.select('D');
-    assert.strictEqual(
-      vm._railGoal,
-      180,
-      "rapid C to F to D selection must retain D's newest contextual target; actual goal=" +
-        vm._railGoal
+    assert.ok(
+      !Number.isFinite(vm._railGoal),
+      'the final fully visible D selection must cancel obsolete controller goals'
     );
     assert.strictEqual(
       raf.size,
-      1,
-      'rapid selection changes must retarget one existing controller rAF'
+      0,
+      'rapid selection changes must leave no animation after a fully visible final target'
     );
     assert.deepStrictEqual(
       emitted.map(item => item.goalAtEmit),
-      [90, 360, 180],
-      'each user selection must calculate its own target before emit'
+      [180, 270, null],
+      'each rapid selection must derive from the current visible position only'
     );
-    vm.interruptRailMotion();
 
     // Native wheel and thumb dragging each merge their latest input through
     // one rAF; controller ownership is not reused as a second scroll loop.
@@ -868,7 +949,7 @@ async function main() {
     vm.updateMetrics();
     assert.strictEqual(
       vm._metrics.maxScroll,
-      300,
+      180,
       'resize should refresh the rail range once'
     );
     assert.ok(
@@ -882,9 +963,13 @@ async function main() {
     vm.updateMetrics();
     vm.retargetRailMotion(900);
     assert.strictEqual(
-      vm._railGoal,
-      300,
-      'last-edge target must clamp to max scroll'
+      viewport.scrollLeft,
+      180,
+      'a resize-clamped last-edge target must commit the logical max scroll'
+    );
+    assert.ok(
+      !Number.isFinite(vm._railGoal),
+      'an already-clamped last-edge target must not leave an animation goal'
     );
     vm.interruptRailMotion();
 
