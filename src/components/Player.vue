@@ -479,9 +479,12 @@
         <!-- 顶部原生拖拽区：允许 Windows 双击最大化/还原 + 拖动移窗口（z-index 低于收起按钮） -->
         <div class="imm-drag-bar"></div>
 
-        <!-- 顶部：收起按钮（z-index 高于 drag-bar，点击不受 drag 影响） -->
-        <div class="imm-top">
-          <button-icon class="imm-collapse" @click.native="closeImmersive"
+        <!-- 顶部：右上稳定热区承载收起按钮；其余顶边继续交给原生拖拽区。 -->
+        <div class="imm-top" :class="{ 'is-playing': playing }">
+          <button-icon
+            class="imm-collapse"
+            aria-label="关闭沉浸页"
+            @click.native="closeImmersive"
             ><svg-icon icon-class="arrow-down"
           /></button-icon>
         </div>
@@ -515,7 +518,6 @@
             <div class="imm-meta" data-selection="ui">
               <div class="imm-text">
                 <div
-                  v-tip="currentTrack.name"
                   class="imm-ep"
                   data-selection="content"
                   @click="immClickTitle($event)"
@@ -524,7 +526,6 @@
                 </div>
                 <div
                   v-if="podcastName"
-                  v-tip="podcastName"
                   class="imm-pod"
                   data-selection="content"
                   @click="immClickPodcast($event)"
@@ -3269,27 +3270,51 @@ export default {
   }
 }
 
-// ---- 顶部收起(P1 再加 ESC/顶部 hover 提示) ----
+// ---- 顶部收起：播放时仅在右上热区显现；暂停、键盘与触控环境始终可见 ----
 .imm-top {
   position: absolute;
   top: 0;
-  left: 0;
   right: 0;
+  left: auto;
+  width: clamp(72px, 7vw, 112px);
   height: 56px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 0 clamp(12px, 2vw, 28px);
+  padding: 0 clamp(12px, 2vw, 28px) 0 0;
   z-index: 4;
-  // [修·收回按钮点不动] 收回按钮落在顶部 32px 的 .imm-drag-bar(app-region:drag)区上方，
-  //   OS 级拖拽区会吞掉 click(z-index 高也没用)。给按钮显式 no-drag 夺回点击；其余顶边仍可拖。
+  -webkit-app-region: no-drag;
+
+  // 按钮本身不负责唤醒 hover；透明但稳定的父热区始终可命中。
   .imm-collapse {
     -webkit-app-region: no-drag;
+    transition: opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   .imm-collapse .svg-icon {
     width: 22px;
     height: 22px;
     color: var(--imm-text-2nd);
+  }
+
+  &.is-playing:not(:hover):not(:focus-within) .imm-collapse {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-2px);
+  }
+
+  @media (hover: none) {
+    &.is-playing:not(:hover):not(:focus-within) .imm-collapse {
+      opacity: 1;
+      pointer-events: auto;
+      transform: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .imm-collapse {
+      transition: none;
+    }
   }
 }
 
