@@ -388,6 +388,160 @@ export function getRailSlotLayout({
   };
 }
 
+function clampRailWindowPosition(value, maxStart = 0) {
+  const max = finiteNonNegative(maxStart);
+  return Math.max(0, Math.min(max, Number(value) || 0));
+}
+
+/**
+ * The rail has one logical coordinate. It may be fractional while an input or
+ * animation is in flight, while every resting window begins at an integer
+ * slot. Keeping this separate from DOM geometry makes selection deterministic.
+ */
+export function getRailWindowStart({ renderPosition = 0, maxStart = 0 } = {}) {
+  return Math.round(clampRailWindowPosition(renderPosition, maxStart));
+}
+
+export function getRailWindowRevealTarget({
+  windowStart = 0,
+  maxStart = 0,
+  visibleCount = 0,
+  itemIndex = 0,
+  itemCount = 0,
+} = {}) {
+  const count = Math.max(0, Math.floor(Number(itemCount) || 0));
+  const visible = Math.max(1, Math.floor(Number(visibleCount) || 0));
+  const max = Math.max(0, Math.floor(Number(maxStart) || 0));
+  const start = getRailWindowStart({
+    renderPosition: windowStart,
+    maxStart: max,
+  });
+  if (!count) return start;
+  const index = Math.max(
+    0,
+    Math.min(count - 1, Math.floor(Number(itemIndex) || 0))
+  );
+  const end = Math.min(count - 1, start + visible - 1);
+  if (index < start) return clampRailWindowPosition(index, max);
+  if (index > end) return clampRailWindowPosition(index - visible + 1, max);
+  return start;
+}
+
+/**
+ * Selection is a deliberate discrete carousel action. Middle slots only
+ * filter; a visible edge advances one slot when another item exists beyond it.
+ */
+export function getRailWindowSelectionTarget(options = {}) {
+  const count = Math.max(0, Math.floor(Number(options.itemCount) || 0));
+  const visible = Math.max(1, Math.floor(Number(options.visibleCount) || 0));
+  const max = Math.max(0, Math.floor(Number(options.maxStart) || 0));
+  const start = getRailWindowStart({
+    renderPosition: options.windowStart,
+    maxStart: max,
+  });
+  if (!count) return start;
+  const index = Math.max(
+    0,
+    Math.min(count - 1, Math.floor(Number(options.itemIndex) || 0))
+  );
+  const end = Math.min(count - 1, start + visible - 1);
+  if (index === start && start > 0) return start - 1;
+  if (index === end && start < max) return start + 1;
+  return getRailWindowRevealTarget({
+    windowStart: start,
+    maxStart: max,
+    visibleCount: visible,
+    itemIndex: index,
+    itemCount: count,
+  });
+}
+
+export function getRailWindowPageTarget({
+  renderPosition = 0,
+  targetStart = null,
+  targetDirection = null,
+  maxStart = 0,
+  visibleCount = 0,
+  direction = 1,
+} = {}) {
+  const normalizedDirection = direction < 0 ? -1 : 1;
+  const max = Math.max(0, Math.floor(Number(maxStart) || 0));
+  const step = Math.max(1, Math.floor(Number(visibleCount) || 0) - 1);
+  const canAccumulate =
+    Number.isFinite(targetStart) && targetDirection === normalizedDirection;
+  const current = clampRailWindowPosition(renderPosition, max);
+  const base = canAccumulate
+    ? getRailWindowStart({ renderPosition: targetStart, maxStart: max })
+    : normalizedDirection > 0
+    ? Math.ceil(current - RAIL_EDGE_EPSILON)
+    : Math.floor(current + RAIL_EDGE_EPSILON);
+  return clampRailWindowPosition(base + normalizedDirection * step, max);
+}
+
+export function getRailWindowThumbOffset({
+  renderPosition = 0,
+  maxStart = 0,
+  thumbTravel = 0,
+} = {}) {
+  const max = finiteNonNegative(maxStart);
+  const travel = finiteNonNegative(thumbTravel);
+  if (!max || !travel) return 0;
+  return (clampRailWindowPosition(renderPosition, max) / max) * travel;
+}
+
+export function getRailThumbDragRenderPosition({
+  startRenderPosition = 0,
+  startPointerX = 0,
+  pointerX = 0,
+  trackWidth = 0,
+  thumbWidth = 0,
+  maxStart = 0,
+} = {}) {
+  const travel = Math.max(0, Number(trackWidth) - Number(thumbWidth));
+  const max = finiteNonNegative(maxStart);
+  if (!travel || !max) return 0;
+  const delta = Number(pointerX) - Number(startPointerX);
+  return clampRailWindowPosition(
+    Number(startRenderPosition) + (delta / travel) * max,
+    max
+  );
+}
+
+export function getRailRenderMotionDecision({
+  renderPosition = 0,
+  targetStart = 0,
+  maxStart = 0,
+  reducedMotion = false,
+} = {}) {
+  const current = clampRailWindowPosition(renderPosition, maxStart);
+  const target = getRailWindowStart({ renderPosition: targetStart, maxStart });
+  const distance = Math.abs(target - current);
+  const shouldAnimate = !reducedMotion && distance >= 0.005;
+  return {
+    current,
+    target,
+    shouldAnimate,
+    immediate: !shouldAnimate,
+    durationMs: Math.min(320, Math.max(120, 120 + distance * 80)),
+  };
+}
+
+export function getRailRenderMotionFrame({
+  startPosition = 0,
+  targetStart = 0,
+  elapsedMs = 0,
+  durationMs = 0,
+  maxStart = 0,
+} = {}) {
+  const start = clampRailWindowPosition(startPosition, maxStart);
+  const target = getRailWindowStart({ renderPosition: targetStart, maxStart });
+  const duration = Math.max(0, Number(durationMs) || 0);
+  if (!duration) return target;
+  const progress = Math.max(0, Math.min(1, Number(elapsedMs) / duration));
+  const eased = 1 - Math.pow(1 - progress, 3);
+  return clampRailWindowPosition(start + (target - start) * eased, maxStart);
+}
+
 /**
  * Converts the controller's physical scroll position to the rail's sole
  * logical coordinate system. The result intentionally remains fractional
@@ -461,53 +615,32 @@ export function getRailSlotArrowGoal({
 }
 
 /**
- * Reveals an item only when it is clipped. A fully visible item keeps the
- * current physical position exactly, so selection never doubles as paging.
+ * Compatibility adapter for callers that still carry physical measurements.
+ * Product selection itself is now purely the discrete window model above.
  */
 export function getRailSlotSelectionTarget({
   scrollLeft = 0,
   maxScroll = 0,
   slotStride = 0,
-  slotWidth = 0,
-  contentViewportWidth = 0,
   itemIndex = 0,
   itemCount = 0,
   visibleCount = 0,
-  epsilon = RAIL_EDGE_EPSILON,
 } = {}) {
   const max = finiteNonNegative(maxScroll);
   const stride = finiteNonNegative(slotStride);
-  const slot = finiteNonNegative(slotWidth);
   const count = Math.max(0, Math.floor(Number(itemCount) || 0));
   const visible = Math.max(1, Math.floor(Number(visibleCount) || 0));
   const current = clampRailPosition(scrollLeft, max);
-  if (!count || !stride || !slot) return current;
-
-  const targetIndex = Math.max(
-    0,
-    Math.min(count - 1, Math.floor(Number(itemIndex) || 0))
-  );
-  const viewportWidth = Math.max(
-    slot,
-    finiteNonNegative(contentViewportWidth) ||
-      visible * stride - Math.max(0, stride - slot)
-  );
-  const tolerance = finiteNonNegative(epsilon);
-  const itemLeft = targetIndex * stride;
-  const itemRight = itemLeft + slot;
-  const viewportRight = current + viewportWidth;
-
-  if (
-    itemLeft >= current - tolerance &&
-    itemRight <= viewportRight + tolerance
-  ) {
-    return current;
-  }
-
-  const nearestEdge = itemLeft < current ? itemLeft : itemRight - viewportWidth;
-  const wholeSlot = Math.round(nearestEdge / stride) * stride;
-
-  return clampRailPosition(wholeSlot, max);
+  if (!count || !stride) return current;
+  const maxStart = Math.round(max / stride);
+  const targetStart = getRailWindowSelectionTarget({
+    windowStart: Math.round(current / stride),
+    maxStart,
+    visibleCount: visible,
+    itemIndex,
+    itemCount: count,
+  });
+  return clampRailPosition(targetStart * stride, max);
 }
 
 export function getRailThumbGeometry({

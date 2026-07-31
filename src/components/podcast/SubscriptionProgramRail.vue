@@ -97,17 +97,18 @@ import SvgIcon from '@/components/SvgIcon.vue';
 import { ensureTinyCover, peekTinyCover } from '@/utils/podcast/coverHalo';
 import {
   getRailMetrics,
-  getRailMotionDecision,
-  getRailMotionStep,
   getRailPositionMetrics,
   RAIL_EDGE_EPSILON,
-  getRailSlotArrowGoal,
   getRailSlotLayout,
-  getRailSlotSelectionTarget,
-  getRailSlotTarget,
-  getRailSlotThumbProgress,
-  getRailThumbDragTarget,
   getRailThumbGeometry,
+  getRailRenderMotionDecision,
+  getRailRenderMotionFrame,
+  getRailThumbDragRenderPosition,
+  getRailWindowPageTarget,
+  getRailWindowRevealTarget,
+  getRailWindowSelectionTarget,
+  getRailWindowStart,
+  getRailWindowThumbOffset,
 } from '@/utils/podcast/subscriptionUpdatesRules';
 
 export default {
@@ -135,25 +136,12 @@ export default {
       });
     },
     selectedPodcastId(value) {
-      const requestToken = this._selectionRequestToken || 0;
       this.$nextTick(() => {
-        if (
-          this._destroyed ||
-          requestToken !== (this._selectionRequestToken || 0)
-        ) {
-          return;
-        }
+        if (this._destroyed) return;
         const pendingSelection = this._pendingUserSelection;
-        const selectionAlreadyPositioned =
-          pendingSelection &&
-          pendingSelection.token === requestToken &&
-          pendingSelection.id === value;
-        if (selectionAlreadyPositioned) {
+        if (pendingSelection && pendingSelection.id === value) {
           this._pendingUserSelection = null;
-        } else {
-          if (pendingSelection && pendingSelection.token === requestToken) {
-            this._pendingUserSelection = null;
-          }
+        } else if (!pendingSelection) {
           this.ensureSelectedVisible(value);
         }
         const podcast = this.podcasts.find(item => item.id === value);
@@ -210,8 +198,9 @@ export default {
       ) {
         this.clearHalo(this._hoverHaloTarget);
       }
-      this._railGoal = null;
+      this._railGoalStart = null;
       this._railGoalDirection = null;
+      this._railAnimation = null;
       this._controllerOwnsScroll = false;
       this._expectedProgrammaticScroll = null;
       this._hoverHaloTarget = null;
@@ -229,12 +218,19 @@ export default {
       this.setMotionClass('is-dragging', false);
     },
     select(podcastId) {
-      if (podcastId === this.selectedPodcastId) return;
-      const token = (this._selectionRequestToken || 0) + 1;
-      this._selectionRequestToken = token;
-      this._pendingUserSelection = { id: podcastId, token };
+      const item = this.getRailItem(podcastId);
+      if (!item) return;
+      this.captureRailLayout();
       this.interruptRailMotion();
-      this.ensureSelectedVisible(podcastId);
+      const targetStart = this.getRailSelectionTarget(item);
+      this.retargetRailMotion(targetStart, {
+        direction: Math.sign(targetStart - this.getRailWindowStart()),
+      });
+
+      // A repeated edge selection is still a carousel navigation action. It
+      // deliberately keeps the current filter while advancing the window.
+      if (podcastId === this.selectedPodcastId) return;
+      this._pendingUserSelection = { id: podcastId };
       this.$emit('select', podcastId);
     },
     handleRailPointerDown() {
@@ -428,6 +424,7 @@ export default {
         if (!this._railActive || this._destroyed) return;
         this.updateMetrics(true);
         this.settleRailToSlot({ immediate: true });
+        this.ensureSelectedVisible(this.selectedPodcastId);
       });
     },
     cancelRailLayoutFrame() {
@@ -452,7 +449,36 @@ export default {
         compact: track.clientWidth < 520,
       });
     },
-    syncThumb(metrics, scrollLeft = metrics.scrollLeft) {
+    getRailSlotStride() {
+      return Math.max(0, Number(this._railSlotLayout?.slotStride) || 0);
+    },
+    getRailMaxStart() {
+      return Math.max(0, Number(this._railSlotLayout?.maxStartSlot) || 0);
+    },
+    getRailRenderPositionFromScroll(scrollLeft) {
+      const stride = this.getRailSlotStride();
+      const maxStart = this.getRailMaxStart();
+      if (!stride || !maxStart) return 0;
+      return Math.max(
+        0,
+        Math.min(maxStart, (Number(scrollLeft) || 0) / stride)
+      );
+    },
+    getRailScrollLeft(renderPosition = this._railRenderPosition) {
+      const stride = this.getRailSlotStride();
+      const maxStart = this.getRailMaxStart();
+      if (!stride || !maxStart) return 0;
+      return (
+        Math.max(0, Math.min(maxStart, Number(renderPosition) || 0)) * stride
+      );
+    },
+    getRailWindowStart() {
+      return getRailWindowStart({
+        renderPosition: this._railRenderPosition,
+        maxStart: this.getRailMaxStart(),
+      });
+    },
+    syncThumb(metrics, renderPosition = this._railRenderPosition) {
       const thumb = this.$refs.thumb;
       if (!thumb) return;
       const geometry = this._thumbGeometry || { width: 0, travel: 0 };
@@ -461,21 +487,13 @@ export default {
         thumb.style.transform = 'translate3d(0, 0, 0)';
         return;
       }
-      const layout = this._railSlotLayout;
-      const ratio =
-        layout && layout.slotStride
-          ? getRailSlotThumbProgress({
-              scrollLeft,
-              maxScroll: layout.maxScroll,
-              slotStride: layout.slotStride,
-              maxStartSlot: layout.maxStartSlot,
-            })
-          : metrics.maxScroll
-          ? scrollLeft / metrics.maxScroll
-          : 0;
+      const thumbX = getRailWindowThumbOffset({
+        renderPosition,
+        maxStart: this.getRailMaxStart(),
+        thumbTravel: geometry.travel,
+      });
       thumb.style.width = geometry.width + 'px';
-      thumb.style.transform =
-        'translate3d(' + geometry.travel * ratio + 'px, 0, 0)';
+      thumb.style.transform = 'translate3d(' + thumbX + 'px, 0, 0)';
     },
     updateMetrics(recomputeSlots = true) {
       if (!this._railActive || this._destroyed) return;
@@ -486,9 +504,18 @@ export default {
     applyMeasuredMetrics(metrics) {
       if (!metrics) return;
       this._metrics = metrics;
-      this._railPosition = metrics.scrollLeft;
+      this._railRenderPosition = this.getRailRenderPositionFromScroll(
+        metrics.scrollLeft
+      );
+      if (
+        !this._controllerOwnsScroll &&
+        !this._nativeInputActive &&
+        !this._isRailDragging
+      ) {
+        this._railWindowStart = this.getRailWindowStart();
+      }
       this._thumbGeometry = this.getThumbGeometry(metrics);
-      this.syncThumb(metrics);
+      this.syncThumb(metrics, this._railRenderPosition);
       this.syncRailState(metrics);
     },
     captureRailLayout() {
@@ -508,14 +535,20 @@ export default {
         };
       }
     },
-    // Layout is refreshed at input and resize boundaries; frames consume only
-    // this controller position so the viewport and thumb cannot drift apart.
-    commitRailFrame(scrollLeft, { write = true } = {}) {
+    // Layout is refreshed at input and resize boundaries. Animation frames only
+    // project one logical renderPosition to scrollLeft and thumb in one commit.
+    commitRailFrame(renderPosition, { write = true, settled = false } = {}) {
       const viewport = this.$refs.viewport;
       if (!viewport || !this._metrics) return;
+      const logical = Math.max(
+        0,
+        Math.min(this.getRailMaxStart(), Number(renderPosition) || 0)
+      );
+      const scrollLeft = this.getRailScrollLeft(logical);
       const metrics = getRailPositionMetrics(this._metrics, scrollLeft);
       this._metrics = metrics;
-      this._railPosition = metrics.scrollLeft;
+      this._railRenderPosition = logical;
+      if (settled) this._railWindowStart = this.getRailWindowStart();
       if (
         write &&
         Math.abs(viewport.scrollLeft - metrics.scrollLeft) >= RAIL_EDGE_EPSILON
@@ -523,7 +556,7 @@ export default {
         this._expectedProgrammaticScroll = metrics.scrollLeft;
         viewport.scrollLeft = metrics.scrollLeft;
       }
-      this.syncThumb(metrics, metrics.scrollLeft);
+      this.syncThumb(metrics, logical);
       this.syncRailState(metrics);
     },
     onScroll() {
@@ -545,7 +578,10 @@ export default {
         this.captureRailLayout();
       }
       this.beginNativeRailMotion();
-      this.queueNativeRailPosition(actualPosition, { write: false });
+      this.queueNativeRailPosition(
+        this.getRailRenderPositionFromScroll(actualPosition),
+        { write: false }
+      );
     },
     beginNativeRailMotion() {
       this._nativeInputActive = true;
@@ -573,8 +609,8 @@ export default {
         this.refreshRetainedHalos();
       }
     },
-    queueNativeRailPosition(position, { write = false } = {}) {
-      this._pendingNativeRailPosition = position;
+    queueNativeRailPosition(renderPosition, { write = false } = {}) {
+      this._pendingNativeRailPosition = renderPosition;
       this._pendingNativeRailWrite = !!write;
       if (!this._nativeScrollRaf) {
         this._nativeScrollRaf = requestAnimationFrame(() => {
@@ -598,7 +634,7 @@ export default {
     },
     interruptRailMotion() {
       if (this._drag) this.finishDrag();
-      this._railGoal = null;
+      this._railGoalStart = null;
       this._railGoalDirection = null;
       this._controllerOwnsScroll = false;
       this._expectedProgrammaticScroll = null;
@@ -619,12 +655,14 @@ export default {
           ? this._metrics
           : this.captureRailLayout();
       if (!delta || !metrics.canScroll) return;
+      const stride = this.getRailSlotStride();
+      if (!stride) return;
       const currentPosition = Number.isFinite(this._pendingNativeRailPosition)
         ? this._pendingNativeRailPosition
-        : this._railPosition;
+        : this._railRenderPosition;
       const next = Math.max(
         0,
-        Math.min(metrics.maxScroll, currentPosition + delta)
+        Math.min(this.getRailMaxStart(), currentPosition + delta / stride)
       );
       if (next === currentPosition) return;
       event.preventDefault();
@@ -641,16 +679,12 @@ export default {
           : this.captureRailLayout();
       if (!metrics.canScroll) return;
       const normalizedDirection = direction < 0 ? -1 : 1;
-      const goal = getRailSlotArrowGoal({
-        scrollLeft: this._railPosition,
-        goal: this._railGoal,
-        goalDirection: this._railGoalDirection,
-        clientWidth: this._railViewportWidth,
-        maxScroll: metrics.maxScroll,
-        slotStride:
-          (this._railSlotLayout && this._railSlotLayout.slotStride) || 0,
-        visibleCount:
-          (this._railSlotLayout && this._railSlotLayout.visibleCount) || 0,
+      const goal = getRailWindowPageTarget({
+        renderPosition: this._railRenderPosition,
+        targetStart: this._railGoalStart,
+        targetDirection: this._railGoalDirection,
+        maxStart: this.getRailMaxStart(),
+        visibleCount: this._railSlotLayout?.visibleCount || 0,
         direction: normalizedDirection,
       });
       this.retargetRailMotion(goal, { direction: normalizedDirection });
@@ -663,61 +697,75 @@ export default {
       );
     },
     finishRailMotion() {
-      this._railGoal = null;
+      if (Number.isFinite(this._railGoalStart)) {
+        this._railWindowStart = getRailWindowStart({
+          renderPosition: this._railGoalStart,
+          maxStart: this.getRailMaxStart(),
+        });
+      } else {
+        this._railWindowStart = this.getRailWindowStart();
+      }
+      this._railGoalStart = null;
       this._railGoalDirection = null;
+      this._railAnimation = null;
       this._controllerOwnsScroll = false;
       this.setMotionClass('is-moving', false);
       this.refreshRetainedHalos();
     },
-    retargetRailMotion(goal, { direction = null } = {}) {
+    retargetRailMotion(targetStart, { direction = null } = {}) {
       const viewport = this.$refs.viewport;
       if (!viewport || !this._metrics) return;
       if (this._drag) this.finishDrag();
-      const decision = getRailMotionDecision({
-        scrollLeft: this._railPosition,
-        goal,
-        maxScroll: this._metrics.maxScroll,
+      const decision = getRailRenderMotionDecision({
+        renderPosition: this._railRenderPosition,
+        targetStart,
+        maxStart: this.getRailMaxStart(),
         reducedMotion: this.prefersReducedMotion(),
       });
       this.cancelNativeRailFrame();
       this.finishNativeRailMotion({ settle: false });
       this._railGoalDirection = direction;
+      this._railGoalStart = decision.target;
+      this._controllerOwnsScroll = true;
       if (decision.immediate) {
         this.stopAnimation();
-        this.commitRailFrame(decision.target);
+        this.commitRailFrame(decision.target, { settled: true });
         this.finishRailMotion();
         return;
       }
-      this._railGoal = decision.target;
-      this._controllerOwnsScroll = true;
+      this._railAnimation = {
+        startPosition: decision.current,
+        targetStart: decision.target,
+        startedAt: null,
+        durationMs: decision.durationMs,
+      };
       this.setMotionClass('is-moving', true);
       this.startAnimation();
     },
     startAnimation() {
       if (this._animationRaf) return;
-      this._lastAnimationAt = 0;
       const tick = now => {
         const viewport = this.$refs.viewport;
+        const animation = this._railAnimation;
         if (
           !this._railActive ||
           !viewport ||
-          !Number.isFinite(this._railGoal)
+          !animation ||
+          !Number.isFinite(this._railGoalStart)
         ) {
           this._animationRaf = null;
           return;
         }
-        const deltaMs = this._lastAnimationAt
-          ? now - this._lastAnimationAt
-          : 16;
-        this._lastAnimationAt = now;
-        const next = getRailMotionStep({
-          scrollLeft: this._railPosition,
-          goal: this._railGoal,
-          maxScroll: this._metrics ? this._metrics.maxScroll : 0,
-          deltaMs,
+        if (animation.startedAt == null) animation.startedAt = now;
+        const next = getRailRenderMotionFrame({
+          startPosition: animation.startPosition,
+          targetStart: animation.targetStart,
+          elapsedMs: now - animation.startedAt,
+          durationMs: animation.durationMs,
+          maxStart: this.getRailMaxStart(),
         });
         this.commitRailFrame(next);
-        if (next === this._railGoal) {
+        if (Math.abs(next - animation.targetStart) < RAIL_EDGE_EPSILON / 10) {
           this._animationRaf = null;
           this.finishRailMotion();
           return;
@@ -729,7 +777,7 @@ export default {
     stopAnimation() {
       if (this._animationRaf) cancelAnimationFrame(this._animationRaf);
       this._animationRaf = null;
-      this._lastAnimationAt = 0;
+      this._railAnimation = null;
     },
     settleRailToSlot({ immediate = false } = {}) {
       const metrics = this._metrics;
@@ -744,17 +792,14 @@ export default {
       ) {
         return false;
       }
-      const target = getRailSlotTarget({
-        scrollLeft: this._railPosition,
-        maxScroll: metrics.maxScroll,
-        slotStride: layout.slotStride,
-      });
-      if (Math.abs(target - this._railPosition) < RAIL_EDGE_EPSILON) {
+      const target = this.getRailWindowStart();
+      if (Math.abs(target - this._railRenderPosition) < RAIL_EDGE_EPSILON) {
+        this._railWindowStart = target;
         return false;
       }
       if (immediate) {
         this.stopAnimation();
-        this.commitRailFrame(target);
+        this.commitRailFrame(target, { settled: true });
         this.finishRailMotion();
       } else {
         this.retargetRailMotion(target);
@@ -766,26 +811,36 @@ export default {
     },
     ensureRailItemVisible(item) {
       if (!item) return false;
-      const metrics = this.captureRailLayout();
+      this.captureRailLayout();
       const railItems = this.getRailItems();
       const index = railItems.indexOf(item);
       const layout = this._railSlotLayout;
-      if (!metrics || !layout || !layout.slotStride || index < 0) return false;
-      const goal = getRailSlotSelectionTarget({
-        scrollLeft: metrics.scrollLeft,
-        maxScroll: metrics.maxScroll,
-        slotStride: layout.slotStride,
-        slotWidth: layout.slotWidth,
-        contentViewportWidth: layout.contentViewportWidth,
+      if (!layout || !layout.slotStride || index < 0) return false;
+      const goal = getRailWindowRevealTarget({
+        windowStart: this.getRailWindowStart(),
+        maxStart: this.getRailMaxStart(),
+        visibleCount: layout.visibleCount,
         itemIndex: index,
         itemCount: railItems.length,
-        visibleCount: layout.visibleCount,
       });
-      if (Math.abs(goal - metrics.scrollLeft) < RAIL_EDGE_EPSILON) {
+      if (Math.abs(goal - this._railRenderPosition) < RAIL_EDGE_EPSILON) {
         return false;
       }
       this.retargetRailMotion(goal);
       return true;
+    },
+    getRailSelectionTarget(item) {
+      const railItems = this.getRailItems();
+      const index = railItems.indexOf(item);
+      const layout = this._railSlotLayout;
+      if (!layout || index < 0) return this.getRailWindowStart();
+      return getRailWindowSelectionTarget({
+        windowStart: this.getRailWindowStart(),
+        maxStart: this.getRailMaxStart(),
+        visibleCount: layout.visibleCount,
+        itemIndex: index,
+        itemCount: railItems.length,
+      });
     },
     handleRailEdgeKey(event, last) {
       const activeElement =
@@ -844,11 +899,11 @@ export default {
       this._drag = {
         pointerId: event.pointerId,
         startPointerX: event.clientX,
-        startScrollLeft: metrics.scrollLeft,
+        startRenderPosition: this._railRenderPosition,
         trackWidth: track.clientWidth,
         thumbWidth: thumb.offsetWidth,
-        maxScroll: metrics.maxScroll,
-        nextScrollLeft: metrics.scrollLeft,
+        maxStart: this.getRailMaxStart(),
+        nextRenderPosition: this._railRenderPosition,
       };
       this._dragTarget = event.currentTarget;
       if (this._dragTarget.setPointerCapture) {
@@ -860,20 +915,20 @@ export default {
     },
     onDragMove(event) {
       if (!this._drag || event.pointerId !== this._drag.pointerId) return;
-      this._drag.nextScrollLeft = getRailThumbDragTarget({
-        startScrollLeft: this._drag.startScrollLeft,
+      this._drag.nextRenderPosition = getRailThumbDragRenderPosition({
+        startRenderPosition: this._drag.startRenderPosition,
         startPointerX: this._drag.startPointerX,
         pointerX: event.clientX,
         trackWidth: this._drag.trackWidth,
         thumbWidth: this._drag.thumbWidth,
-        maxScroll: this._drag.maxScroll,
+        maxStart: this._drag.maxStart,
       });
       if (this._dragRaf) return;
       this._dragRaf = requestAnimationFrame(() => {
         this._dragRaf = null;
         const viewport = this.$refs.viewport;
         if (!viewport || !this._drag) return;
-        this.commitRailFrame(this._drag.nextScrollLeft);
+        this.commitRailFrame(this._drag.nextRenderPosition);
       });
     },
     finishDrag(event) {
