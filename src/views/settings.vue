@@ -501,78 +501,95 @@
         <div
           v-if="showAiRefineAdvanced"
           id="ai-refine-advanced"
-          class="settings-advanced-panel"
+          class="settings-advanced-panel settings-ai-panel"
         >
-          <div class="settings-advanced-copy">
-            <div class="title">联网 AI 配置</div>
+          <div class="settings-ai-panel-intro">
+            <div class="title">服务配置</div>
             <div class="description">
-              服务地址是 API
-              基础地址，不是官网或控制台。仅在手动测试、生成总结或精修时联网。
+              选择服务后保存 API
+              密钥，再手动测试连接。密钥只加密保存在本机；只有你主动生成总结或精修时才会发送文字稿。
             </div>
           </div>
           <div class="settings-advanced-controls settings-ai-controls">
-            <label class="settings-field">
-              <span>服务商</span>
-              <select
-                v-model="aiServiceDraft.provider"
-                @change="onAiProviderChange"
-              >
-                <option
-                  v-for="provider in aiServiceProviders"
-                  :key="provider.id"
-                  :value="provider.id"
+            <div class="settings-ai-fields">
+              <label class="settings-field">
+                <span>服务商</span>
+                <select
+                  v-model="aiServiceDraft.provider"
+                  @change="onAiProviderChange"
                 >
-                  {{ provider.label }}
-                </option>
-              </select>
-            </label>
-            <label class="settings-field">
-              <span>API 密钥</span>
-              <input
-                v-model="aiServiceKeyDraft"
-                type="password"
-                class="text-input margin-right-0"
-                autocomplete="off"
-                :placeholder="
-                  aiServicePublic.maskedKey ||
-                  (aiServiceDraft.authStrategy === 'none'
-                    ? '本地服务通常不需要密钥'
-                    : '仅加密保存在本机')
-                "
-              />
-            </label>
-            <div class="settings-ai-recommendation">
-              推荐模型：{{ aiServiceDraft.model || '请在高级设置填写模型标识' }}
+                  <option
+                    v-for="provider in aiServiceProviders"
+                    :key="provider.id"
+                    :value="provider.id"
+                  >
+                    {{ provider.label }}
+                  </option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>API 密钥</span>
+                <input
+                  v-model="aiServiceKeyDraft"
+                  type="password"
+                  class="text-input margin-right-0"
+                  autocomplete="off"
+                  :placeholder="
+                    aiServicePublic.maskedKey ||
+                    (aiServiceDraft.authStrategy === 'none'
+                      ? '本地服务通常不需要密钥'
+                      : '仅加密保存在本机')
+                  "
+                />
+              </label>
             </div>
-            <div class="settings-ai-actions">
-              <button
-                type="button"
-                :disabled="aiServiceBusy"
-                @click="saveAiService"
-              >
-                保存配置
-              </button>
-              <button
-                class="settings-primary-action"
-                type="button"
-                :disabled="aiServiceBusy && !aiServiceTestRequestId"
-                @click="
-                  aiServiceTestRequestId
-                    ? cancelAiServiceTest()
-                    : testAiService()
-                "
-              >
-                {{ aiServiceTestRequestId ? '取消测试' : '测试连接' }}
-              </button>
-              <button
-                v-if="aiServiceCanRemoveKey"
-                class="settings-text-action"
-                type="button"
-                :disabled="aiServiceBusy"
-                @click="removeAiServiceKey"
-              >
-                移除密钥
-              </button>
+            <div class="settings-ai-model-row">
+              <span>推荐模型</span>
+              <strong>{{
+                aiServiceDraft.model || '请在高级设置填写模型标识'
+              }}</strong>
+            </div>
+            <div class="settings-ai-action-row">
+              <div class="settings-ai-actions">
+                <button
+                  type="button"
+                  :disabled="aiServiceBusy"
+                  @click="saveAiService"
+                >
+                  保存配置
+                </button>
+                <button
+                  class="settings-primary-action"
+                  type="button"
+                  :disabled="aiServiceBusy && !aiServiceTestRequestId"
+                  @click="
+                    aiServiceTestRequestId
+                      ? cancelAiServiceTest()
+                      : testAiService()
+                  "
+                >
+                  {{ aiServiceTestRequestId ? '取消测试' : '测试连接' }}
+                </button>
+                <button
+                  v-if="aiServiceCanRemoveKey"
+                  class="settings-text-action"
+                  type="button"
+                  :disabled="aiServiceBusy"
+                  @click="removeAiServiceKey"
+                >
+                  移除密钥
+                </button>
+              </div>
+              <div class="settings-ai-advanced-toggle">
+                <button
+                  type="button"
+                  :aria-expanded="showAiServiceDetails"
+                  aria-controls="ai-service-details"
+                  @click="showAiServiceDetails = !showAiServiceDetails"
+                >
+                  {{ showAiServiceDetails ? '收起高级设置' : '高级设置' }}
+                </button>
+              </div>
             </div>
             <div
               v-if="aiServiceMessage"
@@ -580,16 +597,6 @@
               role="status"
             >
               {{ aiServiceMessage }}
-            </div>
-            <div class="settings-ai-advanced-toggle">
-              <button
-                type="button"
-                :aria-expanded="showAiServiceDetails"
-                aria-controls="ai-service-details"
-                @click="showAiServiceDetails = !showAiServiceDetails"
-              >
-                {{ showAiServiceDetails ? '收起高级设置' : '高级设置' }}
-              </button>
             </div>
             <div
               v-if="showAiServiceDetails"
@@ -2626,24 +2633,83 @@ h3 {
   min-width: 0;
 }
 
-.settings-secret-controls,
-.settings-ai-controls {
+.settings-secret-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-.settings-ai-recommendation,
-.settings-ai-message {
-  grid-column: span 2;
+.settings-ai-panel {
+  display: block;
+  padding: 16px;
+}
+
+.settings-ai-panel-intro {
+  min-width: 0;
+
+  .title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .description {
+    margin-top: 4px;
+    color: var(--color-secondary);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+}
+
+.settings-ai-controls {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.settings-ai-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(260px, 1.3fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-ai-model-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
   color: var(--color-secondary);
   font-size: 12px;
-  line-height: 1.5;
+
+  strong {
+    min-width: 0;
+    color: var(--color-text);
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.settings-ai-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-secondary-bg);
 }
 
 .settings-ai-message {
-  color: var(--color-text);
+  min-width: 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-button);
+  background: var(--color-secondary-bg-for-transparent);
+  color: var(--color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .settings-ai-actions,
@@ -2659,11 +2725,11 @@ h3 {
 }
 
 .settings-ai-actions {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .settings-ai-advanced-toggle {
-  justify-content: flex-start;
+  justify-content: flex-end;
 }
 
 .settings-text-action {
@@ -2672,10 +2738,11 @@ h3 {
 
 .settings-ai-details {
   display: grid;
-  grid-column: span 2;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-secondary-bg);
 }
 
 .settings-field {
@@ -2740,6 +2807,18 @@ h3 {
 
   .settings-ai-details {
     grid-template-columns: 1fr;
+  }
+
+  .settings-ai-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-ai-action-row {
+    align-items: flex-start;
+  }
+
+  .settings-ai-advanced-toggle {
+    justify-content: flex-start;
   }
 }
 

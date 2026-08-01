@@ -28,15 +28,22 @@ class MemoryStore {
   }
 }
 
-function createSafeStorage(available) {
+function createSafeStorage(available, options) {
+  const opts = options || {};
   return {
     isEncryptionAvailable() {
       return available !== false;
     },
     encryptString(value) {
+      if (available === false && opts.encryptFails !== false) {
+        throw new Error('safe storage unavailable');
+      }
       return Buffer.from('safe:' + String(value), 'utf8');
     },
     decryptString(value) {
+      if (available === false && opts.encryptFails !== false) {
+        throw new Error('safe storage unavailable');
+      }
       return String(Buffer.from(value).toString('utf8')).replace(/^safe:/, '');
     },
   };
@@ -151,6 +158,25 @@ function providerConfig(provider, overrides) {
   );
 }
 
+async function expectTestFailure(managerModule, status, body, code) {
+  const isolated = managerModule.createAiServiceManager({
+    configStore: new MemoryStore(),
+    safeStorage: createSafeStorage(true),
+    transports: {
+      https: createTransport([errorPlan(status, body)], []),
+      http: createTransport([], []),
+    },
+  });
+  const result = await isolated.testConnection({
+    config: providerConfig('openai'),
+    key: 'smoke-key',
+    requestId: 'failure-' + status,
+  });
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.code, code);
+  assert.strictEqual(result.service.status, 'failed');
+}
+
 async function main() {
   try {
     const { manager: managerModule, config } = await buildModules();
@@ -164,7 +190,11 @@ async function main() {
       [
         ['deepseek', 'https://api.deepseek.com', 'bearer'],
         ['openai', 'https://api.openai.com/v1', 'bearer'],
-        ['gemini', 'https://generativelanguage.googleapis.com/v1beta/openai', 'bearer'],
+        [
+          'gemini',
+          'https://generativelanguage.googleapis.com/v1beta/openai',
+          'bearer',
+        ],
         ['openrouter', 'https://openrouter.ai/api/v1', 'bearer'],
         ['local', 'http://127.0.0.1:11434/v1', 'none'],
         ['custom', '', 'bearer'],
@@ -209,7 +239,11 @@ async function main() {
       now: () => 1700000000000,
     });
 
-    assert.strictEqual(httpsCaptures.length, 0, 'status must never auto-connect');
+    assert.strictEqual(
+      httpsCaptures.length,
+      0,
+      'status must never auto-connect'
+    );
     const legacy = service.migrateLegacy({
       legacy: true,
       legacyKey: 'legacy-secret-for-smoke',
@@ -221,9 +255,15 @@ async function main() {
     assert.strictEqual(legacy.migrated, true);
     assert.strictEqual(legacy.service.status, 'pending');
     assert.strictEqual(legacy.service.hasKey, true);
-    assert.ok(!JSON.stringify(legacy.service).includes('legacy-secret-for-smoke'));
+    assert.ok(
+      !JSON.stringify(legacy.service).includes('legacy-secret-for-smoke')
+    );
     assert.ok(!Object.prototype.hasOwnProperty.call(legacy.service, 'key'));
-    assert.strictEqual(httpsCaptures.length, 0, 'migration must not auto-connect');
+    assert.strictEqual(
+      httpsCaptures.length,
+      0,
+      'migration must not auto-connect'
+    );
 
     const verified = await service.testConnection({
       config: providerConfig('deepseek', {
@@ -276,7 +316,11 @@ async function main() {
     });
     assert.strictEqual(remoteHttp.ok, false);
     assert.strictEqual(remoteHttp.code, 'insecure-endpoint');
-    assert.strictEqual(httpCaptures.length, 0, 'remote HTTP must fail before transport');
+    assert.strictEqual(
+      httpCaptures.length,
+      0,
+      'remote HTTP must fail before transport'
+    );
 
     const local = await service.testConnection({
       config: providerConfig('local', {
@@ -290,28 +334,15 @@ async function main() {
     assert.strictEqual(httpCaptures.length, 1);
     assert.ok(!httpCaptures[0].options.headers.Authorization);
 
-    async function expectTestFailure(status, body, code) {
-      const isolated = managerModule.createAiServiceManager({
-        configStore: new MemoryStore(),
-        safeStorage: createSafeStorage(true),
-        transports: {
-          https: createTransport([errorPlan(status, body)], []),
-          http: createTransport([], []),
-        },
-      });
-      const result = await isolated.testConnection({
-        config: providerConfig('openai'),
-        key: 'smoke-key',
-        requestId: 'failure-' + status,
-      });
-      assert.strictEqual(result.ok, false);
-      assert.strictEqual(result.code, code);
-      assert.strictEqual(result.service.status, 'failed');
-    }
-    await expectTestFailure(401, '{}', 'unauthorized');
-    await expectTestFailure(404, '{}', 'endpoint-not-found');
-    await expectTestFailure(429, '{}', 'rate-limited');
-    await expectTestFailure(400, 'response_format is not supported', 'json-mode-unsupported');
+    await expectTestFailure(managerModule, 401, '{}', 'unauthorized');
+    await expectTestFailure(managerModule, 404, '{}', 'endpoint-not-found');
+    await expectTestFailure(managerModule, 429, '{}', 'rate-limited');
+    await expectTestFailure(
+      managerModule,
+      400,
+      'response_format is not supported',
+      'json-mode-unsupported'
+    );
 
     const badJson = managerModule.createAiServiceManager({
       configStore: new MemoryStore(),
@@ -355,9 +386,11 @@ async function main() {
       safeStorage: createSafeStorage(true),
       transports: {
         https: createTransport(
-          [({ request }) => {
-            hangingRequest = request;
-          }],
+          [
+            ({ request }) => {
+              hangingRequest = request;
+            },
+          ],
           []
         ),
         http: createTransport([], []),
@@ -378,7 +411,10 @@ async function main() {
     const unavailable = managerModule.createAiServiceManager({
       configStore: unavailableStore,
       safeStorage: createSafeStorage(false),
-      transports: { https: createTransport([], []), http: createTransport([], []) },
+      transports: {
+        https: createTransport([], []),
+        http: createTransport([], []),
+      },
     });
     const unavailableMigration = unavailable.migrateLegacy({
       legacy: true,
@@ -389,10 +425,64 @@ async function main() {
     assert.strictEqual(unavailableMigration.preserveLegacy, true);
     assert.strictEqual(unavailableStore.get('credential'), undefined);
 
+    const legacyWindowsStore = new MemoryStore();
+    const legacyWindowsSafeStorage = createSafeStorage(false, {
+      encryptFails: false,
+    });
+    const legacyWindows = managerModule.createAiServiceManager({
+      configStore: legacyWindowsStore,
+      safeStorage: legacyWindowsSafeStorage,
+      platform: 'win32',
+      transports: {
+        https: createTransport([], []),
+        http: createTransport([], []),
+      },
+    });
+    const legacyWindowsResult = legacyWindows.saveConfig({
+      config: providerConfig('deepseek'),
+      key: 'compatibility-probe-key',
+    });
+    assert.strictEqual(legacyWindowsResult.ok, true);
+    assert.strictEqual(legacyWindowsResult.service.hasKey, true);
+    assert.ok(legacyWindowsStore.get('credential').ciphertext);
+    const legacyWindowsReloaded = managerModule.createAiServiceManager({
+      configStore: legacyWindowsStore,
+      safeStorage: legacyWindowsSafeStorage,
+      platform: 'win32',
+      transports: {
+        https: createTransport([], []),
+        http: createTransport([], []),
+      },
+    });
+    const legacyWindowsStatus = legacyWindowsReloaded.getStatus();
+    assert.strictEqual(legacyWindowsStatus.ok, true);
+    assert.strictEqual(legacyWindowsStatus.service.hasKey, true);
+
+    const nonWindowsStore = new MemoryStore();
+    const nonWindows = managerModule.createAiServiceManager({
+      configStore: nonWindowsStore,
+      safeStorage: createSafeStorage(false, { encryptFails: false }),
+      platform: 'linux',
+      transports: {
+        https: createTransport([], []),
+        http: createTransport([], []),
+      },
+    });
+    const nonWindowsResult = nonWindows.saveConfig({
+      config: providerConfig('deepseek'),
+      key: 'must-fail-closed-off-windows',
+    });
+    assert.strictEqual(nonWindowsResult.ok, false);
+    assert.strictEqual(nonWindowsResult.code, 'safe-storage-unavailable');
+    assert.strictEqual(nonWindowsStore.get('credential'), undefined);
+
     const legacyWithoutKey = managerModule.createAiServiceManager({
       configStore: new MemoryStore(),
       safeStorage: createSafeStorage(true),
-      transports: { https: createTransport([], []), http: createTransport([], []) },
+      transports: {
+        https: createTransport([], []),
+        http: createTransport([], []),
+      },
     });
     const migratedPublicConfig = legacyWithoutKey.migrateLegacy({
       legacy: true,

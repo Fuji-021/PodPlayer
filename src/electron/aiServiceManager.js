@@ -60,13 +60,18 @@ function safeErrorResult(error) {
   };
 }
 
-function hasEncryption(safeStorageImpl) {
+function canRoundTripSafeStorage(safeStorageImpl) {
+  const probe = 'podplayer-ai-safe-storage-probe-v1';
   try {
-    return !!(
-      safeStorageImpl &&
-      typeof safeStorageImpl.isEncryptionAvailable === 'function' &&
-      safeStorageImpl.isEncryptionAvailable()
-    );
+    if (
+      !safeStorageImpl ||
+      typeof safeStorageImpl.encryptString !== 'function' ||
+      typeof safeStorageImpl.decryptString !== 'function'
+    ) {
+      return false;
+    }
+    const ciphertext = safeStorageImpl.encryptString(probe);
+    return safeStorageImpl.decryptString(ciphertext) === probe;
   } catch (e) {
     return false;
   }
@@ -153,7 +158,35 @@ export function createAiServiceManager(options) {
     opts.configStore || new Store({ name: 'podplayer-ai-service' });
   const transports = opts.transports || { http, https };
   const now = opts.now || (() => Date.now());
+  const platform = opts.platform || process.platform;
   const activeRequests = new Map();
+  let encryptionVerified = false;
+
+  function hasEncryption() {
+    if (encryptionVerified) return true;
+    try {
+      if (
+        secureStorage &&
+        typeof secureStorage.isEncryptionAvailable === 'function' &&
+        secureStorage.isEncryptionAvailable()
+      ) {
+        encryptionVerified = true;
+        return true;
+      }
+    } catch (e) {
+      // Older Electron runtimes can report an unavailable capability even when
+      // the Windows DPAPI methods themselves are usable.
+    }
+
+    // PodPlayer is still pinned to Electron 13. On Windows, verify the actual
+    // DPAPI path with an in-memory round trip before rejecting a credential.
+    // Other platforms keep the stricter capability gate and fail closed.
+    if (platform === 'win32' && canRoundTripSafeStorage(secureStorage)) {
+      encryptionVerified = true;
+      return true;
+    }
+    return false;
+  }
 
   function readStoredConfig() {
     const raw = configStore.get(STORE_CONFIG_KEY);
@@ -170,7 +203,7 @@ export function createAiServiceManager(options) {
   function readKey() {
     const record = readCredentialRecord();
     if (!record || !record.ciphertext) return '';
-    if (!hasEncryption(secureStorage)) {
+    if (!hasEncryption()) {
       throw createError(
         'safe-storage-unavailable',
         '系统安全存储不可用，已保留原配置且未发起联网请求'
@@ -241,7 +274,7 @@ export function createAiServiceManager(options) {
   }
 
   function writeCredential(key) {
-    if (!hasEncryption(secureStorage)) {
+    if (!hasEncryption()) {
       throw createError(
         'safe-storage-unavailable',
         '系统安全存储不可用，已保留原配置且未保存 API 密钥'
