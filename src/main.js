@@ -80,7 +80,11 @@ import {
 registerDownloadListeners();
 // [转文字稿] 注册 ASR 事件监听（进度/分段/完成/失败/取消 → 实时态 + Dexie 索引）
 import { registerTranscriptListeners } from '@/utils/podcast/transcripts';
+import { initializeAiServiceSettings } from '@/utils/podcast/aiService';
 registerTranscriptListeners();
+// This only migrates legacy local settings into main-process safeStorage and
+// reads public status. It never contacts an AI provider during app startup.
+initializeAiServiceSettings(store).catch(() => {});
 // [C1] 启动时应用持久化的"同时下载集数"(否则重启回落底层默认 3)
 setDownloadConcurrency(store.state.settings.downloadConcurrency || 3);
 // [事故恢复·一次性] 实例改名后按"当前身份"修正下载绝对路径 + sha1 反查兜底（只跑一次）。

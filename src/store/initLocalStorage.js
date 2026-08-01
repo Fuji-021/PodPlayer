@@ -1,5 +1,6 @@
 import { playlistCategories } from '@/utils/staticData';
 import shortcuts from '@/utils/shortcuts';
+import { createAiProviderPresetConfig } from '@/utils/podcast/aiServiceConfig';
 
 console.debug('[debug][initLocalStorage.js]');
 const enabledPlaylistCategories = playlistCategories
@@ -47,6 +48,9 @@ let localStorage = {
     enableRealIP: false,
     realIP: null,
     shortcuts: shortcuts,
+    // Public AI settings only. The API key is encrypted in main-process
+    // safeStorage and never belongs in localStorage or this seed object.
+    aiService: createAiProviderPresetConfig('deepseek'),
   },
   data: {
     user: {},

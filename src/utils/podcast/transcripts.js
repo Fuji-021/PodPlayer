@@ -14,6 +14,7 @@ import {
   TRANSCRIPT_SUMMARY_PROMPT_VERSION,
 } from '@/utils/podcast/transcriptSummary';
 import { hasOpenAiKey } from '@/utils/podcast/openAiCompatible';
+import { getAiServiceConfig as getPublicAiServiceConfig } from '@/utils/podcast/aiService';
 
 const ipcRenderer = window.require
   ? window.require('electron').ipcRenderer
@@ -658,13 +659,8 @@ export function cancelAiRefine(episodeId, options) {
 }
 
 export function getAiServiceConfig() {
-  const s = (store.state && store.state.settings) || {};
-  return {
-    key: String(s.deepseekKey || '').trim(),
-    model: String(s.deepseekModel || '').trim() || 'deepseek-chat',
-    endpoint:
-      String(s.deepseekEndpoint || '').trim() || 'https://api.deepseek.com',
-  };
+  const settings = (store.state && store.state.settings) || {};
+  return getPublicAiServiceConfig(settings);
 }
 export function hasAiKey() {
   return hasOpenAiKey(getAiServiceConfig());
@@ -682,8 +678,8 @@ export async function startAiRefine(
 ) {
   const cfg = getAiServiceConfig();
   if (!hasOpenAiKey(cfg)) {
-    store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
-    return { ok: false, reason: 'no-key' };
+    store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
+    return { ok: false, reason: 'configuration-unverified' };
   }
   const existingJob =
     aiRefineJobs.get(episodeId) || aiRefineStarts.get(episodeId);
@@ -839,6 +835,16 @@ function aiServiceErrorMessage(error, action) {
     return 'AI 服务地址需使用 HTTPS；HTTP 仅限本机服务';
   }
   if (code === 'network') return 'AI 服务连接失败，请检查网络或服务配置';
+  if (code === 'configuration-unverified') {
+    return '请先在设置中测试联网 AI 服务连接';
+  }
+  if (code === 'unauthorized') return 'API 密钥无效或没有访问权限';
+  if (code === 'endpoint-not-found') return '服务地址或模型接口不存在';
+  if (code === 'rate-limited') return 'AI 服务请求过于频繁，请稍后重试';
+  if (code === 'json-mode-unsupported') {
+    return '当前模型不支持 JSON 输出，请更换模型或服务';
+  }
+  if (code === 'model-or-request') return '模型标识或请求参数不被服务接受';
   if (code === 'http') return 'AI 服务请求失败，请稍后重试';
   return action === 'refine'
     ? 'AI 精修失败，请稍后重试'
@@ -905,8 +911,8 @@ export async function startTranscriptSummary(
   const sourceHash = hashTranscriptSummarySource(paragraphs);
   const cfg = getAiServiceConfig();
   if (!hasOpenAiKey(cfg)) {
-    store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
-    return { ok: false, reason: 'no-key' };
+    store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
+    return { ok: false, reason: 'configuration-unverified' };
   }
   cancelOtherTranscriptSummaries(episodeId);
   const existingJob =
