@@ -104,6 +104,7 @@ async function loadTranscriptStateMachine() {
     aiRefine: path.join(mockDir, 'ai-refine.js'),
     summary: path.join(mockDir, 'summary.js'),
     openAi: path.join(mockDir, 'open-ai.js'),
+    aiService: path.join(mockDir, 'ai-service.js'),
   };
   fs.writeFileSync(
     files.vue,
@@ -181,7 +182,11 @@ export function generateTranscriptSummary(options) {
   );
   fs.writeFileSync(
     files.openAi,
-    "export function hasOpenAiKey(cfg) { return !!String((cfg && cfg.key) || '').trim(); }\n"
+    "export function hasOpenAiKey(cfg) { return !!(cfg && cfg.hasKey && cfg.status === 'available'); }\n"
+  );
+  fs.writeFileSync(
+    files.aiService,
+    "export function getAiServiceConfig(settings) { return (settings && settings.aiService) || {}; }\n"
   );
   const output = path.join(tempDir, 'transcripts-state-machine.cjs');
   await esbuild.build({
@@ -203,6 +208,7 @@ export function generateTranscriptSummary(options) {
             '@/utils/podcast/aiRefine': files.aiRefine,
             '@/utils/podcast/transcriptSummary': files.summary,
             '@/utils/podcast/openAiCompatible': files.openAi,
+            '@/utils/podcast/aiService': files.aiService,
           };
           Object.keys(exact).forEach(filter => {
             build.onResolve(
@@ -337,9 +343,15 @@ async function loadAiRefineHarness() {
 async function testTranscriptStateMachine(summary) {
   const harness = {
     settings: {
-      deepseekKey: '',
-      deepseekModel: 'mock-model',
-      deepseekEndpoint: 'https://mock.invalid',
+      aiService: {
+        provider: 'deepseek',
+        model: 'mock-model',
+        baseUrl: 'https://mock.invalid',
+        authStrategy: 'bearer',
+        hasKey: false,
+        status: 'unconfigured',
+        configFingerprint: '',
+      },
     },
     transcriptSummaries: new Map(),
     transcriptAi: new Map(),
@@ -364,14 +376,25 @@ async function testTranscriptStateMachine(summary) {
     'podcast',
     segments
   );
-  assert.deepStrictEqual(noKey, { ok: false, reason: 'no-key' });
+  assert.deepStrictEqual(noKey, {
+    ok: false,
+    reason: 'configuration-unverified',
+  });
   assert.strictEqual(
     harness.generateCalls,
     0,
     'no key must never start network work'
   );
 
-  harness.settings.deepseekKey = 'configured-for-smoke';
+  harness.settings.aiService = {
+    provider: 'deepseek',
+    model: 'mock-model',
+    baseUrl: 'https://mock.invalid',
+    authStrategy: 'bearer',
+    hasKey: true,
+    status: 'available',
+    configFingerprint: 'summary-smoke',
+  };
   let refineSignal = null;
   harness.refine = (...args) => {
     refineSignal = args[6] && args[6].signal;
@@ -1162,105 +1185,94 @@ async function main() {
     await testBackupCompatibility();
     await testAiRefineRequestLayer();
     const cfg = {
-      key: 'mock-key-only',
+      provider: 'deepseek',
       model: 'mock-model',
-      endpoint: 'https://api.deepseek.com',
+      baseUrl: 'https://api.deepseek.com',
+      authStrategy: 'bearer',
+      hasKey: true,
+      status: 'available',
+      configFingerprint: 'summary-smoke',
     };
-    assert.strictEqual(request.hasOpenAiKey({ key: '' }), false);
-    assert.strictEqual(request.hasOpenAiKey({ key: ' configured ' }), true);
+    assert.strictEqual(request.hasOpenAiKey({ hasKey: false }), false);
+    assert.strictEqual(
+      request.hasOpenAiKey({ ...cfg, status: 'pending' }),
+      false,
+      'a key alone must not enable a request before manual verification'
+    );
     let noKeyRequests = 0;
     await expectReject(
-      request.requestOpenAiJson({ ...cfg, key: '' }, [], {
-        https: createHttps(() => {
+      request.requestOpenAiJson({ ...cfg, hasKey: false }, [], {
+        invoke: () => {
           noKeyRequests += 1;
-        }),
+          return Promise.resolve({ ok: true });
+        },
       }),
       'no-key'
     );
     assert.strictEqual(noKeyRequests, 0, 'missing key must not open a request');
+    await expectReject(
+      request.requestOpenAiJson({ ...cfg, status: 'pending' }, [], {
+        invoke: () => Promise.resolve({ ok: true }),
+      }),
+      'configuration-unverified'
+    );
 
     assert.strictEqual(
       request.resolveOpenAiChatUrl('https://api.example.test/v1').pathname,
       '/v1/chat/completions'
     );
-    await expectReject(
-      request.requestOpenAiJson({ ...cfg, endpoint: 'not a url' }, [], {
-        https: createHttps(() => {}),
-      }),
-      'invalid-endpoint'
+    assert.throws(
+      () => request.resolveOpenAiChatUrl('not a url'),
+      error => error && error.code === 'invalid-endpoint'
     );
-    await expectReject(
-      request.requestOpenAiJson(
-        { ...cfg, endpoint: 'http://ai.example.test' },
-        [],
-        { https: createHttps(() => {}) }
-      ),
-      'insecure-endpoint'
+    assert.throws(
+      () => request.resolveOpenAiChatUrl('http://ai.example.test'),
+      error => error && error.code === 'insecure-endpoint'
     );
 
-    let localHttpOptions = null;
-    const localHttp = createHttps(({ options, onResponse }) => {
-      localHttpOptions = options;
-      loadResponse(
-        onResponse,
-        200,
-        JSON.stringify({
-          choices: [{ message: { content: '{"summary":"local only"}' } }],
-        })
-      );
-    });
-    const localHttpResult = await request.requestOpenAiJson(
-      { ...cfg, endpoint: 'http://127.0.0.1:11434/v1' },
-      [],
-      { http: localHttp }
-    );
-    assert.strictEqual(localHttpResult.data.summary, 'local only');
-    assert.strictEqual(localHttpOptions.protocol, 'http:');
-    assert.strictEqual(localHttpOptions.port, '11434');
-
-    const validHttps = createHttps(({ onResponse }) => {
-      loadResponse(
-        onResponse,
-        200,
-        JSON.stringify({
-          choices: [{ message: { content: '{"summary":"有效总结"}' } }],
-          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
-        })
-      );
-    });
+    let invokePayload = null;
     const valid = await request.requestOpenAiJson(cfg, [], {
-      https: validHttps,
+      invoke: async (channel, payload) => {
+        invokePayload = { channel, payload };
+        return {
+          ok: true,
+          data: { summary: '有效总结' },
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+          provider: 'api.deepseek.com',
+          model: 'mock-model',
+        };
+      },
     });
     assert.strictEqual(valid.data.summary, '有效总结');
     assert.strictEqual(valid.provider, 'api.deepseek.com');
-
-    const invalidHttps = createHttps(({ onResponse }) => {
-      loadResponse(
-        onResponse,
-        200,
-        JSON.stringify({ choices: [{ message: { content: '{bad-json' } }] })
-      );
-    });
-    await expectReject(
-      request.requestOpenAiJson(cfg, [], { https: invalidHttps }),
-      'invalid-json'
-    );
+    assert.strictEqual(invokePayload.channel, 'ai:service:requestJson');
+    assert.strictEqual(invokePayload.payload.configFingerprint, 'summary-smoke');
+    assert.ok(!Object.prototype.hasOwnProperty.call(invokePayload.payload, 'key'));
 
     await expectReject(
       request.requestOpenAiJson(cfg, [], {
-        https: createHttps(() => {}),
-        timeoutMs: 5,
+        invoke: () =>
+          Promise.resolve({
+            ok: false,
+            code: 'invalid-json',
+            error: 'mock invalid JSON',
+          }),
       }),
-      'timeout'
+      'invalid-json'
     );
 
     const controller = new AbortController();
+    let canceledRequestId = '';
     const canceled = request.requestOpenAiJson(cfg, [], {
-      https: createHttps(() => {}),
+      invoke: () => new Promise(() => {}),
+      cancel: requestId => {
+        canceledRequestId = requestId;
+      },
       signal: controller.signal,
     });
     controller.abort();
     await expectReject(canceled, 'canceled');
+    assert.ok(canceledRequestId, 'abort must cancel the main-process request id');
 
     const paragraphs = summary.buildSummaryParagraphs([
       segment('第一段。', 0),
@@ -1337,7 +1349,7 @@ async function main() {
       panelSource.includes("row.status === 'ready'"),
       'only a completed AI refinement may be treated as valid summary input'
     );
-    assert.ok(panelSource.includes('请先在设置中配置联网 AI 服务'));
+    assert.ok(panelSource.includes('请先在设置中配置并测试联网 AI 服务'));
     assert.ok(
       !panelSource.includes('填入 DeepSeek API Key'),
       'AI actions must use the provider-neutral service wording'
@@ -1485,9 +1497,7 @@ async function main() {
     );
     assert.ok(settingsSource.includes('联网 AI 服务'));
     assert.ok(
-      settingsSource.includes(
-        '只有在你主动生成总结或精修稿时，才会将本集文字稿发送至已配置的'
-      )
+      settingsSource.includes('才会发送本集文字稿；音频不会上传')
     );
     const refineSource = fs.readFileSync(
       path.join(root, 'src/utils/podcast/aiRefine.js'),

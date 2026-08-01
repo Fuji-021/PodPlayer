@@ -44,6 +44,7 @@
     "test:backup-recovery-files": "node scripts/backup_recovery_files_smoke.js",
     "test:security-rendering": "node scripts/untrusted_html_render_smoke.js",
     "test:search-playlist-metadata": "node scripts/search_playlist_metadata_smoke.js",
+    "test:ai-provider-settings": "node scripts/ai_provider_settings_smoke.js",
     "test:dexie-summary-upgrade": "node scripts/dexie_transcript_summary_upgrade_smoke.js",
     "prettier": "npx prettier --write ./src",
     "netease_api:run": "npx @neteaseapireborn/api"
