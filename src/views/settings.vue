@@ -1726,7 +1726,7 @@ export default {
         return '服务地址需使用 HTTPS；HTTP 仅限本机服务';
       }
       if (code === 'safe-storage-unavailable') {
-        return '系统安全存储不可用，未保存 API 密钥';
+        return '系统凭据保护不可用，未保存 API 密钥';
       }
       if (code === 'configuration-stale') {
         return '服务配置已变更，请重新测试连接';

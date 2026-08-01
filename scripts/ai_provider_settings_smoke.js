@@ -49,6 +49,26 @@ function createSafeStorage(available, options) {
   };
 }
 
+function createWindowsDpapiProtector(available) {
+  return {
+    id: 'windows-dpapi-v1',
+    isAvailable() {
+      return available !== false;
+    },
+    protect(value) {
+      if (available === false) throw new Error('windows dpapi unavailable');
+      return Buffer.from('dpapi:' + String(value), 'utf8').toString('base64');
+    },
+    unprotect(ciphertext) {
+      if (available === false) throw new Error('windows dpapi unavailable');
+      return String(Buffer.from(ciphertext, 'base64').toString('utf8')).replace(
+        /^dpapi:/,
+        ''
+      );
+    },
+  };
+}
+
 function loadResponse(onResponse, statusCode, body) {
   const response = new EventEmitter();
   response.statusCode = statusCode;
@@ -411,6 +431,8 @@ async function main() {
     const unavailable = managerModule.createAiServiceManager({
       configStore: unavailableStore,
       safeStorage: createSafeStorage(false),
+      platform: 'linux',
+      windowsDpapiProtector: createWindowsDpapiProtector(false),
       transports: {
         https: createTransport([], []),
         http: createTransport([], []),
@@ -424,6 +446,55 @@ async function main() {
     assert.strictEqual(unavailableMigration.ok, false);
     assert.strictEqual(unavailableMigration.preserveLegacy, true);
     assert.strictEqual(unavailableStore.get('credential'), undefined);
+
+    // Electron 13 exports no safeStorage API at runtime. Windows must use the
+    // DPAPI compatibility backend, keep ciphertext outside the renderer, and
+    // still be able to read it after a manager restart.
+    const electron13Store = new MemoryStore();
+    const electron13Dpapi = createWindowsDpapiProtector(true);
+    const electron13 = managerModule.createAiServiceManager({
+      configStore: electron13Store,
+      safeStorage: {},
+      platform: 'win32',
+      windowsDpapiProtector: electron13Dpapi,
+      transports: {
+        https: createTransport([], []),
+        http: createTransport([], []),
+      },
+    });
+    const electron13Result = electron13.saveConfig({
+      config: providerConfig('deepseek'),
+      key: 'electron13-dpapi-fallback-key',
+    });
+    assert.strictEqual(electron13Result.ok, true);
+    assert.strictEqual(
+      electron13Store.get('credential').backend,
+      'windows-dpapi-v1'
+    );
+    assert.ok(electron13Store.get('credential').ciphertext);
+    assert.ok(
+      !JSON.stringify(electron13Store.data).includes(
+        'electron13-dpapi-fallback-key'
+      )
+    );
+    const electron13Reloaded = managerModule.createAiServiceManager({
+      configStore: electron13Store,
+      safeStorage: {},
+      platform: 'win32',
+      windowsDpapiProtector: electron13Dpapi,
+      transports: {
+        https: createTransport([], []),
+        http: createTransport([], []),
+      },
+    });
+    assert.strictEqual(electron13Reloaded.getStatus().ok, true);
+    assert.strictEqual(electron13Reloaded.getStatus().service.hasKey, true);
+    electron13Reloaded.deleteCredential();
+    assert.strictEqual(
+      electron13Reloaded.getStatus().service.hasKey,
+      false,
+      'deleting a credential must also clear the main-process key cache'
+    );
 
     const legacyWindowsStore = new MemoryStore();
     const legacyWindowsSafeStorage = createSafeStorage(false, {
@@ -461,8 +532,9 @@ async function main() {
     const nonWindowsStore = new MemoryStore();
     const nonWindows = managerModule.createAiServiceManager({
       configStore: nonWindowsStore,
-      safeStorage: createSafeStorage(false, { encryptFails: false }),
+      safeStorage: createSafeStorage(false),
       platform: 'linux',
+      windowsDpapiProtector: createWindowsDpapiProtector(true),
       transports: {
         https: createTransport([], []),
         http: createTransport([], []),

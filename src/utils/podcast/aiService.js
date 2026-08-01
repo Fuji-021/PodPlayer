@@ -1,6 +1,7 @@
 // Renderer-side IPC facade for the main-process AI service manager. This file
 // deliberately carries only public configuration; API keys remain in a local
-// input draft until the main process encrypts them with Electron safeStorage.
+// input draft until the main process persists it through OS-backed credential
+// protection. The renderer never receives the stored credential.
 import {
   createAiProviderPresetConfig,
   legacyDeepSeekConfig,

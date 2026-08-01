@@ -6,6 +6,7 @@ import Store from 'electron-store';
 import { createHash } from 'crypto';
 import * as http from 'http';
 import * as https from 'https';
+import { createWindowsDpapiProtector } from './windowsDpapi';
 import {
   AI_SERVICE_SCHEMA_VERSION,
   createAiProviderPresetConfig,
@@ -60,21 +61,32 @@ function safeErrorResult(error) {
   };
 }
 
-function canRoundTripSafeStorage(safeStorageImpl) {
-  const probe = 'podplayer-ai-safe-storage-probe-v1';
-  try {
-    if (
-      !safeStorageImpl ||
-      typeof safeStorageImpl.encryptString !== 'function' ||
-      typeof safeStorageImpl.decryptString !== 'function'
-    ) {
-      return false;
-    }
-    const ciphertext = safeStorageImpl.encryptString(probe);
-    return safeStorageImpl.decryptString(ciphertext) === probe;
-  } catch (e) {
-    return false;
-  }
+function createElectronSafeStorageProtector(safeStorageImpl) {
+  return {
+    id: 'electron-safe-storage-v1',
+    isAvailable() {
+      const probe = 'podplayer-ai-safe-storage-probe-v1';
+      try {
+        if (
+          !safeStorageImpl ||
+          typeof safeStorageImpl.encryptString !== 'function' ||
+          typeof safeStorageImpl.decryptString !== 'function'
+        ) {
+          return false;
+        }
+        const ciphertext = safeStorageImpl.encryptString(probe);
+        return safeStorageImpl.decryptString(ciphertext) === probe;
+      } catch (e) {
+        return false;
+      }
+    },
+    protect(value) {
+      return safeStorageImpl.encryptString(value).toString('base64');
+    },
+    unprotect(ciphertext) {
+      return safeStorageImpl.decryptString(Buffer.from(ciphertext, 'base64'));
+    },
+  };
 }
 
 function keyDigest(value) {
@@ -160,32 +172,53 @@ export function createAiServiceManager(options) {
   const now = opts.now || (() => Date.now());
   const platform = opts.platform || process.platform;
   const activeRequests = new Map();
-  let encryptionVerified = false;
+  const electronCredentialProtector =
+    createElectronSafeStorageProtector(secureStorage);
+  const windowsDpapiProtector =
+    opts.windowsDpapiProtector ||
+    createWindowsDpapiProtector({
+      platform,
+      powerShellPath: opts.powerShellPath,
+      spawnSync: opts.spawnSync,
+    });
+  let electronCredentialBackendReady = false;
+  let windowsDpapiBackendReady = false;
+  let credentialCache = null;
 
-  function hasEncryption() {
-    if (encryptionVerified) return true;
-    try {
-      if (
-        secureStorage &&
-        typeof secureStorage.isEncryptionAvailable === 'function' &&
-        secureStorage.isEncryptionAvailable()
-      ) {
-        encryptionVerified = true;
-        return true;
-      }
-    } catch (e) {
-      // Older Electron runtimes can report an unavailable capability even when
-      // the Windows DPAPI methods themselves are usable.
-    }
+  function availableElectronCredentialBackend() {
+    if (electronCredentialBackendReady) return electronCredentialProtector;
+    if (!electronCredentialProtector.isAvailable()) return null;
+    electronCredentialBackendReady = true;
+    return electronCredentialProtector;
+  }
 
-    // PodPlayer is still pinned to Electron 13. On Windows, verify the actual
-    // DPAPI path with an in-memory round trip before rejecting a credential.
-    // Other platforms keep the stricter capability gate and fail closed.
-    if (platform === 'win32' && canRoundTripSafeStorage(secureStorage)) {
-      encryptionVerified = true;
-      return true;
+  function availableWindowsDpapiBackend() {
+    if (platform !== 'win32') return null;
+    if (windowsDpapiBackendReady) return windowsDpapiProtector;
+    if (
+      !windowsDpapiProtector ||
+      typeof windowsDpapiProtector.isAvailable !== 'function' ||
+      !windowsDpapiProtector.isAvailable()
+    ) {
+      return null;
     }
-    return false;
+    windowsDpapiBackendReady = true;
+    return windowsDpapiProtector;
+  }
+
+  function credentialBackendFor(record) {
+    const backend = record && record.backend;
+    if (backend === 'electron-safe-storage-v1') {
+      return availableElectronCredentialBackend();
+    }
+    if (backend === 'windows-dpapi-v1') {
+      return availableWindowsDpapiBackend();
+    }
+    // Legacy records did not record a backend. Prefer Electron's API when it
+    // exists, then use the Windows-only DPAPI compatibility backend.
+    return (
+      availableElectronCredentialBackend() || availableWindowsDpapiBackend()
+    );
   }
 
   function readStoredConfig() {
@@ -200,19 +233,36 @@ export function createAiServiceManager(options) {
     return record && typeof record === 'object' ? record : null;
   }
 
+  function credentialCacheId(record) {
+    return [
+      record && record.backend,
+      record && record.updatedAt,
+      record && record.ciphertext,
+    ].join(':');
+  }
+
+  function clearCredentialCache() {
+    credentialCache = null;
+  }
+
   function readKey() {
     const record = readCredentialRecord();
     if (!record || !record.ciphertext) return '';
-    if (!hasEncryption()) {
+    const cacheId = credentialCacheId(record);
+    if (credentialCache && credentialCache.id === cacheId) {
+      return credentialCache.key;
+    }
+    const backend = credentialBackendFor(record);
+    if (!backend) {
       throw createError(
         'safe-storage-unavailable',
-        '系统安全存储不可用，已保留原配置且未发起联网请求'
+        '系统凭据保护不可用，已保留原配置且未发起联网请求'
       );
     }
     try {
-      return cleanString(
-        secureStorage.decryptString(Buffer.from(record.ciphertext, 'base64'))
-      );
+      const key = cleanString(backend.unprotect(record.ciphertext));
+      credentialCache = { id: cacheId, key };
+      return key;
     } catch (e) {
       throw createError(
         'credential-unavailable',
@@ -274,26 +324,34 @@ export function createAiServiceManager(options) {
   }
 
   function writeCredential(key) {
-    if (!hasEncryption()) {
+    const backend = credentialBackendFor();
+    if (!backend) {
       throw createError(
         'safe-storage-unavailable',
-        '系统安全存储不可用，已保留原配置且未保存 API 密钥'
+        '系统凭据保护不可用，已保留原配置且未保存 API 密钥'
       );
     }
-    let ciphertext;
+    let ciphertext = '';
     try {
-      ciphertext = secureStorage.encryptString(key).toString('base64');
+      ciphertext = backend.protect(key);
+      if (!ciphertext) throw new Error('empty-ciphertext');
+      const record = {
+        schemaVersion: AI_SERVICE_SCHEMA_VERSION,
+        backend: backend.id,
+        ciphertext,
+        updatedAt: now(),
+      };
+      configStore.set(STORE_CREDENTIAL_KEY, record);
+      credentialCache = {
+        id: credentialCacheId(record),
+        key,
+      };
     } catch (e) {
       throw createError(
         'safe-storage-failed',
-        '无法写入系统安全存储，已保留原配置'
+        '无法写入系统凭据保护，已保留原配置'
       );
     }
-    configStore.set(STORE_CREDENTIAL_KEY, {
-      schemaVersion: AI_SERVICE_SCHEMA_VERSION,
-      ciphertext,
-      updatedAt: now(),
-    });
   }
 
   function saveConfig(payload) {
@@ -318,6 +376,7 @@ export function createAiServiceManager(options) {
         writeCredential(key);
       } else if (input.clearKey === true) {
         configStore.delete(STORE_CREDENTIAL_KEY);
+        clearCredentialCache();
       } else if (config.authStrategy !== 'none') {
         key = readKey();
       }
@@ -371,6 +430,7 @@ export function createAiServiceManager(options) {
   function deleteCredential() {
     const current = readStoredConfig();
     configStore.delete(STORE_CREDENTIAL_KEY);
+    clearCredentialCache();
     const stored = {
       ...current,
       status: current.authStrategy === 'none' ? 'pending' : 'unconfigured',
@@ -696,6 +756,7 @@ export function createAiServiceManager(options) {
 
   function shutdown() {
     Array.from(activeRequests.keys()).forEach(cancelRequest);
+    clearCredentialCache();
   }
 
   return {

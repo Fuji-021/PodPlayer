@@ -82,7 +82,7 @@ registerDownloadListeners();
 import { registerTranscriptListeners } from '@/utils/podcast/transcripts';
 import { initializeAiServiceSettings } from '@/utils/podcast/aiService';
 registerTranscriptListeners();
-// This only migrates legacy local settings into main-process safeStorage and
+// This only migrates legacy local settings into main-process credential storage and
 // reads public status. It never contacts an AI provider during app startup.
 initializeAiServiceSettings(store).catch(() => {});
 // [C1] 启动时应用持久化的"同时下载集数"(否则重启回落底层默认 3)
