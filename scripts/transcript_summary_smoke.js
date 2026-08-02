@@ -1,5 +1,4 @@
 const assert = require('assert');
-const EventEmitter = require('events');
 const esbuild = require('esbuild');
 const fs = require('fs');
 const os = require('os');
@@ -9,31 +8,6 @@ const root = path.resolve(__dirname, '..');
 const tempDir = fs.mkdtempSync(
   path.join(os.tmpdir(), 'podplayer-transcript-summary-')
 );
-
-function loadResponse(onResponse, statusCode, body) {
-  const response = new EventEmitter();
-  response.statusCode = statusCode;
-  response.setEncoding = () => {};
-  process.nextTick(() => {
-    onResponse(response);
-    response.emit('data', body);
-    response.emit('end');
-  });
-}
-
-function createHttps(plan) {
-  return {
-    request(options, onResponse) {
-      const request = new EventEmitter();
-      request.write = () => {};
-      request.end = () => plan({ options, onResponse, request });
-      request.destroy = () => {
-        request.destroyed = true;
-      };
-      return request;
-    },
-  };
-}
 
 function segment(text, start) {
   return {
@@ -186,7 +160,7 @@ export function generateTranscriptSummary(options) {
   );
   fs.writeFileSync(
     files.aiService,
-    "export function getAiServiceConfig(settings) { return (settings && settings.aiService) || {}; }\n"
+    'export function getAiServiceConfig(settings) { return (settings && settings.aiService) || {}; }\n'
   );
   const output = path.join(tempDir, 'transcripts-state-machine.cjs');
   await esbuild.build({
@@ -1246,8 +1220,13 @@ async function main() {
     assert.strictEqual(valid.data.summary, '有效总结');
     assert.strictEqual(valid.provider, 'api.deepseek.com');
     assert.strictEqual(invokePayload.channel, 'ai:service:requestJson');
-    assert.strictEqual(invokePayload.payload.configFingerprint, 'summary-smoke');
-    assert.ok(!Object.prototype.hasOwnProperty.call(invokePayload.payload, 'key'));
+    assert.strictEqual(
+      invokePayload.payload.configFingerprint,
+      'summary-smoke'
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(invokePayload.payload, 'key')
+    );
 
     await expectReject(
       request.requestOpenAiJson(cfg, [], {
@@ -1272,7 +1251,10 @@ async function main() {
     });
     controller.abort();
     await expectReject(canceled, 'canceled');
-    assert.ok(canceledRequestId, 'abort must cancel the main-process request id');
+    assert.ok(
+      canceledRequestId,
+      'abort must cancel the main-process request id'
+    );
 
     const paragraphs = summary.buildSummaryParagraphs([
       segment('第一段。', 0),
@@ -1496,9 +1478,7 @@ async function main() {
       'utf8'
     );
     assert.ok(settingsSource.includes('联网 AI 服务'));
-    assert.ok(
-      settingsSource.includes('才会发送本集文字稿；音频不会上传')
-    );
+    assert.ok(settingsSource.includes('才会发送本集文字稿；音频不会上传'));
     const refineSource = fs.readFileSync(
       path.join(root, 'src/utils/podcast/aiRefine.js'),
       'utf8'
