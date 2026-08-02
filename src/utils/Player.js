@@ -372,11 +372,20 @@ export default class {
       this._personalFMNextTrack.id === 0 ||
       this._personalFMTrack.id === this._personalFMNextTrack.id
     ) {
-      personalFM().then(result => {
-        this._personalFMTrack = result.data[0];
-        this._personalFMNextTrack = result.data[1];
-        return this._personalFMTrack;
-      });
+      personalFM()
+        .then(result => {
+          if (
+            !result ||
+            !Array.isArray(result.data) ||
+            result.data.length < 2
+          ) {
+            return undefined;
+          }
+          this._personalFMTrack = result.data[0];
+          this._personalFMNextTrack = result.data[1];
+          return this._personalFMTrack;
+        })
+        .catch(() => {});
     }
   }
   _setPlaying(isPlaying) {

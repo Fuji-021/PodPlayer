@@ -28,6 +28,7 @@
     "postuninstall": "electron-builder install-app-deps",
     "test:rss-parser": "node scripts/rss_parser_smoke.js",
     "test:listening-completion": "node scripts/listening_completion_smoke.js",
+    "test:player-bootstrap": "node scripts/player_bootstrap_smoke.js",
     "test:sleep-end-completion": "node scripts/sleep_end_completion_smoke.js",
     "test:discover-dedup": "node scripts/discover_dedup_smoke.js",
     "test:transcript-entry": "node scripts/transcript_entry_policy_smoke.js",
