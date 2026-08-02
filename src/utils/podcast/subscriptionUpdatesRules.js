@@ -614,35 +614,6 @@ export function getRailSlotArrowGoal({
   );
 }
 
-/**
- * Compatibility adapter for callers that still carry physical measurements.
- * Product selection itself is now purely the discrete window model above.
- */
-export function getRailSlotSelectionTarget({
-  scrollLeft = 0,
-  maxScroll = 0,
-  slotStride = 0,
-  itemIndex = 0,
-  itemCount = 0,
-  visibleCount = 0,
-} = {}) {
-  const max = finiteNonNegative(maxScroll);
-  const stride = finiteNonNegative(slotStride);
-  const count = Math.max(0, Math.floor(Number(itemCount) || 0));
-  const visible = Math.max(1, Math.floor(Number(visibleCount) || 0));
-  const current = clampRailPosition(scrollLeft, max);
-  if (!count || !stride) return current;
-  const maxStart = Math.round(max / stride);
-  const targetStart = getRailWindowSelectionTarget({
-    windowStart: Math.round(current / stride),
-    maxStart,
-    visibleCount: visible,
-    itemIndex,
-    itemCount: count,
-  });
-  return clampRailPosition(targetStart * stride, max);
-}
-
 export function getRailThumbGeometry({
   trackWidth = 0,
   visibleRatio = 1,

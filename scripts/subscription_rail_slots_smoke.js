@@ -30,6 +30,12 @@ async function main() {
   });
   const rules = require(outfile);
 
+  assert.strictEqual(
+    rules.getRailSlotSelectionTarget,
+    undefined,
+    'the superseded physical-measurement selection adapter must stay removed'
+  );
+
   const desktop = rules.getRailSlotLayout({
     availableWidth: 1200,
     itemCount: 14,
