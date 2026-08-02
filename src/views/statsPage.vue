@@ -68,23 +68,34 @@
               :style="barTextureFillStyle(item)"
             ></span>
           </span>
-          <!-- [点击区收窄] 只封面可点跳转，进度条空白区不可点 -->
-          <PodImage
-            class="thumb"
-            :src="item.coverUrl"
-            @error="onCoverError"
-            @load="onStatsCoverLoad(item, $event)"
-            @click.native="goPodcast(item)"
-          />
           <span
             v-if="barTexture(item)"
-            class="bar-texture-bridge-overlay"
+            class="bar-texture-bridge-external"
             :class="{
               'bar-texture-bridge-ready': barTexture(item).ready,
             }"
             :style="barTextureBridgeStyle(item)"
             aria-hidden="true"
           ></span>
+          <!-- [点击区收窄] 只封面可点跳转，进度条空白区不可点 -->
+          <span class="thumb-shell">
+            <PodImage
+              class="thumb"
+              :src="item.coverUrl"
+              @error="onCoverError"
+              @load="onStatsCoverLoad(item, $event)"
+              @click.native="goPodcast(item)"
+            />
+            <span
+              v-if="barTexture(item)"
+              class="bar-texture-ingress"
+              :class="{
+                'bar-texture-bridge-ready': barTexture(item).ready,
+              }"
+              :style="barTextureBridgeStyle(item)"
+              aria-hidden="true"
+            ></span>
+          </span>
         </div>
         <!-- [点击区收窄] 名字/时长区可点跳转 -->
         <!-- [文字渐隐·与进度条分开] opacity 只挂在文字(label)上 → 幽灵行只文字淡出，
@@ -245,6 +256,7 @@ export default {
         ? {
             backgroundImage: `url("${entry.value.bridgeUrl}")`,
             '--stats-texture-bridge-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeWidth}px`,
+            '--stats-texture-bridge-outer-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeOuterWidth}px`,
             '--stats-texture-bridge-cover-ingress': `${STATS_BAR_TEXTURE_CONFIG.bridgeCoverIngress}px`,
           }
         : {};
@@ -991,35 +1003,67 @@ export default {
     .bar-texture-ready {
       opacity: 1;
     }
-    // V4 bridge is a sibling above the real thumb, so its final transparent
-    // columns can actually fade into the cover instead of sitting underneath.
-    .bar-texture-bridge-overlay {
+    // The outer bridge is a separate, non-interactive paint layer. The
+    // ingress segment itself lives inside .thumb-shell so the cover radius
+    // clips its corners instead of leaving square overlay blocks visible.
+    .bar-texture-bridge-external {
       position: absolute;
-      z-index: 2;
+      z-index: 1;
       top: 0;
       bottom: 0;
-      right: calc(40px - var(--stats-texture-bridge-cover-ingress));
-      width: var(--stats-texture-bridge-width);
+      right: 40px;
+      width: var(--stats-texture-bridge-outer-width);
       pointer-events: none;
       opacity: 0;
       background-repeat: no-repeat;
-      background-size: 100% 100%;
+      background-size: var(--stats-texture-bridge-width) 100%;
+      background-position: left top;
       transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
     }
     .bar-texture-bridge-ready {
       opacity: 1;
     }
   }
-  .thumb {
+  .thumb-shell {
     position: relative;
-    z-index: 1;
+    z-index: 2;
     width: 40px;
     height: 40px;
+    flex-shrink: 0;
     border-radius: var(--radius-cover-sm);
-    object-fit: cover;
+    overflow: hidden;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     background: var(--color-secondary-bg);
-    cursor: pointer; // [点击区收窄] 封面可点跳转
+
+    .thumb {
+      position: relative;
+      z-index: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
+      object-fit: cover;
+      cursor: pointer; // [点击区收窄] 封面可点跳转
+    }
+
+    .bar-texture-ingress {
+      position: absolute;
+      z-index: 1;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: var(--stats-texture-bridge-cover-ingress);
+      pointer-events: none;
+      opacity: 0;
+      background-repeat: no-repeat;
+      background-size: var(--stats-texture-bridge-width) 100%;
+      background-position: right top;
+      transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .bar-texture-bridge-ready {
+      opacity: 1;
+    }
   }
   // [B-38] 名字紧跟 bar（=与各自进度条右端对齐），不再固定右列对齐
   .label {
@@ -1062,7 +1106,8 @@ export default {
   .stat-row .bar-texture {
     transition-duration: 0ms;
   }
-  .stat-row .bar-texture-bridge-overlay {
+  .stat-row .bar-texture-bridge-external,
+  .stat-row .bar-texture-ingress {
     transition-duration: 0ms;
   }
 }

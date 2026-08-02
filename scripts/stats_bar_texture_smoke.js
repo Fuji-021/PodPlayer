@@ -1,6 +1,7 @@
 const assert = require('assert');
 const esbuild = require('esbuild');
 const fs = require('fs');
+const Jimp = require('jimp');
 const os = require('os');
 const path = require('path');
 const { performance } = require('perf_hooks');
@@ -32,6 +33,14 @@ function rgbAt(pixels, x, y) {
 
 function luminance(rgb) {
   return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+}
+
+function channelSpread(rgb) {
+  return Math.max(...rgb) - Math.min(...rgb);
+}
+
+function isStrongRed(rgb) {
+  return rgb[0] >= 96 && rgb[0] - Math.max(rgb[1], rgb[2]) >= 48;
 }
 
 function assertHorizontalBands(pixels) {
@@ -252,6 +261,51 @@ async function main() {
       'a bright logo keeps influence instead of collapsing the texture to black'
     );
 
+    const nearBlackNoise = makeImageData(64, 64, (x, y) => {
+      if (x >= 18 && x < 46 && y >= 22 && y < 42) return [190, 190, 190];
+      return [4, 0, 0];
+    });
+    const nearBlackNoiseTexture = texture.buildStatsBarTexturePixels(
+      nearBlackNoise,
+      { seed: 'near-black-red-noise' }
+    );
+    const nearBlackDiagnostics =
+      texture.inspectStatsBarTextureImage(nearBlackNoise);
+    assert.strictEqual(
+      nearBlackDiagnostics.chromaticPixelCount,
+      0,
+      'near-black red-channel noise is classified as neutral by absolute OKLCH chroma'
+    );
+    Array.from({ length: nearBlackNoiseTexture.height }, (_, y) =>
+      rgbAt(nearBlackNoiseTexture, 0, y)
+    ).forEach(rgb => {
+      assert.ok(
+        !isStrongRed(rgb) && channelSpread(rgb) <= 3,
+        'lightness lifting near-black JPEG noise remains neutral instead of creating red bands'
+      );
+    });
+    const nearBlackLch = texture.linearRgbToOklch({
+      r: texture.srgbByteToLinear(4),
+      g: texture.srgbByteToLinear(0),
+      b: texture.srgbByteToLinear(0),
+    });
+    assert.ok(
+      nearBlackLch.C < texture.STATS_BAR_TEXTURE_CONFIG.neutralChromaThreshold,
+      'RGB(4, 0, 0) is neutral under the same perceptual threshold used by rows and clusters'
+    );
+    assert.ok(
+      channelSpread(
+        Object.values(
+          texture.tuneStatsBarTextureColor({
+            r: texture.srgbByteToLinear(4),
+            g: texture.srgbByteToLinear(0),
+            b: texture.srgbByteToLinear(0),
+          })
+        )
+      ) <= 2,
+      'the readable-lightness path cannot re-saturate neutral near-black noise'
+    );
+
     const darkWithOneRedPixel = makeImageData(64, 64, (x, y) => {
       if (x === 31 && y === 31) return [232, 36, 44];
       return [36, 36, 36];
@@ -311,8 +365,8 @@ async function main() {
 
     const accentBase = {
       isNeutral: false,
-      saturation: 0.9,
-      luminance: 0.45,
+      chroma: 0.18,
+      perceptualLightness: 0.45,
     };
     const accentLow = texture.statsBarTextureAccentMix(
       Object.assign({ coverage: 0.05 }, accentBase)
@@ -378,6 +432,24 @@ async function main() {
       assert.ok(
         Math.abs(rgb[0] - rgb[1]) <= 2 && Math.abs(rgb[1] - rgb[2]) <= 2,
         'a monochrome cover does not invent unrelated colours'
+      );
+    });
+
+    const grayscaleSteps = makeImageData(64, 64, (x, y) => {
+      if (y < 21) return [5, 5, 5];
+      if (y < 43) return [116, 116, 116];
+      return [238, 238, 238];
+    });
+    const grayscaleTexture = texture.buildStatsBarTexturePixels(
+      grayscaleSteps,
+      { seed: 'grayscale-steps' }
+    );
+    Array.from({ length: grayscaleTexture.height }, (_, y) =>
+      rgbAt(grayscaleTexture, 0, y)
+    ).forEach(rgb => {
+      assert.ok(
+        channelSpread(rgb) <= 2,
+        'black, white, and grey rows remain low-chroma after perceptual lightness correction'
       );
     });
 
@@ -476,7 +548,7 @@ async function main() {
     );
     assert.ok(
       texture.isStatsBarTextureValue(textureValue),
-      'V4 cache values require both fill and bridge PNG data URLs'
+      'V5 cache values require both fill and bridge PNG data URLs'
     );
     assert.ok(textureValue.fillUrl.indexOf('data:image/png') === 0);
     assert.ok(textureValue.bridgeUrl.indexOf('data:image/png') === 0);
@@ -484,22 +556,22 @@ async function main() {
     assert.strictEqual(
       texture.isStatsBarTextureValue('data:image/png;base64,legacy'),
       false,
-      'legacy one-URL cache entries cannot hit V4'
+      'legacy one-URL cache entries cannot hit V5'
     );
     assert.strictEqual(
       texture.isStatsBarTextureValue({
-        version: 3,
+        version: 4,
         fillUrl: textureValue.fillUrl,
         bridgeUrl: textureValue.bridgeUrl,
       }),
       false,
-      'V3 two-texture entries cannot bypass the V4 cache contract'
+      'V4 two-texture entries cannot bypass the V5 cache contract'
     );
     assert.ok(
       texture
         .statsBarTextureCacheKey('https://cover.example/a.png')
-        .includes(':v4:'),
-      'cache key is versioned with the V4 texture contract'
+        .includes(':v5:'),
+      'cache key is versioned with the V5 texture contract'
     );
 
     const idle = [];
@@ -691,27 +763,48 @@ async function main() {
     assert.ok(statsSource.includes('@load="onStatsCoverLoad(item, $event)"'));
     assert.ok(statsSource.includes('isStatsBarTextureValue('));
     assert.ok(statsSource.includes('bar-texture-fill'));
-    assert.ok(statsSource.includes('bar-texture-bridge-overlay'));
+    assert.ok(statsSource.includes('bar-texture-bridge-external'));
+    assert.ok(statsSource.includes('bar-texture-ingress'));
+    assert.ok(statsSource.includes('class="thumb-shell"'));
+    assert.ok(!statsSource.includes('bar-texture-bridge-overlay'));
     assert.ok(
-      statsSource.includes(
-        'right: calc(40px - var(--stats-texture-bridge-cover-ingress))'
-      ),
-      'bridge overlay spans from the bar into the fixed 40px cover'
+      statsSource.includes('right: 40px;'),
+      'the external bridge ends at the fixed 40px cover shell'
     );
     assert.ok(
-      statsSource.includes('.bar-texture-bridge-overlay') &&
-        statsSource.includes('z-index: 2') &&
+      statsSource.includes('.bar-texture-bridge-external') &&
+        statsSource.includes('.bar-texture-ingress') &&
         statsSource.includes('pointer-events: none'),
-      'bridge is a non-interactive sibling above the cover'
+      'external bridge and ingress are non-interactive paint layers'
     );
     assert.ok(
-      statsSource.indexOf('class="thumb"') <
-        statsSource.indexOf('class="bar-texture-bridge-overlay"'),
-      'the bridge is emitted after the real cover rather than nested below it'
+      statsSource.indexOf('class="thumb-shell"') <
+        statsSource.indexOf('class="bar-texture-ingress"'),
+      'the ingress is structurally nested inside the cover shell'
+    );
+    const shellStyle = statsSource.slice(
+      statsSource.indexOf('.thumb-shell {'),
+      statsSource.indexOf('.label {')
     );
     assert.ok(
-      (statsSource.match(/barTexture\(item\)\.ready/g) || []).length >= 2,
-      'fill and bridge share one ready flag so they fade in together'
+      shellStyle.includes('border-radius: var(--radius-cover-sm);') &&
+        shellStyle.includes('overflow: hidden;'),
+      'the cover shell clips the ingress with the real cover radius'
+    );
+    assert.ok(
+      shellStyle.includes('background-position: right top;') &&
+        statsSource.includes('background-position: left top;'),
+      'external bridge and ingress use opposite slices of the same bridge texture'
+    );
+    assert.strictEqual(
+      (statsSource.match(/:style="barTextureBridgeStyle\(item\)"/g) || [])
+        .length,
+      2,
+      'external bridge and shell ingress share one generated bridge URL'
+    );
+    assert.ok(
+      (statsSource.match(/barTexture\(item\)\.ready/g) || []).length >= 3,
+      'fill, external bridge, and shell ingress share one ready flag'
     );
     assert.ok(
       !statsSource.includes('draggable="false"') &&
@@ -721,12 +814,91 @@ async function main() {
     assert.ok(statsSource.includes('transition: opacity 130ms'));
     assert.ok(statsSource.includes('transition-duration: 0ms'));
 
+    let localDiagnostic = null;
+    const diagnosticCoverPath = process.env.PODPLAYER_STATS_DIAGNOSTIC_COVER;
+    if (diagnosticCoverPath) {
+      assert.ok(
+        fs.existsSync(diagnosticCoverPath),
+        'the requested local diagnostic cover must exist when its path is supplied'
+      );
+      const cover = await Jimp.read(diagnosticCoverPath);
+      const sourceWidth = cover.bitmap.width;
+      const sourceHeight = cover.bitmap.height;
+      let maxRedAdvantage = -Infinity;
+      let nearBlackRedNoiseCount = 0;
+      for (let offset = 0; offset < cover.bitmap.data.length; offset += 4) {
+        const r = cover.bitmap.data[offset];
+        const g = cover.bitmap.data[offset + 1];
+        const b = cover.bitmap.data[offset + 2];
+        maxRedAdvantage = Math.max(maxRedAdvantage, r - Math.max(g, b));
+        if (r <= 8 && g <= 8 && b <= 8 && r > g && r >= b) {
+          nearBlackRedNoiseCount += 1;
+        }
+      }
+      cover.resize(64, 64);
+      const imageData = {
+        width: cover.bitmap.width,
+        height: cover.bitmap.height,
+        data: cover.bitmap.data,
+      };
+      const sourceDiagnostics = texture.inspectStatsBarTextureImage(imageData);
+      const coverTexture = texture.buildStatsBarTexturePixels(imageData, {
+        seed: 'local-cover-diagnostic',
+      });
+      const nearBlackLch = texture.linearRgbToOklch({
+        r: texture.srgbByteToLinear(4),
+        g: texture.srgbByteToLinear(0),
+        b: texture.srgbByteToLinear(0),
+      });
+      const tunedNearBlack = texture.tuneStatsBarTextureColor({
+        r: texture.srgbByteToLinear(4),
+        g: texture.srgbByteToLinear(0),
+        b: texture.srgbByteToLinear(0),
+      });
+      const strongRedRows = Array.from(
+        { length: coverTexture.height },
+        (_, y) => rgbAt(coverTexture, 0, y)
+      ).filter(isStrongRed).length;
+      const sampleRows = [0, 16, 32, 48, 63].map(y => ({
+        y,
+        rgb: rgbAt(coverTexture, 0, y),
+      }));
+      assert.strictEqual(
+        strongRedRows,
+        0,
+        'the local diagnostic cover cannot produce strong red output rows from near-black noise'
+      );
+      localDiagnostic = {
+        source: {
+          width: sourceWidth,
+          height: sourceHeight,
+          maxRedAdvantage,
+          nearBlackRedNoiseCount,
+        },
+        sample64: sourceDiagnostics,
+        keyStages: {
+          nearBlackRgb: [4, 0, 0],
+          nearBlackOklch: {
+            L: Number(nearBlackLch.L.toFixed(5)),
+            C: Number(nearBlackLch.C.toFixed(5)),
+          },
+          tunedNearBlack: [
+            tunedNearBlack.r,
+            tunedNearBlack.g,
+            tunedNearBlack.b,
+          ],
+        },
+        v5: { strongRedRows, sampleRows },
+      };
+    }
+
     process.stdout.write(
       'stats bar texture smoke: PASS ' +
         JSON.stringify({
           profiles: profileMetrics,
           cold: coldMetrics,
           hot: hotMetrics,
+          localDiagnostic,
         }) +
         '\n'
     );

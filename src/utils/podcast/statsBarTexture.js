@@ -3,9 +3,9 @@ import { peekTinyCover } from '@/utils/podcast/coverHalo';
 
 // The texture is deliberately tiny. It is a visual fill for the stats bar, not
 // a second cover image, so keeping it in a bounded in-memory cache is enough.
-// V4 parameters live here so visual tuning cannot leak into the page runtime.
+// V5 parameters live here so visual tuning cannot leak into the page runtime.
 export const STATS_BAR_TEXTURE_CONFIG = Object.freeze({
-  version: 4,
+  version: 5,
   fillWidth: 4,
   fillHeight: 64,
   analysisMaxDimension: 64,
@@ -16,24 +16,28 @@ export const STATS_BAR_TEXTURE_CONFIG = Object.freeze({
   },
   trimDarkRatio: 0.1,
   trimLightRatio: 0.05,
-  minReadableLightness: 0.33,
-  maxReadableLightness: 0.8,
-  maxSaturation: 0.9,
+  // Absolute OKLCH chroma, rather than HSL saturation, decides whether a
+  // pixel carries visible colour. This prevents near-black JPEG channel noise
+  // such as RGB(4, 0, 0) from becoming a vivid band after the lightness lift.
+  neutralChromaThreshold: 0.035,
+  perceptualChromaReference: 0.18,
+  minReadableOklabLightness: 0.5,
+  maxReadableOklabLightness: 0.82,
+  maxPerceptualChroma: 0.24,
   rowBaseWeight: 0.45,
   rowMidtoneWeight: 0.45,
-  rowSaturationWeight: 0.55,
+  rowChromaWeight: 0.55,
   colorClusterHueBins: 18,
   colorClusterLightnessBins: 4,
-  colorClusterNeutralSaturation: 0.12,
+  colorClusterNeutralChroma: 0.035,
   rowAccentMinCoverage: 0.04,
   globalClusterMinCoverage: 0.012,
   accentCoverageFull: 0.28,
-  accentMinSaturation: 0.16,
-  accentSaturationScoreWeight: 0.78,
-  accentLuminanceScoreWeight: 0.22,
+  accentMinChroma: 0.055,
+  accentChromaReference: 0.22,
+  accentChromaScoreWeight: 0.78,
+  accentLightnessScoreWeight: 0.22,
   accentMixMax: 0.14,
-  accentMixSaturationWeight: 0.85,
-  accentMixLuminanceWeight: 0.15,
   lowVarianceThreshold: 0.003,
   paletteVarianceThreshold: 0.008,
   lowVarianceMix: 0.12,
@@ -110,47 +114,6 @@ export function linearToSrgbByte(value) {
   return Math.round(clamp(srgb, 0, 1) * 255);
 }
 
-function rgbToHsl(r, g, b) {
-  r /= 255;
-  g /= 255;
-  b /= 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  const delta = max - min;
-  if (!delta) return [0, 0, l];
-  const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
-  let h;
-  if (max === r) h = (g - b) / delta + (g < b ? 6 : 0);
-  else if (max === g) h = (b - r) / delta + 2;
-  else h = (r - g) / delta + 4;
-  return [h / 6, s, l];
-}
-
-function hueToRgb(p, q, t) {
-  let h = t;
-  if (h < 0) h += 1;
-  if (h > 1) h -= 1;
-  if (h < 1 / 6) return p + (q - p) * 6 * h;
-  if (h < 1 / 2) return q;
-  if (h < 2 / 3) return p + (q - p) * (2 / 3 - h) * 6;
-  return p;
-}
-
-function hslToRgb(h, s, l) {
-  if (!s) {
-    const gray = Math.round(l * 255);
-    return [gray, gray, gray];
-  }
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  return [
-    Math.round(hueToRgb(p, q, h + 1 / 3) * 255),
-    Math.round(hueToRgb(p, q, h) * 255),
-    Math.round(hueToRgb(p, q, h - 1 / 3) * 255),
-  ];
-}
-
 function linearLuminance(sample) {
   return sample.r * 0.2126 + sample.g * 0.7152 + sample.b * 0.0722;
 }
@@ -163,24 +126,166 @@ function linearToRgb(sample) {
   };
 }
 
-function toLinearSample(data, offset) {
-  const rgb = {
-    r: data[offset],
-    g: data[offset + 1],
-    b: data[offset + 2],
+export function linearRgbToOklab(sample) {
+  const l = Math.cbrt(
+    Math.max(
+      0,
+      sample.r * 0.4122214708 +
+        sample.g * 0.5363325363 +
+        sample.b * 0.0514459929
+    )
+  );
+  const m = Math.cbrt(
+    Math.max(
+      0,
+      sample.r * 0.2119034982 +
+        sample.g * 0.6806995451 +
+        sample.b * 0.1073969566
+    )
+  );
+  const s = Math.cbrt(
+    Math.max(
+      0,
+      sample.r * 0.0883024619 +
+        sample.g * 0.2817188376 +
+        sample.b * 0.6299787005
+    )
+  );
+  return {
+    L: l * 0.2104542553 + m * 0.793617785 - s * 0.0040720468,
+    a: l * 1.9779984951 - m * 2.428592205 + s * 0.4505937099,
+    b: l * 0.0259040371 + m * 0.7827717662 - s * 0.808675766,
   };
-  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+}
+
+export function oklabToLinearRgb(lab) {
+  const l = Math.pow(lab.L + lab.a * 0.3963377774 + lab.b * 0.2158037573, 3);
+  const m = Math.pow(lab.L - lab.a * 0.1055613458 - lab.b * 0.0638541728, 3);
+  const s = Math.pow(lab.L - lab.a * 0.0894841775 - lab.b * 1.291485548, 3);
+  return {
+    r: l * 4.0767416621 - m * 3.3077115913 + s * 0.2309699292,
+    g: -l * 1.2684380046 + m * 2.6097574011 - s * 0.3413193965,
+    b: -l * 0.0041960863 - m * 0.7034186147 + s * 1.707614701,
+  };
+}
+
+export function oklabToOklch(lab) {
+  const chroma = Math.sqrt(lab.a * lab.a + lab.b * lab.b);
+  return {
+    L: lab.L,
+    C: chroma,
+    h: chroma > 0.000001 ? Math.atan2(lab.b, lab.a) : 0,
+  };
+}
+
+export function linearRgbToOklch(sample) {
+  return oklabToOklch(linearRgbToOklab(sample));
+}
+
+export function oklchToLinearRgb(lch) {
+  return oklabToLinearRgb({
+    L: lch.L,
+    a: lch.C * Math.cos(lch.h),
+    b: lch.C * Math.sin(lch.h),
+  });
+}
+
+function isLinearRgbInGamut(sample) {
+  return (
+    sample.r >= -0.000001 &&
+    sample.r <= 1.000001 &&
+    sample.g >= -0.000001 &&
+    sample.g <= 1.000001 &&
+    sample.b >= -0.000001 &&
+    sample.b <= 1.000001
+  );
+}
+
+// Lightness adjustments can push an otherwise valid OKLCH colour outside
+// sRGB. Reduce only chroma until it fits, preserving the perceptual hue rather
+// than clipping individual RGB channels into a different colour.
+export function mapOklchToLinearRgb(lch) {
+  const bounded = {
+    L: clamp(lch.L, 0, 1),
+    C: Math.max(0, lch.C),
+    h: lch.h || 0,
+  };
+  const direct = oklchToLinearRgb(bounded);
+  if (isLinearRgbInGamut(direct)) return direct;
+  let low = 0;
+  let high = bounded.C;
+  let mapped = oklchToLinearRgb({
+    L: bounded.L,
+    C: 0,
+    h: bounded.h,
+  });
+  for (let index = 0; index < 10; index += 1) {
+    const middle = (low + high) / 2;
+    const candidate = oklchToLinearRgb({
+      L: bounded.L,
+      C: middle,
+      h: bounded.h,
+    });
+    if (isLinearRgbInGamut(candidate)) {
+      low = middle;
+      mapped = candidate;
+    } else {
+      high = middle;
+    }
+  }
+  return mapped;
+}
+
+function normalizedHue(hue) {
+  const turn = hue / (Math.PI * 2);
+  return turn - Math.floor(turn);
+}
+
+export function isStatsBarTextureNeutralChroma(chroma) {
+  return chroma < STATS_BAR_TEXTURE_CONFIG.neutralChromaThreshold;
+}
+
+function toLinearSample(data, offset) {
   const sample = {
-    r: srgbByteToLinear(rgb.r),
-    g: srgbByteToLinear(rgb.g),
-    b: srgbByteToLinear(rgb.b),
+    r: srgbByteToLinear(data[offset]),
+    g: srgbByteToLinear(data[offset + 1]),
+    b: srgbByteToLinear(data[offset + 2]),
     alpha: data[offset + 3] / 255,
-    hue: hsl[0],
-    lightness: hsl[2],
   };
   sample.luminance = linearLuminance(sample);
-  sample.saturation = clamp(hsl[1], 0, 1);
+  const lch = linearRgbToOklch(sample);
+  sample.hue = normalizedHue(lch.h);
+  sample.perceptualLightness = lch.L;
+  sample.chroma = lch.C;
   return sample;
+}
+
+// Pure diagnostics for the offline smoke. Runtime rendering never logs or
+// stores these counts; they let fixtures prove that neutral JPEG noise is not
+// classified as usable colour by the same threshold used in production.
+export function inspectStatsBarTextureImage(imageData) {
+  if (!imageData || !imageData.data) return null;
+  let visiblePixelCount = 0;
+  let neutralPixelCount = 0;
+  let chromaticPixelCount = 0;
+  for (let index = 0; index < imageData.width * imageData.height; index += 1) {
+    const sample = toLinearSample(imageData.data, index * 4);
+    if (!sample.alpha) continue;
+    visiblePixelCount += 1;
+    if (isStatsBarTextureNeutralChroma(sample.chroma)) {
+      neutralPixelCount += 1;
+    } else {
+      chromaticPixelCount += 1;
+    }
+  }
+  return {
+    visiblePixelCount,
+    neutralPixelCount,
+    chromaticPixelCount,
+    chromaticCoverage: visiblePixelCount
+      ? chromaticPixelCount / visiblePixelCount
+      : 0,
+  };
 }
 
 function mixLinear(first, second, amount) {
@@ -215,11 +320,11 @@ function averageLinear(samples, weightFor) {
 function clusterKeyForSample(sample) {
   const config = STATS_BAR_TEXTURE_CONFIG;
   const lightnessBin = clamp(
-    Math.floor(sample.lightness * config.colorClusterLightnessBins),
+    Math.floor(sample.perceptualLightness * config.colorClusterLightnessBins),
     0,
     config.colorClusterLightnessBins - 1
   );
-  if (sample.saturation < config.colorClusterNeutralSaturation) {
+  if (sample.chroma < config.colorClusterNeutralChroma) {
     return `neutral:${lightnessBin}`;
   }
   const hueBin = clamp(
@@ -230,7 +335,7 @@ function clusterKeyForSample(sample) {
   return `colour:${hueBin}:${lightnessBin}`;
 }
 
-// V4.1 never promotes one vivid pixel to a whole stats band. The cluster
+// V5 never promotes one vivid pixel to a whole stats band. The cluster
 // coverage is calculated from source pixels that survived the robust trim.
 export function clusterStatsBarTextureSamples(samples) {
   const buckets = new Map();
@@ -263,14 +368,14 @@ export function clusterStatsBarTextureSamples(samples) {
       g: bucket.g / bucket.weight,
       b: bucket.b / bucket.weight,
     };
-    const rgb = linearToRgb(color);
-    const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+    const lch = linearRgbToOklch(color);
     return {
       key: bucket.key,
       count: bucket.count,
       coverage: bucket.weight / totalWeight,
       color,
-      saturation: clamp(hsl[1], 0, 1),
+      chroma: lch.C,
+      perceptualLightness: lch.L,
       luminance: linearLuminance(color),
       isNeutral: bucket.key.indexOf('neutral:') === 0,
     };
@@ -278,10 +383,20 @@ export function clusterStatsBarTextureSamples(samples) {
 }
 
 function accentQuality(cluster) {
+  const chroma = clamp(
+    (cluster.chroma - STATS_BAR_TEXTURE_CONFIG.neutralChromaThreshold) /
+      Math.max(
+        0.001,
+        STATS_BAR_TEXTURE_CONFIG.accentChromaReference -
+          STATS_BAR_TEXTURE_CONFIG.neutralChromaThreshold
+      ),
+    0,
+    1
+  );
   return clamp(
-    cluster.saturation * STATS_BAR_TEXTURE_CONFIG.accentSaturationScoreWeight +
-      Math.sqrt(cluster.luminance) *
-        STATS_BAR_TEXTURE_CONFIG.accentLuminanceScoreWeight,
+    chroma * STATS_BAR_TEXTURE_CONFIG.accentChromaScoreWeight +
+      Math.sqrt(cluster.perceptualLightness) *
+        STATS_BAR_TEXTURE_CONFIG.accentLightnessScoreWeight,
     0,
     1
   );
@@ -294,7 +409,7 @@ function pickAccentCluster(clusters, minCoverage) {
       !cluster ||
       cluster.isNeutral ||
       cluster.coverage < minCoverage ||
-      cluster.saturation < STATS_BAR_TEXTURE_CONFIG.accentMinSaturation
+      cluster.chroma < STATS_BAR_TEXTURE_CONFIG.accentMinChroma
     ) {
       return;
     }
@@ -321,22 +436,21 @@ export function statsBarTextureAccentMix(cluster, minCoverage) {
   );
 }
 
-function tuneColor(sample) {
-  const rgb = linearToRgb(sample);
-  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-  let lightness = hsl[2];
-  if (lightness < STATS_BAR_TEXTURE_CONFIG.minReadableLightness) {
-    lightness = STATS_BAR_TEXTURE_CONFIG.minReadableLightness;
-  } else if (lightness > STATS_BAR_TEXTURE_CONFIG.maxReadableLightness) {
-    lightness = STATS_BAR_TEXTURE_CONFIG.maxReadableLightness;
-  }
-  const saturation = clamp(hsl[1], 0, STATS_BAR_TEXTURE_CONFIG.maxSaturation);
-  const tuned = hslToRgb(hsl[0], saturation, lightness);
-  return {
-    r: tuned[0],
-    g: tuned[1],
-    b: tuned[2],
-  };
+export function tuneStatsBarTextureColor(sample) {
+  const lch = linearRgbToOklch(sample);
+  const chroma = isStatsBarTextureNeutralChroma(lch.C)
+    ? 0
+    : Math.min(lch.C, STATS_BAR_TEXTURE_CONFIG.maxPerceptualChroma);
+  const tuned = mapOklchToLinearRgb({
+    L: clamp(
+      lch.L,
+      STATS_BAR_TEXTURE_CONFIG.minReadableOklabLightness,
+      STATS_BAR_TEXTURE_CONFIG.maxReadableOklabLightness
+    ),
+    C: chroma,
+    h: lch.h,
+  });
+  return linearToRgb(tuned);
 }
 
 function samplesForSourceRow(imageData, y) {
@@ -367,11 +481,21 @@ function robustSourceRow(imageData, y) {
   const retained = ordered.slice(start, end);
   const main = averageLinear(retained, sample => {
     const midtone = 1 - Math.min(1, Math.abs(sample.luminance - 0.48) / 0.48);
+    const chroma = clamp(
+      (sample.chroma - STATS_BAR_TEXTURE_CONFIG.neutralChromaThreshold) /
+        Math.max(
+          0.001,
+          STATS_BAR_TEXTURE_CONFIG.perceptualChromaReference -
+            STATS_BAR_TEXTURE_CONFIG.neutralChromaThreshold
+        ),
+      0,
+      1
+    );
     return (
       sample.alpha *
       (STATS_BAR_TEXTURE_CONFIG.rowBaseWeight +
         midtone * STATS_BAR_TEXTURE_CONFIG.rowMidtoneWeight +
-        sample.saturation * STATS_BAR_TEXTURE_CONFIG.rowSaturationWeight)
+        chroma * STATS_BAR_TEXTURE_CONFIG.rowChromaWeight)
     );
   }) || { r: 0, g: 0, b: 0 };
   // Only the robustly retained pixels can contribute an accent. A pixel that
@@ -663,7 +787,7 @@ export function buildStatsBarTexturePixels(imageData, options) {
   if (!band) return null;
   const palette = analyseStatsBarTexturePalette(imageData);
   const rows = applyLowVarianceCompensation(smoothRows(band.samples), palette);
-  const fillRows = rows.map(tuneColor);
+  const fillRows = rows.map(tuneStatsBarTextureColor);
   const data = new Uint8ClampedArray(width * height * 4);
   // Direction contract: output(x, y) = coverSample(y). Each source Y sample
   // becomes one horizontal colour band, so CSS can stretch the texture along
