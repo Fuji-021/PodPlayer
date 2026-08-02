@@ -57,11 +57,19 @@
           class="bar"
           :style="{ width: item._w + '%', background: barColor(item) }"
         >
+          <span
+            v-if="barTexture(item)"
+            class="bar-texture"
+            :class="{ 'bar-texture-ready': barTexture(item).ready }"
+            :style="barTextureStyle(item)"
+            aria-hidden="true"
+          ></span>
           <!-- [点击区收窄] 只封面可点跳转，进度条空白区不可点 -->
           <PodImage
             class="thumb"
             :src="item.coverUrl"
             @error="onCoverError"
+            @load="onStatsCoverLoad(item, $event)"
             @click.native="goPodcast(item)"
           />
         </div>
@@ -90,6 +98,13 @@ import {
   statsBarCleanupDelayMs,
   withStatsBarMotion,
 } from '@/utils/podcast/statsBarAnimation';
+import {
+  cancelStatsBarTextureRequests,
+  collectStatsBarTextureResults,
+  getStatsBarTexture,
+  peekStatsBarTexture,
+  shouldPrepareStatsBarTextures,
+} from '@/utils/podcast/statsBarTexture';
 
 export default {
   name: 'StatsPage',
@@ -120,6 +135,9 @@ export default {
       totalWall: 0, // 全部累计（顶部大数字始终显示总量）
       rangeTotal: 0, // 当前范围合计
       list: [],
+      // Only small data URLs and their ready flag are reactive. Canvas and image
+      // objects stay inside the module scheduler so Vue never tracks bitmaps.
+      barTextures: {},
       // [v1.5.4] 首次 fresh 取数完成前不渲染"暂无记录"空态(改先取数后建列表，取数窗口很短但要防空态闪现)
       loaded: false,
     };
@@ -144,9 +162,33 @@ export default {
         it => !this.blockedNames.has((it.title || '').trim())
       );
     },
+    nyancatStyle() {
+      return !!(
+        this.$store &&
+        this.$store.state &&
+        this.$store.state.settings &&
+        this.$store.state.settings.nyancatStyle
+      );
+    },
+  },
+  watch: {
+    nyancatStyle() {
+      this.prepareStatsTextures(this.list);
+    },
   },
   async created() {
+    this._statsTextureActive = true;
     await this.enterWithAnimation();
+  },
+  activated() {
+    this._statsTextureActive = true;
+    this.prepareStatsTextures(this.list);
+  },
+  deactivated() {
+    this.invalidateStatsTextures();
+  },
+  beforeDestroy() {
+    this.invalidateStatsTextures();
   },
   methods: {
     // [B-40] 每次进来随机一条跑步提示词
@@ -156,6 +198,230 @@ export default {
     async loadTotal() {
       const { totalWall } = await getListenStatsByPodcast('all');
       this.totalWall = totalWall;
+    },
+    statsTextureRows(rows) {
+      const blocked = this.blockedNames;
+      return (rows || []).filter(
+        item =>
+          item &&
+          !item._leaving &&
+          item.coverUrl &&
+          !blocked.has((item.title || '').trim())
+      );
+    },
+    barTexture(item) {
+      const entry = item && this.barTextures[item.podcastId];
+      if (!entry || entry.url !== item.coverUrl || !entry.value) return null;
+      return entry;
+    },
+    barTextureStyle(item) {
+      const entry = this.barTexture(item);
+      return entry ? { backgroundImage: `url("${entry.value}")` } : {};
+    },
+    hasCurrentStatsTexture(item, generation) {
+      if (!this._statsTextureActive || !this.nyancatStyle) return false;
+      if (generation !== this._statsTextureGeneration) return false;
+      return this.isCurrentStatsTextureItem(item);
+    },
+    isCurrentStatsTextureItem(item) {
+      return this.list.some(
+        current =>
+          current &&
+          !current._leaving &&
+          current.podcastId === item.podcastId &&
+          current.coverUrl === item.coverUrl
+      );
+    },
+    hotStatsTextures(rows) {
+      const entries = {};
+      const seen = new Set();
+      const activeRows = this.statsTextureRows(rows);
+      if (!activeRows.length) return entries;
+      for (let index = 0; index < activeRows.length; index += 1) {
+        const item = activeRows[index];
+        const texture = peekStatsBarTexture(item.coverUrl);
+        if (!texture) return null;
+        if (!seen.has(item.podcastId)) {
+          entries[item.podcastId] = {
+            url: item.coverUrl,
+            value: texture,
+            ready: true,
+          };
+          seen.add(item.podcastId);
+        }
+      }
+      return entries;
+    },
+    invalidateStatsTextures() {
+      this._statsTextureActive = false;
+      this._statsTextureGeneration = (this._statsTextureGeneration || 0) + 1;
+      const invalidGeneration = this._statsTextureGeneration;
+      cancelStatsBarTextureRequests(task => {
+        const token = task.options && task.options.token;
+        return token && token < invalidGeneration;
+      });
+      if (this._statsTexturePublishFrame) {
+        cancelAnimationFrame(this._statsTexturePublishFrame);
+        this._statsTexturePublishFrame = null;
+      }
+      this._pendingStatsTextures = null;
+      this._statsTextureImages = null;
+      this.barTextures = {};
+    },
+    publishStatsTextures(generation, entries, immediate) {
+      if (
+        !this._statsTextureActive ||
+        !this.nyancatStyle ||
+        generation !== this._statsTextureGeneration
+      ) {
+        return;
+      }
+      const validEntries = {};
+      Object.keys(entries || {}).forEach(key => {
+        const entry = entries[key];
+        const item = this.list.find(
+          current =>
+            current &&
+            !current._leaving &&
+            current.podcastId === key &&
+            current.coverUrl === entry.url
+        );
+        if (item && entry && entry.value) validEntries[key] = entry;
+      });
+      if (!Object.keys(validEntries).length) return;
+      const next = Object.assign({}, this.barTextures);
+      Object.keys(validEntries).forEach(key => {
+        next[key] = Object.assign({}, validEntries[key], {
+          ready: !!immediate || this.prefersReducedMotion(),
+        });
+      });
+      this.barTextures = next;
+      if (immediate || this.prefersReducedMotion()) return;
+      this.$nextTick(() => {
+        if (
+          !this._statsTextureActive ||
+          !this.nyancatStyle ||
+          generation !== this._statsTextureGeneration
+        ) {
+          return;
+        }
+        const ready = Object.assign({}, this.barTextures);
+        Object.keys(validEntries).forEach(key => {
+          if (ready[key] && ready[key].url === validEntries[key].url) {
+            ready[key] = Object.assign({}, ready[key], { ready: true });
+          }
+        });
+        this.barTextures = ready;
+      });
+    },
+    queueStatsTexturePublish(generation, entries) {
+      if (!entries || !Object.keys(entries).length) return;
+      const pending = this._pendingStatsTextures || {
+        generation,
+        entries: {},
+      };
+      if (pending.generation !== generation) return;
+      Object.assign(pending.entries, entries);
+      this._pendingStatsTextures = pending;
+      if (this._statsTexturePublishFrame) return;
+      this._statsTexturePublishFrame = requestAnimationFrame(() => {
+        this._statsTexturePublishFrame = null;
+        const batch = this._pendingStatsTextures;
+        this._pendingStatsTextures = null;
+        if (batch)
+          this.publishStatsTextures(batch.generation, batch.entries, false);
+      });
+    },
+    prepareStatsTextures(rows) {
+      const generation = (this._statsTextureGeneration || 0) + 1;
+      this._statsTextureGeneration = generation;
+      cancelStatsBarTextureRequests(task => {
+        const token = task.options && task.options.token;
+        return token && token < generation;
+      });
+      if (
+        !shouldPrepareStatsBarTextures(
+          this.nyancatStyle,
+          this._statsTextureActive
+        )
+      ) {
+        this.barTextures = {};
+        return;
+      }
+      const activeRows = this.statsTextureRows(rows);
+      const activeImageKeys = new Set(
+        activeRows.map(item => item.podcastId + '|' + item.coverUrl)
+      );
+      const images = this._statsTextureImages || {};
+      Object.keys(images).forEach(key => {
+        const imageEntry = images[key];
+        if (!imageEntry || !activeImageKeys.has(key + '|' + imageEntry.url)) {
+          delete images[key];
+        }
+      });
+      const hot = this.hotStatsTextures(activeRows);
+      if (hot) {
+        this.barTextures = hot;
+        return;
+      }
+      this.barTextures = {};
+      const startedAt = Date.now();
+      const requests = activeRows.map(item =>
+        getStatsBarTexture(item.coverUrl, {
+          sourceImage:
+            images[item.podcastId] &&
+            images[item.podcastId].url === item.coverUrl
+              ? images[item.podcastId].image
+              : null,
+          isValid: () => this.hasCurrentStatsTexture(item, generation),
+          options: { token: generation },
+        }).then(value => ({ item, value }))
+      );
+      Promise.all(requests)
+        .then(results => {
+          if (
+            !this._statsTextureActive ||
+            generation !== this._statsTextureGeneration
+          ) {
+            return;
+          }
+          const entries = collectStatsBarTextureResults(results, item =>
+            this.hasCurrentStatsTexture(item, generation)
+          );
+          // Keep this non-reactive for a later repeatable performance audit.
+          this._statsTextureMetrics = {
+            generation,
+            visibleCount: activeRows.length,
+            preparedCount: Object.keys(entries).length,
+            totalMs: Date.now() - startedAt,
+          };
+          this.publishStatsTextures(generation, entries, false);
+        })
+        .catch(() => {});
+    },
+    onStatsCoverLoad(item, event) {
+      const generation = this._statsTextureGeneration;
+      const image = event && event.target;
+      if (!this.isCurrentStatsTextureItem(item) || !image) return;
+      this._statsTextureImages = this._statsTextureImages || {};
+      this._statsTextureImages[item.podcastId] = {
+        url: item.coverUrl,
+        image,
+      };
+      if (!this.hasCurrentStatsTexture(item, generation)) return;
+      if (this.barTexture(item)) return;
+      getStatsBarTexture(item.coverUrl, {
+        sourceImage: image,
+        isValid: () => this.hasCurrentStatsTexture(item, generation),
+        options: { token: generation },
+      })
+        .then(value => {
+          if (!value || !this.hasCurrentStatsTexture(item, generation)) return;
+          this.queueStatsTexturePublish(generation, {
+            [item.podcastId]: { url: item.coverUrl, value },
+          });
+        })
+        .catch(() => {});
     },
     // [统计动画 v1 路线] 进入页面：以上次快照(各自宽度)为起点 → animateTo(fresh) 平滑过渡。
     //   留存条**同时**位移+伸缩(无等待)、新增条从左长出、离开条收走，即用户认可的"重排"动画。
@@ -213,6 +479,10 @@ export default {
         });
       });
       this.list = next;
+      // Textures are strictly visual overlays. Preparing them after assigning the
+      // next list keeps the accepted width/FLIP state untouched and lets hot
+      // texture hits join the first Vue paint.
+      this.prepareStatsTextures(next);
       this.loaded = true;
       this.extractColors();
       // 双 rAF：先让起点宽度绘制一帧，再统一过渡到目标宽。写本次捕获的 next(非 this.list) → 防快速切换串写。
@@ -318,6 +588,7 @@ export default {
         });
       const merged = next.concat(ghosts);
       this.list = merged;
+      this.prepareStatsTextures(merged);
       // [兜底] 取色同步异常不能中断后面的双 rAF 过渡调度 + 幽灵清理定时器注册
       //   (否则当次切换进度条不伸缩/幽灵不清)；取色失败不影响动画。
       try {
@@ -648,6 +919,7 @@ export default {
   //   干净自盖、不糊叠、不留残影(原 v1.3 残影根治的目的达成，方式从整行铺底改为元素自带底)。
   // [B-38] bar 宽度=时长比例（不再 flex:1），封面叠在条右端
   .bar {
+    position: relative;
     height: 40px;
     border-radius: 8px;
     flex-shrink: 0;
@@ -663,8 +935,23 @@ export default {
     // 伸长和缩回都使用同一条明显 ease-out 曲线；时长由本次宽度变化距离计算。
     transition: width var(--stat-bar-duration, 280ms)
       cubic-bezier(0.16, 1, 0.3, 1);
+    .bar-texture {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background-repeat: repeat-x;
+      background-size: 100% 100%;
+      opacity: 0;
+      transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .bar-texture-ready {
+      opacity: 1;
+    }
   }
   .thumb {
+    position: relative;
+    z-index: 1;
     width: 40px;
     height: 40px;
     border-radius: var(--radius-cover-sm);
@@ -709,6 +996,9 @@ export default {
   .stat-row,
   .stat-row .bar,
   .stat-row .label {
+    transition-duration: 0ms;
+  }
+  .stat-row .bar-texture {
     transition-duration: 0ms;
   }
 }

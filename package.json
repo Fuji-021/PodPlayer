@@ -46,6 +46,7 @@
     "test:search-playlist-metadata": "node scripts/search_playlist_metadata_smoke.js",
     "test:ai-provider-settings": "node scripts/ai_provider_settings_smoke.js",
     "test:stats-bar-animation": "node scripts/stats_bar_animation_smoke.js",
+    "test:stats-bar-texture": "node scripts/stats_bar_texture_smoke.js",
     "test:ai-safe-storage-runtime": "electron scripts/ai_safe_storage_runtime_smoke.js",
     "test:ai-credential-runtime": "electron scripts/ai_credential_runtime_smoke.js",
     "test:windows-dpapi": "node scripts/windows_dpapi_smoke.js",
