@@ -140,11 +140,21 @@ async function main() {
       ],
     });
     const texture = require(output);
-    assert.strictEqual(
-      texture.shouldPrepareStatsBarTextures(false, true),
-      false,
-      'nyancat off schedules zero texture work'
-    );
+    assert.strictEqual(texture.STATS_BAR_TEXTURE_CONFIG.bridgeOuterWidth, 24);
+    assert.strictEqual(texture.STATS_BAR_TEXTURE_CONFIG.bridgeCoverIngress, 8);
+    assert.strictEqual(texture.STATS_BAR_TEXTURE_CONFIG.bridgeWidth, 32);
+    [
+      { nyancatStyle: false, statsBarCoverTexture: false, expected: false },
+      { nyancatStyle: true, statsBarCoverTexture: false, expected: false },
+      { nyancatStyle: false, statsBarCoverTexture: true, expected: true },
+      { nyancatStyle: true, statsBarCoverTexture: true, expected: true },
+    ].forEach(state => {
+      assert.strictEqual(
+        texture.shouldPrepareStatsBarTextures(state.statsBarCoverTexture, true),
+        state.expected,
+        'texture work follows only statsBarCoverTexture, not nyancatStyle'
+      );
+    });
     assert.strictEqual(
       texture.shouldPrepareStatsBarTextures(true, false),
       false,
@@ -763,48 +773,54 @@ async function main() {
     assert.ok(statsSource.includes('@load="onStatsCoverLoad(item, $event)"'));
     assert.ok(statsSource.includes('isStatsBarTextureValue('));
     assert.ok(statsSource.includes('bar-texture-fill'));
-    assert.ok(statsSource.includes('bar-texture-bridge-external'));
-    assert.ok(statsSource.includes('bar-texture-ingress'));
-    assert.ok(statsSource.includes('class="thumb-shell"'));
+    assert.ok(statsSource.includes('class="stats-texture-endcap"'));
+    assert.ok(statsSource.includes('class="stats-texture-bridge"'));
+    assert.ok(!statsSource.includes('bar-texture-bridge-external'));
+    assert.ok(!statsSource.includes('bar-texture-ingress'));
+    assert.ok(!statsSource.includes('class="thumb-shell"'));
     assert.ok(!statsSource.includes('bar-texture-bridge-overlay'));
     assert.ok(
-      statsSource.includes('right: 40px;'),
-      'the external bridge ends at the fixed 40px cover shell'
+      statsSource.includes('width: 64px;') &&
+        statsSource.includes('width: 40px;') &&
+        statsSource.includes('width: var(--stats-texture-bridge-width);'),
+      'one endcap contains the 24px outer bridge and 40px cover with an 8px overlap'
     );
     assert.ok(
-      statsSource.includes('.bar-texture-bridge-external') &&
-        statsSource.includes('.bar-texture-ingress') &&
-        statsSource.includes('pointer-events: none'),
-      'external bridge and ingress are non-interactive paint layers'
+      statsSource.includes('.stats-texture-endcap') &&
+        statsSource.includes('.stats-texture-bridge') &&
+        statsSource.includes('pointer-events: none') &&
+        statsSource.includes('pointer-events: auto'),
+      'the bridge cannot receive pointer input while the real cover remains interactive'
     );
     assert.ok(
-      statsSource.indexOf('class="thumb-shell"') <
-        statsSource.indexOf('class="bar-texture-ingress"'),
-      'the ingress is structurally nested inside the cover shell'
+      statsSource.indexOf('class="stats-texture-endcap"') <
+        statsSource.indexOf('class="stats-texture-bridge"'),
+      'the bridge and PodImage share the one endcap clipping context'
     );
-    const shellStyle = statsSource.slice(
-      statsSource.indexOf('.thumb-shell {'),
+    const endcapStyle = statsSource.slice(
+      statsSource.indexOf('.stats-texture-endcap {'),
       statsSource.indexOf('.label {')
     );
     assert.ok(
-      shellStyle.includes('border-radius: var(--radius-cover-sm);') &&
-        shellStyle.includes('overflow: hidden;'),
-      'the cover shell clips the ingress with the real cover radius'
+      endcapStyle.includes('border-radius: var(--radius-cover-sm);') &&
+        endcapStyle.includes('overflow: hidden;'),
+      'the endcap is the sole local radius and clipping owner for bridge plus cover'
     );
     assert.ok(
-      shellStyle.includes('background-position: right top;') &&
-        statsSource.includes('background-position: left top;'),
-      'external bridge and ingress use opposite slices of the same bridge texture'
+      endcapStyle.includes('right: 0;') &&
+        endcapStyle.includes('left: 0;') &&
+        endcapStyle.includes('z-index: 1'),
+      'the bridge starts at the endcap edge and overlays exactly the first 8px of the cover'
     );
     assert.strictEqual(
       (statsSource.match(/:style="barTextureBridgeStyle\(item\)"/g) || [])
         .length,
-      2,
-      'external bridge and shell ingress share one generated bridge URL'
+      1,
+      'the composite endcap uses one bridge layer rather than a stitched pair'
     );
     assert.ok(
-      (statsSource.match(/barTexture\(item\)\.ready/g) || []).length >= 3,
-      'fill, external bridge, and shell ingress share one ready flag'
+      (statsSource.match(/barTexture\(item\)\.ready/g) || []).length >= 2,
+      'fill and composite bridge share one ready flag'
     );
     assert.ok(
       !statsSource.includes('draggable="false"') &&
@@ -813,6 +829,39 @@ async function main() {
     );
     assert.ok(statsSource.includes('transition: opacity 130ms'));
     assert.ok(statsSource.includes('transition-duration: 0ms'));
+    assert.ok(
+      statsSource.includes('statsBarCoverTexture()') &&
+        !statsSource.includes('nyancatStyle'),
+      'stats page no longer reads nyancatStyle to schedule texture work'
+    );
+    const prepareSource = statsSource.slice(
+      statsSource.indexOf('prepareStatsTextures(rows) {'),
+      statsSource.indexOf('onStatsCoverLoad(item, event) {')
+    );
+    assert.ok(
+      prepareSource.indexOf('cancelStatsBarTextureRequests') <
+        prepareSource.indexOf('shouldPrepareStatsBarTextures(') &&
+        prepareSource.includes(
+          'cancelAnimationFrame(this._statsTexturePublishFrame)'
+        ) &&
+        prepareSource.includes('this._pendingStatsTextures = null;') &&
+        prepareSource.includes('this.barTextures = {};'),
+      'disabling the texture invalidates pending work before clearing reactive texture state'
+    );
+    const settingsSource = fs.readFileSync(
+      path.join(root, 'src/views/settings.vue'),
+      'utf8'
+    );
+    const defaultsSource = fs.readFileSync(
+      path.join(root, 'src/store/initLocalStorage.js'),
+      'utf8'
+    );
+    assert.ok(
+      settingsSource.includes('v-model="statsBarCoverTexture"') &&
+        settingsSource.includes("key: 'statsBarCoverTexture'") &&
+        defaultsSource.includes('statsBarCoverTexture: false'),
+      'the independent texture switch persists as a false-by-default settings key'
+    );
 
     let localDiagnostic = null;
     const diagnosticCoverPath = process.env.PODPLAYER_STATS_DIAGNOSTIC_COVER;

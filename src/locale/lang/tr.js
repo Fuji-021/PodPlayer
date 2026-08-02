@@ -274,6 +274,9 @@ export default {
         'Open the log file to troubleshoot when something goes wrong (you can also send it to the developer for diagnosis).',
       openLogFolder: 'Open log folder',
       nyancatStyle: 'Nyan Cat progress bar style',
+      statsBarCoverTexture: 'Stats bar cover texture',
+      statsBarCoverTextureDesc:
+        'Use podcast cover colors to create listening-statistics bar textures.',
       shortcut: 'Shortcuts',
       shortcutFn: 'Function',
       shortcutKey: 'Shortcut',

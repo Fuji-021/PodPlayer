@@ -63,8 +63,8 @@ export const STATS_BAR_TEXTURE_CACHE_MAX = 128;
 export const STATS_BAR_TEXTURE_CONCURRENCY = 2;
 export const STATS_BAR_TEXTURE_QUEUE_MAX = 256;
 
-export function shouldPrepareStatsBarTextures(nyancatStyle, active) {
-  return !!nyancatStyle && !!active;
+export function shouldPrepareStatsBarTextures(textureEnabled, active) {
+  return !!textureEnabled && !!active;
 }
 
 function clamp(value, min, max) {

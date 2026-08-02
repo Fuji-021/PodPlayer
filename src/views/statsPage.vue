@@ -68,17 +68,8 @@
               :style="barTextureFillStyle(item)"
             ></span>
           </span>
-          <span
-            v-if="barTexture(item)"
-            class="bar-texture-bridge-external"
-            :class="{
-              'bar-texture-bridge-ready': barTexture(item).ready,
-            }"
-            :style="barTextureBridgeStyle(item)"
-            aria-hidden="true"
-          ></span>
-          <!-- [点击区收窄] 只封面可点跳转，进度条空白区不可点 -->
-          <span class="thumb-shell">
+          <!-- [点击区收窄] 只有真实封面可点跳转；端帽不接管外侧过渡区。 -->
+          <span class="stats-texture-endcap">
             <PodImage
               class="thumb"
               :src="item.coverUrl"
@@ -88,7 +79,7 @@
             />
             <span
               v-if="barTexture(item)"
-              class="bar-texture-ingress"
+              class="stats-texture-bridge"
               :class="{
                 'bar-texture-bridge-ready': barTexture(item).ready,
               }"
@@ -188,17 +179,17 @@ export default {
         it => !this.blockedNames.has((it.title || '').trim())
       );
     },
-    nyancatStyle() {
+    statsBarCoverTexture() {
       return !!(
         this.$store &&
         this.$store.state &&
         this.$store.state.settings &&
-        this.$store.state.settings.nyancatStyle
+        this.$store.state.settings.statsBarCoverTexture
       );
     },
   },
   watch: {
-    nyancatStyle() {
+    statsBarCoverTexture() {
       this.prepareStatsTextures(this.list);
     },
   },
@@ -256,13 +247,11 @@ export default {
         ? {
             backgroundImage: `url("${entry.value.bridgeUrl}")`,
             '--stats-texture-bridge-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeWidth}px`,
-            '--stats-texture-bridge-outer-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeOuterWidth}px`,
-            '--stats-texture-bridge-cover-ingress': `${STATS_BAR_TEXTURE_CONFIG.bridgeCoverIngress}px`,
           }
         : {};
     },
     hasCurrentStatsTexture(item, generation) {
-      if (!this._statsTextureActive || !this.nyancatStyle) return false;
+      if (!this._statsTextureActive || !this.statsBarCoverTexture) return false;
       if (generation !== this._statsTextureGeneration) return false;
       return this.isCurrentStatsTextureItem(item);
     },
@@ -314,7 +303,7 @@ export default {
     publishStatsTextures(generation, entries, immediate) {
       if (
         !this._statsTextureActive ||
-        !this.nyancatStyle ||
+        !this.statsBarCoverTexture ||
         generation !== this._statsTextureGeneration
       ) {
         return;
@@ -343,7 +332,7 @@ export default {
       this.$nextTick(() => {
         if (
           !this._statsTextureActive ||
-          !this.nyancatStyle ||
+          !this.statsBarCoverTexture ||
           generation !== this._statsTextureGeneration
         ) {
           return;
@@ -384,10 +373,15 @@ export default {
       });
       if (
         !shouldPrepareStatsBarTextures(
-          this.nyancatStyle,
+          this.statsBarCoverTexture,
           this._statsTextureActive
         )
       ) {
+        if (this._statsTexturePublishFrame) {
+          cancelAnimationFrame(this._statsTexturePublishFrame);
+          this._statsTexturePublishFrame = null;
+        }
+        this._pendingStatsTextures = null;
         this.barTextures = {};
         return;
       }
@@ -1003,66 +997,52 @@ export default {
     .bar-texture-ready {
       opacity: 1;
     }
-    // The outer bridge is a separate, non-interactive paint layer. The
-    // ingress segment itself lives inside .thumb-shell so the cover radius
-    // clips its corners instead of leaving square overlay blocks visible.
-    .bar-texture-bridge-external {
+    // A single clipping context spans the outer 24px transition and the real
+    // 40px cover. The bridge therefore crosses into the cover without asking
+    // two independently rounded layers to meet at the corner.
+    .stats-texture-endcap {
       position: absolute;
       z-index: 1;
       top: 0;
-      bottom: 0;
-      right: 40px;
-      width: var(--stats-texture-bridge-outer-width);
+      right: 0;
+      width: 64px;
+      height: 40px;
+      overflow: hidden;
+      border-radius: var(--radius-cover-sm);
       pointer-events: none;
-      opacity: 0;
-      background-repeat: no-repeat;
-      background-size: var(--stats-texture-bridge-width) 100%;
-      background-position: left top;
-      transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .bar-texture-bridge-ready {
-      opacity: 1;
-    }
-  }
-  .thumb-shell {
-    position: relative;
-    z-index: 2;
-    width: 40px;
-    height: 40px;
-    flex-shrink: 0;
-    border-radius: var(--radius-cover-sm);
-    overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-    background: var(--color-secondary-bg);
 
-    .thumb {
-      position: relative;
-      z-index: 0;
-      display: block;
-      width: 100%;
-      height: 100%;
-      border-radius: inherit;
-      object-fit: cover;
-      cursor: pointer; // [点击区收窄] 封面可点跳转
-    }
+      .thumb {
+        position: absolute;
+        z-index: 0;
+        top: 0;
+        right: 0;
+        display: block;
+        width: 40px;
+        height: 40px;
+        object-fit: cover;
+        pointer-events: auto;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        background: var(--color-secondary-bg);
+        cursor: pointer; // [点击区收窄] 只有封面可点跳转
+      }
 
-    .bar-texture-ingress {
-      position: absolute;
-      z-index: 1;
-      top: 0;
-      bottom: 0;
-      left: 0;
-      width: var(--stats-texture-bridge-cover-ingress);
-      pointer-events: none;
-      opacity: 0;
-      background-repeat: no-repeat;
-      background-size: var(--stats-texture-bridge-width) 100%;
-      background-position: right top;
-      transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
-    }
+      .stats-texture-bridge {
+        position: absolute;
+        z-index: 1;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: var(--stats-texture-bridge-width);
+        pointer-events: none;
+        opacity: 0;
+        background-repeat: no-repeat;
+        background-size: 100% 100%;
+        transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
 
-    .bar-texture-bridge-ready {
-      opacity: 1;
+      .bar-texture-bridge-ready {
+        opacity: 1;
+      }
     }
   }
   // [B-38] 名字紧跟 bar（=与各自进度条右端对齐），不再固定右列对齐
@@ -1106,8 +1086,7 @@ export default {
   .stat-row .bar-texture {
     transition-duration: 0ms;
   }
-  .stat-row .bar-texture-bridge-external,
-  .stat-row .bar-texture-ingress {
+  .stat-row .stats-texture-bridge {
     transition-duration: 0ms;
   }
 }

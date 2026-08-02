@@ -849,6 +849,28 @@
         </div>
       </div>
 
+      <div class="item">
+        <div class="left">
+          <div class="title">
+            {{ $t('settings.pod.statsBarCoverTexture') }}
+          </div>
+          <div class="description">
+            {{ $t('settings.pod.statsBarCoverTextureDesc') }}
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="stats-bar-cover-texture"
+              v-model="statsBarCoverTexture"
+              type="checkbox"
+              name="stats-bar-cover-texture"
+            />
+            <label for="stats-bar-cover-texture"></label>
+          </div>
+        </div>
+      </div>
+
       <!-- [§12] 已删「代理」+「Real IP」段：原为网易云 API 走代理 / 伪装 IP 绕区域限制；
            本应用播客 RSS 走主进程直连、下载走 Node 原生 https(Clash TUN 路由)，不依赖此设置。
            底层 proxy/realIP 配置逻辑保留(dormant)、仅移除 UI 配置项。 -->
@@ -1508,6 +1530,18 @@ export default {
       set(value) {
         this.$store.commit('updateSettings', {
           key: 'nyancatStyle',
+          value,
+        });
+      },
+    },
+    statsBarCoverTexture: {
+      get() {
+        if (this.settings.statsBarCoverTexture === undefined) return false;
+        return this.settings.statsBarCoverTexture;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'statsBarCoverTexture',
           value,
         });
       },

@@ -282,6 +282,8 @@ export default {
       appLogDesc: '出問題時點開看日誌檔案，便於排查（也可發給開發者定位）。',
       openLogFolder: '開啟日誌資料夾',
       nyancatStyle: '進度條彩虹貓樣式',
+      statsBarCoverTexture: '統計條封面紋理',
+      statsBarCoverTextureDesc: '使用節目的封面色彩產生收聽統計條紋理。',
       shortcut: '快捷鍵',
       shortcutFn: '功能',
       shortcutKey: '快捷鍵',
