@@ -61,16 +61,11 @@
             v-if="barTexture(item)"
             class="bar-texture"
             :class="{ 'bar-texture-ready': barTexture(item).ready }"
-            :style="barTextureStyle(item)"
             aria-hidden="true"
           >
             <span
               class="bar-texture-fill"
               :style="barTextureFillStyle(item)"
-            ></span>
-            <span
-              class="bar-texture-bridge"
-              :style="barTextureBridgeStyle(item)"
             ></span>
           </span>
           <!-- [点击区收窄] 只封面可点跳转，进度条空白区不可点 -->
@@ -81,6 +76,15 @@
             @load="onStatsCoverLoad(item, $event)"
             @click.native="goPodcast(item)"
           />
+          <span
+            v-if="barTexture(item)"
+            class="bar-texture-bridge-overlay"
+            :class="{
+              'bar-texture-bridge-ready': barTexture(item).ready,
+            }"
+            :style="barTextureBridgeStyle(item)"
+            aria-hidden="true"
+          ></span>
         </div>
         <!-- [点击区收窄] 名字/时长区可点跳转 -->
         <!-- [文字渐隐·与进度条分开] opacity 只挂在文字(label)上 → 幽灵行只文字淡出，
@@ -231,15 +235,6 @@ export default {
       }
       return entry;
     },
-    barTextureStyle(item) {
-      const entry = this.barTexture(item);
-      return entry
-        ? {
-            '--stats-texture-bridge-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeWidth}px`,
-            '--stats-texture-bridge-overlap': `${STATS_BAR_TEXTURE_CONFIG.bridgeOverlap}px`,
-          }
-        : {};
-    },
     barTextureFillStyle(item) {
       const entry = this.barTexture(item);
       return entry ? { backgroundImage: `url("${entry.value.fillUrl}")` } : {};
@@ -247,7 +242,11 @@ export default {
     barTextureBridgeStyle(item) {
       const entry = this.barTexture(item);
       return entry
-        ? { backgroundImage: `url("${entry.value.bridgeUrl}")` }
+        ? {
+            backgroundImage: `url("${entry.value.bridgeUrl}")`,
+            '--stats-texture-bridge-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeWidth}px`,
+            '--stats-texture-bridge-cover-ingress': `${STATS_BAR_TEXTURE_CONFIG.bridgeCoverIngress}px`,
+          }
         : {};
     },
     hasCurrentStatsTexture(item, generation) {
@@ -975,8 +974,7 @@ export default {
       opacity: 0;
       transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
 
-      .bar-texture-fill,
-      .bar-texture-bridge {
+      .bar-texture-fill {
         position: absolute;
         top: 0;
         bottom: 0;
@@ -989,14 +987,26 @@ export default {
         right: 0;
         left: 0;
       }
-
-      .bar-texture-bridge {
-        z-index: 1;
-        right: calc(40px - var(--stats-texture-bridge-overlap));
-        width: var(--stats-texture-bridge-width);
-      }
     }
     .bar-texture-ready {
+      opacity: 1;
+    }
+    // V4 bridge is a sibling above the real thumb, so its final transparent
+    // columns can actually fade into the cover instead of sitting underneath.
+    .bar-texture-bridge-overlay {
+      position: absolute;
+      z-index: 2;
+      top: 0;
+      bottom: 0;
+      right: calc(40px - var(--stats-texture-bridge-cover-ingress));
+      width: var(--stats-texture-bridge-width);
+      pointer-events: none;
+      opacity: 0;
+      background-repeat: no-repeat;
+      background-size: 100% 100%;
+      transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .bar-texture-bridge-ready {
       opacity: 1;
     }
   }
@@ -1050,6 +1060,9 @@ export default {
     transition-duration: 0ms;
   }
   .stat-row .bar-texture {
+    transition-duration: 0ms;
+  }
+  .stat-row .bar-texture-bridge-overlay {
     transition-duration: 0ms;
   }
 }

@@ -182,17 +182,14 @@ async function main() {
     );
     assert.ok(first.width >= 2 && first.width <= 4);
     assert.ok(first.height >= 40 && first.height <= 64);
-    assert.ok(first.bridge.width >= 24 && first.bridge.width <= 32);
+    assert.strictEqual(
+      first.bridge.width,
+      texture.STATS_BAR_TEXTURE_CONFIG.bridgeWidth,
+      'bridge width follows the versioned texture configuration'
+    );
     assert.ok(first.bridge.height >= 40 && first.bridge.height <= 64);
     for (let index = 3; index < first.data.length; index += 4) {
       assert.strictEqual(first.data[index], 255, 'texture output is opaque');
-    }
-    for (let index = 3; index < first.bridge.data.length; index += 4) {
-      assert.strictEqual(
-        first.bridge.data[index],
-        255,
-        'bridge output is opaque'
-      );
     }
     // Direction contract: output(x, y) = coverSample(y). A source Y sample
     // must fill a whole output row, never become a left-to-right colour column.
@@ -255,6 +252,105 @@ async function main() {
       'a bright logo keeps influence instead of collapsing the texture to black'
     );
 
+    const darkWithOneRedPixel = makeImageData(64, 64, (x, y) => {
+      if (x === 31 && y === 31) return [232, 36, 44];
+      return [36, 36, 36];
+    });
+    const darkWithoutRedPixel = makeImageData(64, 64, () => [36, 36, 36]);
+    const oneRedTexture = texture.buildStatsBarTexturePixels(
+      darkWithOneRedPixel,
+      { seed: 'one-red-pixel' }
+    );
+    const noRedTexture = texture.buildStatsBarTexturePixels(
+      darkWithoutRedPixel,
+      { seed: 'no-red-pixel' }
+    );
+    const oneRedDelta = Math.max(
+      ...Array.from(oneRedTexture.data, (value, index) =>
+        Math.abs(value - noRedTexture.data[index])
+      )
+    );
+    assert.ok(
+      oneRedDelta <= 8,
+      'one red outlier pixel cannot paint a visible red band'
+    );
+
+    const thinRedLine = makeImageData(64, 64, (x, y) => {
+      if (x < 2) return [232, 36, 44];
+      return y < 32 ? [72, 72, 72] : [88, 88, 88];
+    });
+    const thinRedTexture = texture.buildStatsBarTexturePixels(thinRedLine, {
+      seed: 'thin-red-line',
+    });
+    Array.from({ length: thinRedTexture.height }, (_, y) =>
+      rgbAt(thinRedTexture, 0, y)
+    ).forEach(rgb => {
+      assert.ok(
+        rgb[0] - Math.max(rgb[1], rgb[2]) < 48,
+        'a one-to-two pixel red edge cannot become a whole-row accent'
+      );
+    });
+
+    const redLogo = makeImageData(64, 64, (x, y) => {
+      if (x >= 18 && x < 46 && y >= 20 && y < 44) return [224, 42, 46];
+      return [44, 44, 44];
+    });
+    const redLogoTexture = texture.buildStatsBarTexturePixels(redLogo, {
+      seed: 'red-logo',
+    });
+    const redLogoBand = rgbAt(
+      redLogoTexture,
+      0,
+      Math.floor(redLogoTexture.height / 2)
+    );
+    assert.ok(
+      redLogoBand[0] > redLogoBand[1] + 36 &&
+        redLogoBand[0] > redLogoBand[2] + 36,
+      'a red logo with meaningful row coverage still affects its band'
+    );
+
+    const accentBase = {
+      isNeutral: false,
+      saturation: 0.9,
+      luminance: 0.45,
+    };
+    const accentLow = texture.statsBarTextureAccentMix(
+      Object.assign({ coverage: 0.05 }, accentBase)
+    );
+    const accentMid = texture.statsBarTextureAccentMix(
+      Object.assign({ coverage: 0.14 }, accentBase)
+    );
+    const accentHigh = texture.statsBarTextureAccentMix(
+      Object.assign({ coverage: 0.28 }, accentBase)
+    );
+    assert.ok(
+      accentLow > 0 && accentLow < accentMid && accentMid < accentHigh,
+      'accent mixing increases continuously with cluster coverage'
+    );
+
+    const outlierPalette =
+      texture.analyseStatsBarTexturePalette(darkWithOneRedPixel);
+    const plainPalette =
+      texture.analyseStatsBarTexturePalette(darkWithoutRedPixel);
+    const outlierAccent = [
+      texture.linearToSrgbByte(outlierPalette.accent.r),
+      texture.linearToSrgbByte(outlierPalette.accent.g),
+      texture.linearToSrgbByte(outlierPalette.accent.b),
+    ];
+    const plainAccent = [
+      texture.linearToSrgbByte(plainPalette.accent.r),
+      texture.linearToSrgbByte(plainPalette.accent.g),
+      texture.linearToSrgbByte(plainPalette.accent.b),
+    ];
+    assert.ok(
+      Math.max(
+        ...outlierAccent.map((value, index) =>
+          Math.abs(value - plainAccent[index])
+        )
+      ) <= 4,
+      'global palette accent cannot be selected from one outlier pixel'
+    );
+
     const edgeNeutralInteriorColor = makeImageData(64, 64, (x, y) => {
       if (x < 6) return [64, 64, 64];
       if (y < 21) return [220, 65, 58];
@@ -306,10 +402,47 @@ async function main() {
         'bridge left edge matches the fill band'
       );
       assert.deepStrictEqual(
-        rgbAt(textureA.bridge, textureA.bridge.width - 1, y),
+        rgbAt(
+          textureA.bridge,
+          texture.STATS_BAR_TEXTURE_CONFIG.bridgeOuterWidth - 1,
+          y
+        ),
         [36, 36, 36],
-        'bridge right edge matches the cover left edge'
+        'opaque bridge edge reaches the cover left edge colour'
       );
+      const alpha = Array.from(
+        { length: texture.STATS_BAR_TEXTURE_CONFIG.bridgeCoverIngress },
+        (_, index) =>
+          textureA.bridge.data[
+            (y * textureA.bridge.width +
+              texture.STATS_BAR_TEXTURE_CONFIG.bridgeOuterWidth +
+              index) *
+              4 +
+              3
+          ]
+      );
+      assert.strictEqual(
+        alpha[alpha.length - 1],
+        0,
+        'bridge fully reveals the real cover at its final ingress column'
+      );
+      alpha.slice(1).forEach((value, index) => {
+        assert.ok(
+          value <= alpha[index] && alpha[index] - value < 64,
+          'cover ingress alpha fades down smoothly without a hard seam'
+        );
+      });
+      for (
+        let x = 0;
+        x < texture.STATS_BAR_TEXTURE_CONFIG.bridgeOuterWidth;
+        x += 1
+      ) {
+        assert.strictEqual(
+          textureA.bridge.data[(y * textureA.bridge.width + x) * 4 + 3],
+          255,
+          'the bridge stays opaque before it crosses into the cover'
+        );
+      }
     }
     assert.deepStrictEqual(
       Array.from(first.data),
@@ -343,7 +476,7 @@ async function main() {
     );
     assert.ok(
       texture.isStatsBarTextureValue(textureValue),
-      'V3 cache values require both fill and bridge PNG data URLs'
+      'V4 cache values require both fill and bridge PNG data URLs'
     );
     assert.ok(textureValue.fillUrl.indexOf('data:image/png') === 0);
     assert.ok(textureValue.bridgeUrl.indexOf('data:image/png') === 0);
@@ -351,13 +484,22 @@ async function main() {
     assert.strictEqual(
       texture.isStatsBarTextureValue('data:image/png;base64,legacy'),
       false,
-      'legacy one-URL cache entries cannot hit V3'
+      'legacy one-URL cache entries cannot hit V4'
+    );
+    assert.strictEqual(
+      texture.isStatsBarTextureValue({
+        version: 3,
+        fillUrl: textureValue.fillUrl,
+        bridgeUrl: textureValue.bridgeUrl,
+      }),
+      false,
+      'V3 two-texture entries cannot bypass the V4 cache contract'
     );
     assert.ok(
       texture
         .statsBarTextureCacheKey('https://cover.example/a.png')
-        .includes(':v3:'),
-      'cache key is versioned with the V3 texture contract'
+        .includes(':v4:'),
+      'cache key is versioned with the V4 texture contract'
     );
 
     const idle = [];
@@ -549,12 +691,32 @@ async function main() {
     assert.ok(statsSource.includes('@load="onStatsCoverLoad(item, $event)"'));
     assert.ok(statsSource.includes('isStatsBarTextureValue('));
     assert.ok(statsSource.includes('bar-texture-fill'));
-    assert.ok(statsSource.includes('bar-texture-bridge'));
+    assert.ok(statsSource.includes('bar-texture-bridge-overlay'));
     assert.ok(
       statsSource.includes(
-        'right: calc(40px - var(--stats-texture-bridge-overlap))'
+        'right: calc(40px - var(--stats-texture-bridge-cover-ingress))'
       ),
-      'bridge is placed below and slightly under the fixed 40px cover'
+      'bridge overlay spans from the bar into the fixed 40px cover'
+    );
+    assert.ok(
+      statsSource.includes('.bar-texture-bridge-overlay') &&
+        statsSource.includes('z-index: 2') &&
+        statsSource.includes('pointer-events: none'),
+      'bridge is a non-interactive sibling above the cover'
+    );
+    assert.ok(
+      statsSource.indexOf('class="thumb"') <
+        statsSource.indexOf('class="bar-texture-bridge-overlay"'),
+      'the bridge is emitted after the real cover rather than nested below it'
+    );
+    assert.ok(
+      (statsSource.match(/barTexture\(item\)\.ready/g) || []).length >= 2,
+      'fill and bridge share one ready flag so they fade in together'
+    );
+    assert.ok(
+      !statsSource.includes('draggable="false"') &&
+        !statsSource.includes('-webkit-user-drag: none'),
+      'the real cover keeps native drag behaviour'
     );
     assert.ok(statsSource.includes('transition: opacity 130ms'));
     assert.ok(statsSource.includes('transition-duration: 0ms'));

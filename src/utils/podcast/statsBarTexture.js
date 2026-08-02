@@ -3,9 +3,9 @@ import { peekTinyCover } from '@/utils/podcast/coverHalo';
 
 // The texture is deliberately tiny. It is a visual fill for the stats bar, not
 // a second cover image, so keeping it in a bounded in-memory cache is enough.
-// V3 parameters live here so visual tuning cannot leak into the page runtime.
+// V4 parameters live here so visual tuning cannot leak into the page runtime.
 export const STATS_BAR_TEXTURE_CONFIG = Object.freeze({
-  version: 3,
+  version: 4,
   fillWidth: 4,
   fillHeight: 64,
   analysisMaxDimension: 64,
@@ -22,6 +22,13 @@ export const STATS_BAR_TEXTURE_CONFIG = Object.freeze({
   rowBaseWeight: 0.45,
   rowMidtoneWeight: 0.45,
   rowSaturationWeight: 0.55,
+  colorClusterHueBins: 18,
+  colorClusterLightnessBins: 4,
+  colorClusterNeutralSaturation: 0.12,
+  rowAccentMinCoverage: 0.04,
+  globalClusterMinCoverage: 0.012,
+  accentCoverageFull: 0.28,
+  accentMinSaturation: 0.16,
   accentSaturationScoreWeight: 0.78,
   accentLuminanceScoreWeight: 0.22,
   accentMixMax: 0.14,
@@ -32,8 +39,10 @@ export const STATS_BAR_TEXTURE_CONFIG = Object.freeze({
   lowVarianceMix: 0.12,
   paletteAccentFlowMix: 0.32,
   edgeSampleWidth: 2,
-  bridgeWidth: 28,
-  bridgeOverlap: 5,
+  bridgeOuterWidth: 24,
+  bridgeCoverIngress: 8,
+  bridgeWidth: 32,
+  bridgeIngressSourceWidth: 8,
   bridgeWobble: 3,
   bridgePrimaryFrequency: 0.43,
   bridgePrimaryAmplitude: 2,
@@ -154,26 +163,23 @@ function linearToRgb(sample) {
   };
 }
 
-function rgbSaturation(rgb) {
-  const max = Math.max(rgb.r, rgb.g, rgb.b) / 255;
-  const min = Math.min(rgb.r, rgb.g, rgb.b) / 255;
-  return max ? (max - min) / max : 0;
-}
-
 function toLinearSample(data, offset) {
   const rgb = {
     r: data[offset],
     g: data[offset + 1],
     b: data[offset + 2],
   };
+  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
   const sample = {
     r: srgbByteToLinear(rgb.r),
     g: srgbByteToLinear(rgb.g),
     b: srgbByteToLinear(rgb.b),
     alpha: data[offset + 3] / 255,
+    hue: hsl[0],
+    lightness: hsl[2],
   };
   sample.luminance = linearLuminance(sample);
-  sample.saturation = rgbSaturation(rgb);
+  sample.saturation = clamp(hsl[1], 0, 1);
   return sample;
 }
 
@@ -204,6 +210,115 @@ function averageLinear(samples, weightFor) {
   });
   if (!total) return null;
   return { r: r / total, g: g / total, b: b / total };
+}
+
+function clusterKeyForSample(sample) {
+  const config = STATS_BAR_TEXTURE_CONFIG;
+  const lightnessBin = clamp(
+    Math.floor(sample.lightness * config.colorClusterLightnessBins),
+    0,
+    config.colorClusterLightnessBins - 1
+  );
+  if (sample.saturation < config.colorClusterNeutralSaturation) {
+    return `neutral:${lightnessBin}`;
+  }
+  const hueBin = clamp(
+    Math.floor(sample.hue * config.colorClusterHueBins),
+    0,
+    config.colorClusterHueBins - 1
+  );
+  return `colour:${hueBin}:${lightnessBin}`;
+}
+
+// V4.1 never promotes one vivid pixel to a whole stats band. The cluster
+// coverage is calculated from source pixels that survived the robust trim.
+export function clusterStatsBarTextureSamples(samples) {
+  const buckets = new Map();
+  let totalWeight = 0;
+  (samples || []).forEach(sample => {
+    if (!sample || !sample.alpha) return;
+    const weight = Math.max(0, sample.alpha);
+    if (!weight) return;
+    const key = clusterKeyForSample(sample);
+    const bucket = buckets.get(key) || {
+      key,
+      count: 0,
+      weight: 0,
+      r: 0,
+      g: 0,
+      b: 0,
+    };
+    bucket.count += 1;
+    bucket.weight += weight;
+    bucket.r += sample.r * weight;
+    bucket.g += sample.g * weight;
+    bucket.b += sample.b * weight;
+    buckets.set(key, bucket);
+    totalWeight += weight;
+  });
+  if (!totalWeight) return [];
+  return Array.from(buckets.values()).map(bucket => {
+    const color = {
+      r: bucket.r / bucket.weight,
+      g: bucket.g / bucket.weight,
+      b: bucket.b / bucket.weight,
+    };
+    const rgb = linearToRgb(color);
+    const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+    return {
+      key: bucket.key,
+      count: bucket.count,
+      coverage: bucket.weight / totalWeight,
+      color,
+      saturation: clamp(hsl[1], 0, 1),
+      luminance: linearLuminance(color),
+      isNeutral: bucket.key.indexOf('neutral:') === 0,
+    };
+  });
+}
+
+function accentQuality(cluster) {
+  return clamp(
+    cluster.saturation * STATS_BAR_TEXTURE_CONFIG.accentSaturationScoreWeight +
+      Math.sqrt(cluster.luminance) *
+        STATS_BAR_TEXTURE_CONFIG.accentLuminanceScoreWeight,
+    0,
+    1
+  );
+}
+
+function pickAccentCluster(clusters, minCoverage) {
+  let selected = null;
+  (clusters || []).forEach(cluster => {
+    if (
+      !cluster ||
+      cluster.isNeutral ||
+      cluster.coverage < minCoverage ||
+      cluster.saturation < STATS_BAR_TEXTURE_CONFIG.accentMinSaturation
+    ) {
+      return;
+    }
+    const score = cluster.coverage * accentQuality(cluster);
+    if (!selected || score > selected.score) {
+      selected = { cluster, score };
+    }
+  });
+  return selected && selected.cluster;
+}
+
+export function statsBarTextureAccentMix(cluster, minCoverage) {
+  if (!cluster || cluster.isNeutral) return 0;
+  const floor =
+    minCoverage == null
+      ? STATS_BAR_TEXTURE_CONFIG.rowAccentMinCoverage
+      : minCoverage;
+  const coverage = smoothstep(
+    (cluster.coverage - floor) /
+      Math.max(0.001, STATS_BAR_TEXTURE_CONFIG.accentCoverageFull - floor)
+  );
+  return (
+    STATS_BAR_TEXTURE_CONFIG.accentMixMax * coverage * accentQuality(cluster)
+  );
 }
 
 function tuneColor(sample) {
@@ -249,7 +364,8 @@ function robustSourceRow(imageData, y) {
     start + 1,
     Math.ceil(ordered.length * (1 - STATS_BAR_TEXTURE_CONFIG.trimLightRatio))
   );
-  const main = averageLinear(ordered.slice(start, end), sample => {
+  const retained = ordered.slice(start, end);
+  const main = averageLinear(retained, sample => {
     const midtone = 1 - Math.min(1, Math.abs(sample.luminance - 0.48) / 0.48);
     return (
       sample.alpha *
@@ -258,25 +374,21 @@ function robustSourceRow(imageData, y) {
         sample.saturation * STATS_BAR_TEXTURE_CONFIG.rowSaturationWeight)
     );
   }) || { r: 0, g: 0, b: 0 };
-  const accent = samples.reduce((best, sample) => {
-    const score =
-      sample.saturation * STATS_BAR_TEXTURE_CONFIG.accentSaturationScoreWeight +
-      Math.sqrt(sample.luminance) *
-        STATS_BAR_TEXTURE_CONFIG.accentLuminanceScoreWeight;
-    return !best || score > best.score ? { sample, score } : best;
-  }, null);
+  // Only the robustly retained pixels can contribute an accent. A pixel that
+  // the main estimate rejected as an extreme must not sneak back in as colour.
+  const accent = pickAccentCluster(
+    clusterStatsBarTextureSamples(retained),
+    STATS_BAR_TEXTURE_CONFIG.rowAccentMinCoverage
+  );
   if (!accent) return main;
-  const accentMix =
-    STATS_BAR_TEXTURE_CONFIG.accentMixMax *
-    clamp(
-      accent.sample.saturation *
-        STATS_BAR_TEXTURE_CONFIG.accentMixSaturationWeight +
-        accent.sample.luminance *
-          STATS_BAR_TEXTURE_CONFIG.accentMixLuminanceWeight,
-      0,
-      1
-    );
-  return mixLinear(main, accent.sample, accentMix);
+  return mixLinear(
+    main,
+    accent.color,
+    statsBarTextureAccentMix(
+      accent,
+      STATS_BAR_TEXTURE_CONFIG.rowAccentMinCoverage
+    )
+  );
 }
 
 function sourceYForOutputRow(sourceHeight, index, outputHeight) {
@@ -320,7 +432,7 @@ function squaredDistance(first, second) {
   );
 }
 
-function analysePalette(imageData) {
+export function analyseStatsBarTexturePalette(imageData) {
   const samples = [];
   for (let index = 0; index < imageData.width * imageData.height; index += 1) {
     const sample = toLinearSample(imageData.data, index * 4);
@@ -331,32 +443,39 @@ function analysePalette(imageData) {
     g: 0,
     b: 0,
   };
-  let secondary = mean;
-  let accent = mean;
-  let secondaryDistance = -1;
-  let accentScore = -1;
   let variance = 0;
   samples.forEach(sample => {
-    const distance = squaredDistance(sample, mean);
-    variance += distance;
-    if (distance > secondaryDistance) {
-      secondary = sample;
-      secondaryDistance = distance;
-    }
+    variance += squaredDistance(sample, mean);
+  });
+  const clusters = clusterStatsBarTextureSamples(samples);
+  const eligible = clusters.filter(
+    cluster =>
+      cluster.coverage >= STATS_BAR_TEXTURE_CONFIG.globalClusterMinCoverage
+  );
+  const primaryCluster = eligible
+    .slice()
+    .sort((first, second) => second.coverage - first.coverage)[0];
+  const primary = (primaryCluster && primaryCluster.color) || mean;
+  let secondary = primary;
+  let secondaryScore = -1;
+  eligible.forEach(cluster => {
     const score =
-      sample.saturation * STATS_BAR_TEXTURE_CONFIG.accentSaturationScoreWeight +
-      Math.sqrt(sample.luminance) *
-        STATS_BAR_TEXTURE_CONFIG.accentLuminanceScoreWeight;
-    if (score > accentScore) {
-      accent = sample;
-      accentScore = score;
+      squaredDistance(cluster.color, primary) * Math.sqrt(cluster.coverage);
+    if (score > secondaryScore) {
+      secondary = cluster.color;
+      secondaryScore = score;
     }
   });
+  const accentCluster = pickAccentCluster(
+    eligible,
+    STATS_BAR_TEXTURE_CONFIG.globalClusterMinCoverage
+  );
   return {
     mean,
     secondary,
-    accent,
+    accent: (accentCluster && accentCluster.color) || primary,
     variance: samples.length ? variance / samples.length : 0,
+    clusters,
   };
 }
 
@@ -412,6 +531,35 @@ function readEdgeRows(imageData, sampleCount) {
   return rows;
 }
 
+function readIngressRows(imageData, sampleCount) {
+  const rows = [];
+  const columns = STATS_BAR_TEXTURE_CONFIG.bridgeCoverIngress;
+  const sourceWidth = Math.min(
+    imageData.width,
+    STATS_BAR_TEXTURE_CONFIG.bridgeIngressSourceWidth
+  );
+  for (let index = 0; index < sampleCount; index += 1) {
+    const y = sourceYForOutputRow(imageData.height, index, sampleCount);
+    const row = [];
+    for (let column = 0; column < columns; column += 1) {
+      const sourceX = clamp(
+        Math.floor(((column + 0.5) * sourceWidth) / columns),
+        0,
+        imageData.width - 1
+      );
+      const sample = toLinearSample(
+        imageData.data,
+        (y * imageData.width + sourceX) * 4
+      );
+      row.push(
+        linearToRgb(sample.alpha ? sample : { r: 0, g: 0, b: 0, alpha: 1 })
+      );
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 function stableHash(value) {
   let hash = 2166136261;
   const text = String(value || 'stats-bar-texture');
@@ -427,8 +575,10 @@ function smoothstep(value) {
   return progress * progress * (3 - 2 * progress);
 }
 
-function buildBridgePixels(fillRows, edgeRows, seed) {
+function buildBridgePixels(fillRows, edgeRows, ingressRows, seed) {
   const width = STATS_BAR_TEXTURE_CONFIG.bridgeWidth;
+  const outerWidth = STATS_BAR_TEXTURE_CONFIG.bridgeOuterWidth;
+  const ingressWidth = STATS_BAR_TEXTURE_CONFIG.bridgeCoverIngress;
   const height = fillRows.length;
   const data = new Uint8ClampedArray(width * height * 4);
   const hash = stableHash(seed);
@@ -446,24 +596,39 @@ function buildBridgePixels(fillRows, edgeRows, seed) {
       -STATS_BAR_TEXTURE_CONFIG.bridgeWobble,
       STATS_BAR_TEXTURE_CONFIG.bridgeWobble
     );
-    const baseTransitionLength = width - STATS_BAR_TEXTURE_CONFIG.bridgeWobble;
+    const baseTransitionLength =
+      outerWidth - STATS_BAR_TEXTURE_CONFIG.bridgeWobble;
     const transitionLength = clamp(
       baseTransitionLength + wobble,
-      width - STATS_BAR_TEXTURE_CONFIG.bridgeWobble * 2,
-      width
+      outerWidth - STATS_BAR_TEXTURE_CONFIG.bridgeWobble * 2,
+      outerWidth
     );
-    const transitionStart = width - transitionLength;
+    const transitionStart = outerWidth - transitionLength;
     const fill = fillRows[y];
     const edge = edgeRows[y] || fill;
     for (let x = 0; x < width; x += 1) {
-      const progress = smoothstep(
-        (x - transitionStart) / Math.max(1, transitionLength - 1)
-      );
       const offset = (y * width + x) * 4;
-      data[offset] = Math.round(fill.r + (edge.r - fill.r) * progress);
-      data[offset + 1] = Math.round(fill.g + (edge.g - fill.g) * progress);
-      data[offset + 2] = Math.round(fill.b + (edge.b - fill.b) * progress);
-      data[offset + 3] = 255;
+      if (x < outerWidth) {
+        const progress = smoothstep(
+          (x - transitionStart) / Math.max(1, transitionLength - 1)
+        );
+        data[offset] = Math.round(fill.r + (edge.r - fill.r) * progress);
+        data[offset + 1] = Math.round(fill.g + (edge.g - fill.g) * progress);
+        data[offset + 2] = Math.round(fill.b + (edge.b - fill.b) * progress);
+        data[offset + 3] = 255;
+        continue;
+      }
+      const ingressIndex = Math.min(ingressWidth - 1, x - outerWidth);
+      const ingress = (ingressRows[y] && ingressRows[y][ingressIndex]) || edge;
+      const ingressProgress = (ingressIndex + 1) / ingressWidth;
+      const color = mixLinear(edge, ingress, smoothstep(ingressProgress));
+      // The rightmost column is fully transparent. It lets the real cover
+      // take over rather than faking a second, interactive cover image.
+      const alpha = Math.round(255 * (1 - smoothstep(ingressProgress)));
+      data[offset] = Math.round(color.r);
+      data[offset + 1] = Math.round(color.g);
+      data[offset + 2] = Math.round(color.b);
+      data[offset + 3] = alpha;
     }
   }
   return { width, height, data };
@@ -496,7 +661,7 @@ export function buildStatsBarTexturePixels(imageData, options) {
   const height = clamp(opts.height || sampleCount, 40, 64);
   const band = selectStatsBarTextureBand(imageData, height);
   if (!band) return null;
-  const palette = analysePalette(imageData);
+  const palette = analyseStatsBarTexturePalette(imageData);
   const rows = applyLowVarianceCompensation(smoothRows(band.samples), palette);
   const fillRows = rows.map(tuneColor);
   const data = new Uint8ClampedArray(width * height * 4);
@@ -520,6 +685,7 @@ export function buildStatsBarTexturePixels(imageData, options) {
     bridge: buildBridgePixels(
       fillRows,
       readEdgeRows(imageData, height),
+      readIngressRows(imageData, height),
       opts.seed
     ),
   };
