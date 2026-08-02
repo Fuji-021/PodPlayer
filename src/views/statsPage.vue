@@ -63,7 +63,16 @@
             :class="{ 'bar-texture-ready': barTexture(item).ready }"
             :style="barTextureStyle(item)"
             aria-hidden="true"
-          ></span>
+          >
+            <span
+              class="bar-texture-fill"
+              :style="barTextureFillStyle(item)"
+            ></span>
+            <span
+              class="bar-texture-bridge"
+              :style="barTextureBridgeStyle(item)"
+            ></span>
+          </span>
           <!-- [点击区收窄] 只封面可点跳转，进度条空白区不可点 -->
           <PodImage
             class="thumb"
@@ -99,9 +108,11 @@ import {
   withStatsBarMotion,
 } from '@/utils/podcast/statsBarAnimation';
 import {
+  STATS_BAR_TEXTURE_CONFIG,
   cancelStatsBarTextureRequests,
   collectStatsBarTextureResults,
   getStatsBarTexture,
+  isStatsBarTextureValue,
   peekStatsBarTexture,
   shouldPrepareStatsBarTextures,
 } from '@/utils/podcast/statsBarTexture';
@@ -211,12 +222,33 @@ export default {
     },
     barTexture(item) {
       const entry = item && this.barTextures[item.podcastId];
-      if (!entry || entry.url !== item.coverUrl || !entry.value) return null;
+      if (
+        !entry ||
+        entry.url !== item.coverUrl ||
+        !isStatsBarTextureValue(entry.value)
+      ) {
+        return null;
+      }
       return entry;
     },
     barTextureStyle(item) {
       const entry = this.barTexture(item);
-      return entry ? { backgroundImage: `url("${entry.value}")` } : {};
+      return entry
+        ? {
+            '--stats-texture-bridge-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeWidth}px`,
+            '--stats-texture-bridge-overlap': `${STATS_BAR_TEXTURE_CONFIG.bridgeOverlap}px`,
+          }
+        : {};
+    },
+    barTextureFillStyle(item) {
+      const entry = this.barTexture(item);
+      return entry ? { backgroundImage: `url("${entry.value.fillUrl}")` } : {};
+    },
+    barTextureBridgeStyle(item) {
+      const entry = this.barTexture(item);
+      return entry
+        ? { backgroundImage: `url("${entry.value.bridgeUrl}")` }
+        : {};
     },
     hasCurrentStatsTexture(item, generation) {
       if (!this._statsTextureActive || !this.nyancatStyle) return false;
@@ -240,7 +272,7 @@ export default {
       for (let index = 0; index < activeRows.length; index += 1) {
         const item = activeRows[index];
         const texture = peekStatsBarTexture(item.coverUrl);
-        if (!texture) return null;
+        if (!isStatsBarTextureValue(texture)) return null;
         if (!seen.has(item.podcastId)) {
           entries[item.podcastId] = {
             url: item.coverUrl,
@@ -374,7 +406,7 @@ export default {
               ? images[item.podcastId].image
               : null,
           isValid: () => this.hasCurrentStatsTexture(item, generation),
-          options: { token: generation },
+          options: { token: generation, seed: item.coverUrl },
         }).then(value => ({ item, value }))
       );
       Promise.all(requests)
@@ -413,7 +445,7 @@ export default {
       getStatsBarTexture(item.coverUrl, {
         sourceImage: image,
         isValid: () => this.hasCurrentStatsTexture(item, generation),
-        options: { token: generation },
+        options: { token: generation, seed: item.coverUrl },
       })
         .then(value => {
           if (!value || !this.hasCurrentStatsTexture(item, generation)) return;
@@ -940,10 +972,29 @@ export default {
       inset: 0;
       z-index: 0;
       pointer-events: none;
-      background-repeat: repeat-x;
-      background-size: 100% 100%;
       opacity: 0;
       transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
+
+      .bar-texture-fill,
+      .bar-texture-bridge {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        pointer-events: none;
+        background-repeat: no-repeat;
+        background-size: 100% 100%;
+      }
+
+      .bar-texture-fill {
+        right: 0;
+        left: 0;
+      }
+
+      .bar-texture-bridge {
+        z-index: 1;
+        right: calc(40px - var(--stats-texture-bridge-overlap));
+        width: var(--stats-texture-bridge-width);
+      }
     }
     .bar-texture-ready {
       opacity: 1;

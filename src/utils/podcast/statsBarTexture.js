@@ -3,21 +3,52 @@ import { peekTinyCover } from '@/utils/podcast/coverHalo';
 
 // The texture is deliberately tiny. It is a visual fill for the stats bar, not
 // a second cover image, so keeping it in a bounded in-memory cache is enough.
-export const STATS_BAR_TEXTURE_WIDTH = 4;
-export const STATS_BAR_TEXTURE_HEIGHT = 64;
+// V3 parameters live here so visual tuning cannot leak into the page runtime.
+export const STATS_BAR_TEXTURE_CONFIG = Object.freeze({
+  version: 3,
+  fillWidth: 4,
+  fillHeight: 64,
+  analysisMaxDimension: 64,
+  profiles: {
+    soft: 40,
+    balanced: 64,
+    fine: 64,
+  },
+  trimDarkRatio: 0.1,
+  trimLightRatio: 0.05,
+  minReadableLightness: 0.33,
+  maxReadableLightness: 0.8,
+  maxSaturation: 0.9,
+  rowBaseWeight: 0.45,
+  rowMidtoneWeight: 0.45,
+  rowSaturationWeight: 0.55,
+  accentSaturationScoreWeight: 0.78,
+  accentLuminanceScoreWeight: 0.22,
+  accentMixMax: 0.14,
+  accentMixSaturationWeight: 0.85,
+  accentMixLuminanceWeight: 0.15,
+  lowVarianceThreshold: 0.003,
+  paletteVarianceThreshold: 0.008,
+  lowVarianceMix: 0.12,
+  paletteAccentFlowMix: 0.32,
+  edgeSampleWidth: 2,
+  bridgeWidth: 28,
+  bridgeOverlap: 5,
+  bridgeWobble: 3,
+  bridgePrimaryFrequency: 0.43,
+  bridgePrimaryAmplitude: 2,
+  bridgeSecondaryFrequency: 0.12,
+  bridgeSecondaryAmplitude: 1,
+});
 
-export const STATS_BAR_TEXTURE_PROFILES = {
-  soft: 40,
-  balanced: STATS_BAR_TEXTURE_HEIGHT,
-  fine: STATS_BAR_TEXTURE_HEIGHT,
-};
+export const STATS_BAR_TEXTURE_WIDTH = STATS_BAR_TEXTURE_CONFIG.fillWidth;
+export const STATS_BAR_TEXTURE_HEIGHT = STATS_BAR_TEXTURE_CONFIG.fillHeight;
+export const STATS_BAR_TEXTURE_PROFILES = STATS_BAR_TEXTURE_CONFIG.profiles;
 
 export const STATS_BAR_TEXTURE_DEFAULT_PROFILE = 'balanced';
 export const STATS_BAR_TEXTURE_CACHE_MAX = 128;
 export const STATS_BAR_TEXTURE_CONCURRENCY = 2;
 export const STATS_BAR_TEXTURE_QUEUE_MAX = 256;
-
-const LEFT_EDGE_RATIO = 0.08;
 
 export function shouldPrepareStatsBarTextures(nyancatStyle, active) {
   return !!nyancatStyle && !!active;
@@ -31,12 +62,43 @@ function isDataImage(value) {
   return typeof value === 'string' && /^data:image\//i.test(value);
 }
 
+export function statsBarTextureCacheKey(url) {
+  return `stats-bar-texture:v${STATS_BAR_TEXTURE_CONFIG.version}:${String(
+    url || ''
+  )}`;
+}
+
+export function isStatsBarTextureValue(value) {
+  return !!(
+    value &&
+    value.version === STATS_BAR_TEXTURE_CONFIG.version &&
+    isDataImage(value.fillUrl) &&
+    isDataImage(value.bridgeUrl)
+  );
+}
+
 function hasDecodedImage(image) {
   return !!(
     image &&
     (image.naturalWidth || image.width) > 0 &&
     (image.naturalHeight || image.height) > 0
   );
+}
+
+export function srgbByteToLinear(value) {
+  const channel = clamp(value, 0, 255) / 255;
+  return channel <= 0.04045
+    ? channel / 12.92
+    : Math.pow((channel + 0.055) / 1.055, 2.4);
+}
+
+export function linearToSrgbByte(value) {
+  const channel = clamp(value, 0, 1);
+  const srgb =
+    channel <= 0.0031308
+      ? channel * 12.92
+      : 1.055 * Math.pow(channel, 1 / 2.4) - 0.055;
+  return Math.round(clamp(srgb, 0, 1) * 255);
 }
 
 function rgbToHsl(r, g, b) {
@@ -80,57 +142,331 @@ function hslToRgb(h, s, l) {
   ];
 }
 
-function tuneColor(sample) {
-  const hsl = rgbToHsl(sample.r, sample.g, sample.b);
-  const saturation = clamp(hsl[1] * 1.15, 0, 0.92);
-  const lightness = clamp(0.5 + (hsl[2] - 0.5) * 1.08, 0.1, 0.9);
-  const rgb = hslToRgb(hsl[0], saturation, lightness);
+function linearLuminance(sample) {
+  return sample.r * 0.2126 + sample.g * 0.7152 + sample.b * 0.0722;
+}
+
+function linearToRgb(sample) {
   return {
-    r: clamp(rgb[0], 18, 237),
-    g: clamp(rgb[1], 18, 237),
-    b: clamp(rgb[2], 18, 237),
+    r: linearToSrgbByte(sample.r),
+    g: linearToSrgbByte(sample.g),
+    b: linearToSrgbByte(sample.b),
   };
 }
 
-function averageBandRow(data, width, height, center, y, thickness) {
-  const half = Math.floor(thickness / 2);
-  const start = clamp(center - half, 0, width - 1);
-  const end = clamp(center + half, 0, width - 1);
+function rgbSaturation(rgb) {
+  const max = Math.max(rgb.r, rgb.g, rgb.b) / 255;
+  const min = Math.min(rgb.r, rgb.g, rgb.b) / 255;
+  return max ? (max - min) / max : 0;
+}
+
+function toLinearSample(data, offset) {
+  const rgb = {
+    r: data[offset],
+    g: data[offset + 1],
+    b: data[offset + 2],
+  };
+  const sample = {
+    r: srgbByteToLinear(rgb.r),
+    g: srgbByteToLinear(rgb.g),
+    b: srgbByteToLinear(rgb.b),
+    alpha: data[offset + 3] / 255,
+  };
+  sample.luminance = linearLuminance(sample);
+  sample.saturation = rgbSaturation(rgb);
+  return sample;
+}
+
+function mixLinear(first, second, amount) {
+  const mix = clamp(amount, 0, 1);
+  return {
+    r: first.r + (second.r - first.r) * mix,
+    g: first.g + (second.g - first.g) * mix,
+    b: first.b + (second.b - first.b) * mix,
+  };
+}
+
+function averageLinear(samples, weightFor) {
   let r = 0;
   let g = 0;
   let b = 0;
-  let count = 0;
-  for (let x = start; x <= end; x += 1) {
-    const offset = (y * width + x) * 4;
-    r += data[offset];
-    g += data[offset + 1];
-    b += data[offset + 2];
-    count += 1;
-  }
-  return { r: r / count, g: g / count, b: b / count };
+  let total = 0;
+  (samples || []).forEach(sample => {
+    const weight = Math.max(
+      0,
+      weightFor ? weightFor(sample) : sample.alpha || 1
+    );
+    if (!weight) return;
+    r += sample.r * weight;
+    g += sample.g * weight;
+    b += sample.b * weight;
+    total += weight;
+  });
+  if (!total) return null;
+  return { r: r / total, g: g / total, b: b / total };
 }
 
-function readBand(imageData, sampleCount, center, thickness) {
+function tuneColor(sample) {
+  const rgb = linearToRgb(sample);
+  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+  let lightness = hsl[2];
+  if (lightness < STATS_BAR_TEXTURE_CONFIG.minReadableLightness) {
+    lightness = STATS_BAR_TEXTURE_CONFIG.minReadableLightness;
+  } else if (lightness > STATS_BAR_TEXTURE_CONFIG.maxReadableLightness) {
+    lightness = STATS_BAR_TEXTURE_CONFIG.maxReadableLightness;
+  }
+  const saturation = clamp(hsl[1], 0, STATS_BAR_TEXTURE_CONFIG.maxSaturation);
+  const tuned = hslToRgb(hsl[0], saturation, lightness);
+  return {
+    r: tuned[0],
+    g: tuned[1],
+    b: tuned[2],
+  };
+}
+
+function samplesForSourceRow(imageData, y) {
   const samples = [];
-  const height = imageData.height;
-  for (let index = 0; index < sampleCount; index += 1) {
-    const y = clamp(
-      Math.floor(((index + 0.5) * height) / sampleCount),
-      0,
-      height - 1
+  for (let x = 0; x < imageData.width; x += 1) {
+    const sample = toLinearSample(
+      imageData.data,
+      (y * imageData.width + x) * 4
     );
-    samples.push(
-      averageBandRow(
-        imageData.data,
-        imageData.width,
-        height,
-        center,
-        y,
-        thickness
+    if (sample.alpha > 0) samples.push(sample);
+  }
+  return samples;
+}
+
+function robustSourceRow(imageData, y) {
+  const samples = samplesForSourceRow(imageData, y);
+  if (!samples.length) return { r: 0, g: 0, b: 0 };
+  const ordered = samples
+    .slice()
+    .sort((first, second) => first.luminance - second.luminance);
+  const start = Math.floor(
+    ordered.length * STATS_BAR_TEXTURE_CONFIG.trimDarkRatio
+  );
+  const end = Math.max(
+    start + 1,
+    Math.ceil(ordered.length * (1 - STATS_BAR_TEXTURE_CONFIG.trimLightRatio))
+  );
+  const main = averageLinear(ordered.slice(start, end), sample => {
+    const midtone = 1 - Math.min(1, Math.abs(sample.luminance - 0.48) / 0.48);
+    return (
+      sample.alpha *
+      (STATS_BAR_TEXTURE_CONFIG.rowBaseWeight +
+        midtone * STATS_BAR_TEXTURE_CONFIG.rowMidtoneWeight +
+        sample.saturation * STATS_BAR_TEXTURE_CONFIG.rowSaturationWeight)
+    );
+  }) || { r: 0, g: 0, b: 0 };
+  const accent = samples.reduce((best, sample) => {
+    const score =
+      sample.saturation * STATS_BAR_TEXTURE_CONFIG.accentSaturationScoreWeight +
+      Math.sqrt(sample.luminance) *
+        STATS_BAR_TEXTURE_CONFIG.accentLuminanceScoreWeight;
+    return !best || score > best.score ? { sample, score } : best;
+  }, null);
+  if (!accent) return main;
+  const accentMix =
+    STATS_BAR_TEXTURE_CONFIG.accentMixMax *
+    clamp(
+      accent.sample.saturation *
+        STATS_BAR_TEXTURE_CONFIG.accentMixSaturationWeight +
+        accent.sample.luminance *
+          STATS_BAR_TEXTURE_CONFIG.accentMixLuminanceWeight,
+      0,
+      1
+    );
+  return mixLinear(main, accent.sample, accentMix);
+}
+
+function sourceYForOutputRow(sourceHeight, index, outputHeight) {
+  return clamp(
+    Math.floor(((index + 0.5) * sourceHeight) / outputHeight),
+    0,
+    sourceHeight - 1
+  );
+}
+
+function readRobustRows(imageData, sampleCount) {
+  const rows = [];
+  for (let index = 0; index < sampleCount; index += 1) {
+    rows.push(
+      robustSourceRow(
+        imageData,
+        sourceYForOutputRow(imageData.height, index, sampleCount)
       )
     );
   }
-  return samples;
+  return rows;
+}
+
+function smoothRows(rows) {
+  return rows.map((sample, index, source) => {
+    const before = source[Math.max(0, index - 1)];
+    const after = source[Math.min(source.length - 1, index + 1)];
+    return {
+      r: (before.r + sample.r * 2 + after.r) / 4,
+      g: (before.g + sample.g * 2 + after.g) / 4,
+      b: (before.b + sample.b * 2 + after.b) / 4,
+    };
+  });
+}
+
+function squaredDistance(first, second) {
+  return (
+    (first.r - second.r) * (first.r - second.r) +
+    (first.g - second.g) * (first.g - second.g) +
+    (first.b - second.b) * (first.b - second.b)
+  );
+}
+
+function analysePalette(imageData) {
+  const samples = [];
+  for (let index = 0; index < imageData.width * imageData.height; index += 1) {
+    const sample = toLinearSample(imageData.data, index * 4);
+    if (sample.alpha > 0) samples.push(sample);
+  }
+  const mean = averageLinear(samples, sample => sample.alpha) || {
+    r: 0,
+    g: 0,
+    b: 0,
+  };
+  let secondary = mean;
+  let accent = mean;
+  let secondaryDistance = -1;
+  let accentScore = -1;
+  let variance = 0;
+  samples.forEach(sample => {
+    const distance = squaredDistance(sample, mean);
+    variance += distance;
+    if (distance > secondaryDistance) {
+      secondary = sample;
+      secondaryDistance = distance;
+    }
+    const score =
+      sample.saturation * STATS_BAR_TEXTURE_CONFIG.accentSaturationScoreWeight +
+      Math.sqrt(sample.luminance) *
+        STATS_BAR_TEXTURE_CONFIG.accentLuminanceScoreWeight;
+    if (score > accentScore) {
+      accent = sample;
+      accentScore = score;
+    }
+  });
+  return {
+    mean,
+    secondary,
+    accent,
+    variance: samples.length ? variance / samples.length : 0,
+  };
+}
+
+function applyLowVarianceCompensation(rows, palette) {
+  if (!rows.length) return rows;
+  const mean = averageLinear(rows, () => 1) || palette.mean;
+  const rowVariance =
+    rows.reduce((total, row) => total + squaredDistance(row, mean), 0) /
+    rows.length;
+  if (
+    rowVariance > STATS_BAR_TEXTURE_CONFIG.lowVarianceThreshold ||
+    palette.variance < STATS_BAR_TEXTURE_CONFIG.paletteVarianceThreshold
+  ) {
+    return rows;
+  }
+  return rows.map((row, index) => {
+    const progress = rows.length > 1 ? index / (rows.length - 1) : 0;
+    const paletteFlow = mixLinear(
+      palette.mean,
+      palette.secondary,
+      progress * progress * (3 - 2 * progress)
+    );
+    const accentMix =
+      Math.sin(Math.PI * progress) *
+      STATS_BAR_TEXTURE_CONFIG.paletteAccentFlowMix;
+    const target = mixLinear(paletteFlow, palette.accent, accentMix);
+    return mixLinear(row, target, STATS_BAR_TEXTURE_CONFIG.lowVarianceMix);
+  });
+}
+
+function readEdgeRows(imageData, sampleCount) {
+  const rows = [];
+  const edgeWidth = Math.min(
+    imageData.width,
+    STATS_BAR_TEXTURE_CONFIG.edgeSampleWidth
+  );
+  for (let index = 0; index < sampleCount; index += 1) {
+    const y = sourceYForOutputRow(imageData.height, index, sampleCount);
+    const samples = [];
+    for (let x = 0; x < edgeWidth; x += 1) {
+      const sample = toLinearSample(
+        imageData.data,
+        (y * imageData.width + x) * 4
+      );
+      if (sample.alpha > 0) samples.push(sample);
+    }
+    rows.push(
+      linearToRgb(
+        averageLinear(samples, sample => sample.alpha) || { r: 0, g: 0, b: 0 }
+      )
+    );
+  }
+  return rows;
+}
+
+function stableHash(value) {
+  let hash = 2166136261;
+  const text = String(value || 'stats-bar-texture');
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function smoothstep(value) {
+  const progress = clamp(value, 0, 1);
+  return progress * progress * (3 - 2 * progress);
+}
+
+function buildBridgePixels(fillRows, edgeRows, seed) {
+  const width = STATS_BAR_TEXTURE_CONFIG.bridgeWidth;
+  const height = fillRows.length;
+  const data = new Uint8ClampedArray(width * height * 4);
+  const hash = stableHash(seed);
+  const phase = ((hash % 997) / 997) * Math.PI * 2;
+  for (let y = 0; y < height; y += 1) {
+    const wobble = clamp(
+      Math.round(
+        Math.sin(y * STATS_BAR_TEXTURE_CONFIG.bridgePrimaryFrequency + phase) *
+          STATS_BAR_TEXTURE_CONFIG.bridgePrimaryAmplitude +
+          Math.sin(
+            y * STATS_BAR_TEXTURE_CONFIG.bridgeSecondaryFrequency + phase
+          ) *
+            STATS_BAR_TEXTURE_CONFIG.bridgeSecondaryAmplitude
+      ),
+      -STATS_BAR_TEXTURE_CONFIG.bridgeWobble,
+      STATS_BAR_TEXTURE_CONFIG.bridgeWobble
+    );
+    const baseTransitionLength = width - STATS_BAR_TEXTURE_CONFIG.bridgeWobble;
+    const transitionLength = clamp(
+      baseTransitionLength + wobble,
+      width - STATS_BAR_TEXTURE_CONFIG.bridgeWobble * 2,
+      width
+    );
+    const transitionStart = width - transitionLength;
+    const fill = fillRows[y];
+    const edge = edgeRows[y] || fill;
+    for (let x = 0; x < width; x += 1) {
+      const progress = smoothstep(
+        (x - transitionStart) / Math.max(1, transitionLength - 1)
+      );
+      const offset = (y * width + x) * 4;
+      data[offset] = Math.round(fill.r + (edge.r - fill.r) * progress);
+      data[offset + 1] = Math.round(fill.g + (edge.g - fill.g) * progress);
+      data[offset + 2] = Math.round(fill.b + (edge.b - fill.b) * progress);
+      data[offset + 3] = 255;
+    }
+  }
+  return { width, height, data };
 }
 
 export function selectStatsBarTextureBand(imageData, sampleCount) {
@@ -142,16 +478,10 @@ export function selectStatsBarTextureBand(imageData, sampleCount) {
     40,
     STATS_BAR_TEXTURE_HEIGHT
   );
-  const thickness = clamp(Math.round(imageData.width * 0.02), 3, 5);
-  const center = clamp(
-    Math.round((imageData.width - 1) * LEFT_EDGE_RATIO),
-    0,
-    imageData.width - 1
-  );
   return {
-    center,
-    thickness,
-    samples: readBand(imageData, count, center, thickness),
+    center: null,
+    thickness: imageData.width,
+    samples: readRobustRows(imageData, count),
   };
 }
 
@@ -166,21 +496,14 @@ export function buildStatsBarTexturePixels(imageData, options) {
   const height = clamp(opts.height || sampleCount, 40, 64);
   const band = selectStatsBarTextureBand(imageData, height);
   if (!band) return null;
-  const smoothed = band.samples.map((sample, index, source) => {
-    const before = source[Math.max(0, index - 1)];
-    const after = source[Math.min(source.length - 1, index + 1)];
-    return {
-      r: (before.r + sample.r * 2 + after.r) / 4,
-      g: (before.g + sample.g * 2 + after.g) / 4,
-      b: (before.b + sample.b * 2 + after.b) / 4,
-    };
-  });
+  const palette = analysePalette(imageData);
+  const rows = applyLowVarianceCompensation(smoothRows(band.samples), palette);
+  const fillRows = rows.map(tuneColor);
   const data = new Uint8ClampedArray(width * height * 4);
   // Direction contract: output(x, y) = coverSample(y). Each source Y sample
   // becomes one horizontal colour band, so CSS can stretch the texture along
   // X without turning cover colours into vertical columns.
-  smoothed.forEach((sample, y) => {
-    const tuned = tuneColor(sample);
+  fillRows.forEach((tuned, y) => {
     for (let x = 0; x < width; x += 1) {
       const offset = (y * width + x) * 4;
       data[offset] = tuned.r;
@@ -190,10 +513,15 @@ export function buildStatsBarTexturePixels(imageData, options) {
     }
   });
   return {
+    version: STATS_BAR_TEXTURE_CONFIG.version,
     width,
     height,
     data,
-    bandCenter: band.center,
+    bridge: buildBridgePixels(
+      fillRows,
+      readEdgeRows(imageData, height),
+      opts.seed
+    ),
   };
 }
 
@@ -236,10 +564,24 @@ export function statsBarTextureDataUrl(pixels, canvasFactory) {
   }
 }
 
+export function statsBarTextureValueFromPixels(pixels, canvasFactory) {
+  if (!pixels || !pixels.bridge) return null;
+  const fillUrl = statsBarTextureDataUrl(pixels, canvasFactory);
+  const bridgeUrl = statsBarTextureDataUrl(pixels.bridge, canvasFactory);
+  const value = {
+    version: STATS_BAR_TEXTURE_CONFIG.version,
+    fillUrl,
+    bridgeUrl,
+  };
+  return isStatsBarTextureValue(value) ? value : null;
+}
+
 export function createStatsBarTextureFromImage(image, options) {
   if (!hasDecodedImage(image) || typeof document === 'undefined') return null;
   try {
-    const maxDimension = (options && options.sourceMaxDimension) || 192;
+    const maxDimension =
+      (options && options.sourceMaxDimension) ||
+      STATS_BAR_TEXTURE_CONFIG.analysisMaxDimension;
     const sourceWidth = image.naturalWidth || image.width;
     const sourceHeight = image.naturalHeight || image.height;
     const scale = Math.min(
@@ -256,7 +598,7 @@ export function createStatsBarTextureFromImage(image, options) {
       ctx.getImageData(0, 0, width, height),
       options
     );
-    return statsBarTextureDataUrl(pixels);
+    return statsBarTextureValueFromPixels(pixels);
   } catch (e) {
     return null;
   }
@@ -355,7 +697,7 @@ export function createStatsBarTextureScheduler(options) {
     }
     active += 1;
     Promise.resolve()
-      .then(() => sourceFor(task.url, task.sourceImage))
+      .then(() => sourceFor(task.sourceUrl, task.sourceImage))
       .then(source => {
         if (task.isValid && !task.isValid()) return null;
         return source ? render(source, task.options) : null;
@@ -408,6 +750,7 @@ export function createStatsBarTextureScheduler(options) {
       resolve,
       promise,
       sourceImage: optsForTask.sourceImage || null,
+      sourceUrl: optsForTask.sourceUrl || key,
       isValid: optsForTask.isValid || null,
       options: optsForTask.options || null,
     };
@@ -455,11 +798,18 @@ export function createStatsBarTextureScheduler(options) {
 const defaultScheduler = createStatsBarTextureScheduler();
 
 export function getStatsBarTexture(url, options) {
-  return defaultScheduler.request(url, options);
+  const sourceUrl = String(url || '');
+  return defaultScheduler.request(
+    statsBarTextureCacheKey(sourceUrl),
+    Object.assign({}, options, {
+      sourceUrl,
+      seed: (options && options.seed) || sourceUrl,
+    })
+  );
 }
 
 export function peekStatsBarTexture(url) {
-  return defaultScheduler.peek(url);
+  return defaultScheduler.peek(statsBarTextureCacheKey(url));
 }
 
 export function cancelStatsBarTextureRequests(predicate) {
