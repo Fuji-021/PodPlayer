@@ -194,7 +194,11 @@ async function expectTestFailure(managerModule, status, body, code) {
   });
   assert.strictEqual(result.ok, false);
   assert.strictEqual(result.code, code);
-  assert.strictEqual(result.service.status, 'failed');
+  assert.strictEqual(
+    result.service.status,
+    'unconfigured',
+    'a failed candidate test must not persist a failed active service'
+  );
 }
 
 async function main() {
@@ -246,7 +250,13 @@ async function main() {
 
     const httpsCaptures = [];
     const httpCaptures = [];
-    const httpsPlans = [successPlan(), successPlan(), successPlan()];
+    const httpsPlans = [
+      successPlan(),
+      successPlan(),
+      successPlan(),
+      successPlan(),
+      successPlan(),
+    ];
     const httpPlans = [successPlan()];
     const configStore = new MemoryStore();
     const service = managerModule.createAiServiceManager({
@@ -303,6 +313,33 @@ async function main() {
       'status must not leak a credential'
     );
 
+    // Repeating an identical save or save-and-test must preserve availability;
+    // it must never demote a verified active service back to pending.
+    const idempotentSave = service.saveConfig({
+      config: providerConfig('deepseek', {
+        baseUrl: 'https://service.example.test/v1',
+      }),
+    });
+    assert.strictEqual(idempotentSave.ok, true);
+    assert.strictEqual(idempotentSave.service.status, 'available');
+    assert.strictEqual(
+      idempotentSave.service.configFingerprint,
+      verified.service.configFingerprint
+    );
+    const idempotentTest = await service.testConnection({
+      config: providerConfig('deepseek', {
+        baseUrl: 'https://service.example.test/v1',
+      }),
+      requestId: 'repeat-verified-config',
+    });
+    assert.strictEqual(idempotentTest.ok, true);
+    assert.strictEqual(idempotentTest.service.status, 'available');
+    assert.strictEqual(
+      idempotentTest.service.configFingerprint,
+      verified.service.configFingerprint
+    );
+    assert.strictEqual(httpsCaptures.length, 2);
+
     const jsonResult = await service.requestJson({
       requestId: 'summary-request',
       configFingerprint: verified.service.configFingerprint,
@@ -310,7 +347,11 @@ async function main() {
     });
     assert.strictEqual(jsonResult.ok, true);
     assert.deepStrictEqual(jsonResult.data, { ok: true });
-    assert.strictEqual(httpsCaptures.length, 2);
+    assert.strictEqual(
+      httpsCaptures.length,
+      3,
+      'summary/refinement requests may use a save-and-test verified config'
+    );
 
     const changed = service.saveConfig({
       config: providerConfig('deepseek', {
@@ -371,15 +412,21 @@ async function main() {
       scopeCaptureCount,
       'an endpoint mismatch must never create a transport request'
     );
-    const sameServiceNewModel = service.saveConfig({
+    const sameServiceNewModel = await service.testConnection({
       config: providerConfig('deepseek', {
         model: 'another-model',
         baseUrl: 'https://service.example.test/v1/',
       }),
+      requestId: 'same-scope-model-change',
     });
     assert.strictEqual(sameServiceNewModel.ok, true);
     assert.strictEqual(sameServiceNewModel.service.hasKey, true);
-    assert.strictEqual(sameServiceNewModel.service.status, 'pending');
+    assert.strictEqual(
+      sameServiceNewModel.service.status,
+      'available',
+      'changing only the model may reuse the existing scoped credential'
+    );
+    assert.strictEqual(httpsCaptures.length, scopeCaptureCount + 1);
 
     const scopedNewKey = await service.testConnection({
       config: providerConfig('openai', {
@@ -390,7 +437,7 @@ async function main() {
       requestId: 'scope-switch-new-key',
     });
     assert.strictEqual(scopedNewKey.ok, true);
-    assert.strictEqual(httpsCaptures.length, scopeCaptureCount + 1);
+    assert.strictEqual(httpsCaptures.length, scopeCaptureCount + 2);
     assert.strictEqual(
       httpsCaptures[httpsCaptures.length - 1].options.headers.Authorization,
       'Bearer openai-scope-only-smoke-key'
@@ -403,6 +450,152 @@ async function main() {
       baseUrl: 'https://other.example.test/v1',
       authStrategy: 'bearer',
     });
+
+    // Candidate tests must never replace an already verified service until the
+    // candidate itself succeeds. A failed or canceled candidate leaves both
+    // config and ciphertext exactly as they were before the request.
+    const preservedStore = new MemoryStore();
+    const preservedCaptures = [];
+    const preservedService = managerModule.createAiServiceManager({
+      configStore: preservedStore,
+      safeStorage: createSafeStorage(true),
+      transports: {
+        https: createTransport(
+          [successPlan(), errorPlan(401)],
+          preservedCaptures
+        ),
+        http: createTransport([], []),
+      },
+    });
+    const preservedActive = await preservedService.testConnection({
+      config: providerConfig('deepseek'),
+      key: 'preserved-active-key',
+      requestId: 'preserve-active',
+    });
+    assert.strictEqual(preservedActive.ok, true);
+    const preservedBeforeFailure = JSON.stringify(preservedStore.data);
+    const failedCandidate = await preservedService.testConnection({
+      config: providerConfig('openai', {
+        baseUrl: 'https://candidate.example.test/v1',
+      }),
+      key: 'candidate-failed-key',
+      requestId: 'preserve-on-failure',
+    });
+    assert.strictEqual(failedCandidate.ok, false);
+    assert.strictEqual(failedCandidate.code, 'unauthorized');
+    assert.strictEqual(failedCandidate.service.provider, 'deepseek');
+    assert.strictEqual(failedCandidate.service.status, 'available');
+    assert.strictEqual(
+      JSON.stringify(preservedStore.data),
+      preservedBeforeFailure
+    );
+    assert.strictEqual(preservedCaptures.length, 2);
+    assert.ok(
+      !JSON.stringify(failedCandidate).includes('candidate-failed-key')
+    );
+
+    let hangingCandidateRequest = null;
+    const canceledStore = new MemoryStore();
+    const canceledService = managerModule.createAiServiceManager({
+      configStore: canceledStore,
+      safeStorage: createSafeStorage(true),
+      transports: {
+        https: createTransport(
+          [
+            successPlan(),
+            ({ request }) => {
+              hangingCandidateRequest = request;
+            },
+          ],
+          []
+        ),
+        http: createTransport([], []),
+      },
+    });
+    const canceledActive = await canceledService.testConnection({
+      config: providerConfig('deepseek'),
+      key: 'canceled-active-key',
+      requestId: 'cancel-preserve-active',
+    });
+    assert.strictEqual(canceledActive.ok, true);
+    const canceledBefore = JSON.stringify(canceledStore.data);
+    const canceledCandidatePromise = canceledService.testConnection({
+      config: providerConfig('openai', {
+        baseUrl: 'https://canceled-candidate.example.test/v1',
+      }),
+      key: 'canceled-candidate-key',
+      requestId: 'cancel-preserve-candidate',
+    });
+    assert.ok(hangingCandidateRequest);
+    assert.strictEqual(
+      canceledService.cancelRequest('cancel-preserve-candidate'),
+      true
+    );
+    const canceledCandidate = await canceledCandidatePromise;
+    assert.strictEqual(canceledCandidate.ok, false);
+    assert.strictEqual(canceledCandidate.code, 'canceled');
+    assert.strictEqual(canceledCandidate.service.provider, 'deepseek');
+    assert.strictEqual(canceledCandidate.service.status, 'available');
+    assert.strictEqual(JSON.stringify(canceledStore.data), canceledBefore);
+    assert.strictEqual(hangingCandidateRequest.destroyed, true);
+
+    let releaseCandidateResponse = null;
+    const atomicStore = new MemoryStore();
+    const atomicCaptures = [];
+    const atomicService = managerModule.createAiServiceManager({
+      configStore: atomicStore,
+      safeStorage: createSafeStorage(true),
+      transports: {
+        https: createTransport(
+          [
+            successPlan(),
+            ({ onResponse }) => {
+              releaseCandidateResponse = () =>
+                loadResponse(
+                  onResponse,
+                  200,
+                  JSON.stringify({
+                    choices: [{ message: { content: '{"ok":true}' } }],
+                  })
+                );
+            },
+          ],
+          atomicCaptures
+        ),
+        http: createTransport([], []),
+      },
+    });
+    const atomicActive = await atomicService.testConnection({
+      config: providerConfig('deepseek'),
+      key: 'atomic-active-key',
+      requestId: 'atomic-active',
+    });
+    assert.strictEqual(atomicActive.ok, true);
+    const atomicBefore = JSON.stringify(atomicStore.data);
+    const atomicCandidatePromise = atomicService.testConnection({
+      config: providerConfig('openai', {
+        baseUrl: 'https://atomic-candidate.example.test/v1',
+      }),
+      key: 'atomic-candidate-key',
+      requestId: 'atomic-candidate',
+    });
+    assert.ok(releaseCandidateResponse);
+    assert.strictEqual(atomicService.getStatus().service.provider, 'deepseek');
+    assert.strictEqual(atomicService.getStatus().service.status, 'available');
+    assert.strictEqual(JSON.stringify(atomicStore.data), atomicBefore);
+    releaseCandidateResponse();
+    const atomicCandidate = await atomicCandidatePromise;
+    assert.strictEqual(atomicCandidate.ok, true);
+    assert.strictEqual(atomicCandidate.service.provider, 'openai');
+    assert.strictEqual(atomicCandidate.service.status, 'available');
+    assert.strictEqual(atomicCaptures.length, 2);
+    assert.strictEqual(
+      atomicCaptures[1].options.headers.Authorization,
+      'Bearer atomic-candidate-key'
+    );
+    assert.ok(
+      !JSON.stringify(atomicCandidate).includes('atomic-candidate-key')
+    );
 
     // Existing encrypted records without a scope are only migrated against the
     // already-saved configuration, never against the caller's new draft.
@@ -716,7 +909,9 @@ async function main() {
     assert.ok(settingsBridge.includes('delete settings.deepseekKey'));
     assert.ok(!backupSource.includes('aiService'));
     assert.ok(!settingsSource.includes('v-model="deepseekKey"'));
-    assert.ok(settingsSource.includes('测试连接'));
+    assert.ok(settingsSource.includes('保存并测试'));
+    assert.ok(settingsSource.includes('saveAndTestAiService'));
+    assert.ok(!settingsSource.includes('async saveAiService()'));
     process.stdout.write('ai provider settings smoke: PASS\n');
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -474,7 +474,7 @@
               </div>
             </div>
             <div class="description">
-              选择服务、保存密钥并手动测试连接后，才能主动生成本集总结或精修稿。
+              选择服务后保存并测试连接，才能主动生成本集总结或精修稿。
             </div>
           </div>
           <div class="right settings-feature-actions">
@@ -506,8 +506,8 @@
           <div class="settings-ai-panel-intro">
             <div class="title">服务配置</div>
             <div class="description">
-              选择服务后保存 API
-              密钥，再手动测试连接。密钥只加密保存在本机；只有你主动生成总结或精修时才会发送文字稿。
+              选择服务并填写 API
+              密钥后，保存并测试连接。密钥只加密保存在本机；只有你主动生成总结或精修时才会发送文字稿。
             </div>
           </div>
           <div class="settings-advanced-controls settings-ai-controls">
@@ -547,23 +547,16 @@
             <div class="settings-ai-action-row">
               <div class="settings-ai-actions">
                 <button
-                  type="button"
-                  :disabled="aiServiceBusy"
-                  @click="saveAiService"
-                >
-                  保存配置
-                </button>
-                <button
                   class="settings-primary-action"
                   type="button"
                   :disabled="aiServiceBusy && !aiServiceTestRequestId"
                   @click="
                     aiServiceTestRequestId
                       ? cancelAiServiceTest()
-                      : testAiService()
+                      : saveAndTestAiService()
                   "
                 >
-                  {{ aiServiceTestRequestId ? '取消测试' : '测试连接' }}
+                  {{ aiServiceTestRequestId ? '取消测试' : '保存并测试' }}
                 </button>
                 <button
                   v-if="aiServiceCanRemoveKey"
@@ -1070,7 +1063,6 @@ import {
   getAiServiceConfig,
   getAiServiceStatus,
   nextAiRequestId,
-  saveAiServiceConfig,
   deleteAiServiceKey,
   cancelAiServiceRequest,
   testAiServiceConnection,
@@ -1739,7 +1731,7 @@ export default {
       this.aiServiceKeyDraft = '';
       this.aiServiceMessage =
         next.authStrategy === 'none'
-          ? '服务配置已更改，请保存并测试连接'
+          ? '服务配置已更改，请保存并测试'
           : '已切换服务，请填写该服务的 API 密钥';
     },
     formatAiServiceError(result) {
@@ -1767,27 +1759,7 @@ export default {
       if (code === 'desktop-only') return '联网 AI 仅桌面版可用';
       return (result && result.error) || '联网 AI 服务操作失败';
     },
-    async saveAiService() {
-      if (this.aiServiceBusy) return;
-      this.aiServiceBusy = true;
-      try {
-        const result = await saveAiServiceConfig(
-          this.$store,
-          this.aiServiceDraft,
-          this.aiServiceKeyDraft
-        );
-        this.applyAiServiceResult(result, false);
-        if (result && result.ok) {
-          this.aiServiceKeyDraft = '';
-          this.aiServiceMessage = '配置已保存，请测试连接后再生成总结或精修稿';
-        } else {
-          this.aiServiceMessage = this.formatAiServiceError(result);
-        }
-      } finally {
-        this.aiServiceBusy = false;
-      }
-    },
-    async testAiService() {
+    async saveAndTestAiService() {
       if (this.aiServiceBusy) return;
       this.aiServiceBusy = true;
       this.aiServiceTestCanceled = false;
@@ -1801,12 +1773,13 @@ export default {
           this.aiServiceKeyDraft,
           requestId
         );
-        this.applyAiServiceResult(result, false);
         if (this.aiServiceTestCanceled) {
           this.aiServiceMessage = '已取消连接测试';
         } else if (result && result.ok) {
+          this.applyAiServiceResult(result, false);
           this.aiServiceKeyDraft = '';
-          this.aiServiceMessage = '连接测试成功，可用于本集总结和文字稿精修';
+          this.aiServiceMessage =
+            '配置已保存并验证，可用于本集总结和文字稿精修';
         } else {
           this.aiServiceMessage = this.formatAiServiceError(result);
         }

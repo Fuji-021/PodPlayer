@@ -253,6 +253,41 @@ export function createAiServiceManager(options) {
     credentialCache = null;
   }
 
+  function cloneStoredValue(value) {
+    if (value === undefined) return undefined;
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function snapshotStoredState() {
+    return {
+      config: cloneStoredValue(configStore.get(STORE_CONFIG_KEY)),
+      credential: cloneStoredValue(configStore.get(STORE_CREDENTIAL_KEY)),
+    };
+  }
+
+  function sameStoredState(snapshot) {
+    return (
+      JSON.stringify(configStore.get(STORE_CONFIG_KEY)) ===
+        JSON.stringify(snapshot.config) &&
+      JSON.stringify(configStore.get(STORE_CREDENTIAL_KEY)) ===
+        JSON.stringify(snapshot.credential)
+    );
+  }
+
+  function restoreStoredState(snapshot) {
+    if (snapshot.config === undefined) {
+      configStore.delete(STORE_CONFIG_KEY);
+    } else {
+      configStore.set(STORE_CONFIG_KEY, snapshot.config);
+    }
+    if (snapshot.credential === undefined) {
+      configStore.delete(STORE_CREDENTIAL_KEY);
+    } else {
+      configStore.set(STORE_CREDENTIAL_KEY, snapshot.credential);
+    }
+    clearCredentialCache();
+  }
+
   function scopeMismatchError() {
     return createError(
       'credential-scope-mismatch',
@@ -364,7 +399,7 @@ export function createAiServiceManager(options) {
     }
   }
 
-  function writeCredential(key, config) {
+  function createCredentialRecord(key, config) {
     const backend = credentialBackendFor();
     if (!backend) {
       throw createError(
@@ -376,22 +411,116 @@ export function createAiServiceManager(options) {
     try {
       ciphertext = backend.protect(key);
       if (!ciphertext) throw new Error('empty-ciphertext');
-      const record = {
+      return {
         schemaVersion: AI_SERVICE_SCHEMA_VERSION,
         backend: backend.id,
         ciphertext,
         scope: getAiCredentialScope(config),
         updatedAt: now(),
       };
-      configStore.set(STORE_CREDENTIAL_KEY, record);
-      credentialCache = {
-        id: credentialCacheId(record),
-        key,
-      };
     } catch (e) {
+      if (e && e.code) throw e;
       throw createError(
         'safe-storage-failed',
         '无法写入系统凭据保护，已保留原配置'
+      );
+    }
+  }
+
+  function writeCredential(key, config) {
+    const record = createCredentialRecord(key, config);
+    configStore.set(STORE_CREDENTIAL_KEY, record);
+    credentialCache = {
+      id: credentialCacheId(record),
+      key,
+    };
+  }
+
+  function resolveCandidateKey(input, config) {
+    const incomingKey = cleanString(input && input.key);
+    if (config.authStrategy === 'none') {
+      return { key: '', hasIncomingKey: false };
+    }
+    if (incomingKey) return { key: incomingKey, hasIncomingKey: true };
+
+    const record = readCredentialRecord();
+    if (record && !record.scope) {
+      const stored = readStoredConfig();
+      if (!hasStoredConfig() || !hasSameAiCredentialScope(stored, config)) {
+        throw scopeMismatchError();
+      }
+      return {
+        key: readKey(stored, { allowLegacyScopeMigration: true }),
+        hasIncomingKey: false,
+      };
+    }
+    return { key: readKey(config), hasIncomingKey: false };
+  }
+
+  function prepareConnectionCandidate(payload) {
+    const input = payload || {};
+    const config = normalizeAiServiceConfig(input.config || input);
+    resolveOpenAiChatUrl(config.baseUrl);
+    const credential = resolveCandidateKey(input, config);
+    const hasKey = config.authStrategy === 'none' || !!credential.key;
+    if (!isAiServiceReady({ ...config, hasKey })) {
+      throw createError('no-key', '请先填写 API 密钥或选择本地服务');
+    }
+    return {
+      config,
+      key: credential.key,
+      hasIncomingKey: credential.hasIncomingKey,
+      fingerprint: fingerprintFor(config, credential.key),
+    };
+  }
+
+  function commitVerifiedCandidate(candidate, snapshot) {
+    if (!sameStoredState(snapshot)) {
+      throw createError(
+        'configuration-stale',
+        '联网 AI 配置已变更，请重新测试连接'
+      );
+    }
+    const credential = candidate.hasIncomingKey
+      ? createCredentialRecord(candidate.key, candidate.config)
+      : null;
+    const verified = {
+      schemaVersion: AI_SERVICE_SCHEMA_VERSION,
+      provider: candidate.config.provider,
+      model: candidate.config.model,
+      baseUrl: candidate.config.baseUrl,
+      authStrategy: candidate.config.authStrategy,
+      jsonMode: candidate.config.jsonMode,
+      status: 'available',
+      verifiedAt: now(),
+      configFingerprint: candidate.fingerprint,
+      errorCode: '',
+      updatedAt: now(),
+    };
+    try {
+      // Persist a fresh credential before making the matching configuration
+      // available. If either write fails, restore both prior records.
+      if (credential) configStore.set(STORE_CREDENTIAL_KEY, credential);
+      configStore.set(STORE_CONFIG_KEY, verified);
+      if (credential) {
+        credentialCache = {
+          id: credentialCacheId(credential),
+          key: candidate.key,
+        };
+      }
+      return { ok: true, service: publicState(verified, candidate.key) };
+    } catch (error) {
+      try {
+        restoreStoredState(snapshot);
+      } catch (rollbackError) {
+        throw createError(
+          'configuration-rollback-failed',
+          '联网 AI 配置提交失败，且无法自动恢复原配置'
+        );
+      }
+      throw createError(
+        'configuration-commit-failed',
+        '联网 AI 配置提交失败，已保留原配置'
       );
     }
   }
@@ -436,6 +565,10 @@ export function createAiServiceManager(options) {
     if (config.authStrategy === 'none') key = '';
     const hasKey = config.authStrategy === 'none' || !!key;
     const fingerprint = hasKey ? fingerprintFor(config, key) : '';
+    const previous = readStoredConfig();
+    const keepVerified =
+      previous.status === 'available' &&
+      previous.configFingerprint === fingerprint;
     const stored = {
       schemaVersion: AI_SERVICE_SCHEMA_VERSION,
       provider: config.provider,
@@ -443,8 +576,12 @@ export function createAiServiceManager(options) {
       baseUrl: config.baseUrl,
       authStrategy: config.authStrategy,
       jsonMode: config.jsonMode,
-      status: hasKey ? 'pending' : 'unconfigured',
-      verifiedAt: 0,
+      status: hasKey
+        ? keepVerified
+          ? 'available'
+          : 'pending'
+        : 'unconfigured',
+      verifiedAt: keepVerified ? previous.verifiedAt : 0,
       configFingerprint: fingerprint,
       errorCode: '',
       updatedAt: now(),
@@ -696,18 +833,17 @@ export function createAiServiceManager(options) {
 
   async function testConnection(payload) {
     const input = payload || {};
-    const saved = saveConfig({ config: input.config, key: input.key });
-    if (!saved.ok) return saved;
-    const expectedFingerprint = saved.service.configFingerprint;
+    let candidate;
     try {
-      const config = readStoredConfig();
-      const key =
-        config.authStrategy === 'none'
-          ? ''
-          : readKey(config, { allowLegacyScopeMigration: true });
+      candidate = prepareConnectionCandidate(input);
+    } catch (error) {
+      return { ...safeErrorResult(error), service: getStatus().service };
+    }
+    const snapshot = snapshotStoredState();
+    try {
       const response = await requestChat(
-        config,
-        key,
+        candidate.config,
+        candidate.key,
         [
           {
             role: 'system',
@@ -725,58 +861,13 @@ export function createAiServiceManager(options) {
       if (!parsed || parsed.ok !== true) {
         throw createError('invalid-json', 'AI 服务未返回预期的测试结果');
       }
-      const latest = readStoredConfig();
-      const latestKey =
-        latest.authStrategy === 'none'
-          ? ''
-          : readKey(latest, { allowLegacyScopeMigration: true });
-      const latestFingerprint = fingerprintFor(latest, latestKey);
-      if (latestFingerprint !== expectedFingerprint) {
-        return {
-          ok: false,
-          code: 'configuration-stale',
-          error: '联网 AI 配置已变更，请重新测试连接',
-          service: publicState(latest, latestKey),
-        };
-      }
-      const verified = {
-        ...latest,
-        status: 'available',
-        verifiedAt: now(),
-        configFingerprint: latestFingerprint,
-        errorCode: '',
-      };
-      configStore.set(STORE_CONFIG_KEY, verified);
-      return { ok: true, service: publicState(verified, latestKey) };
+      return commitVerifiedCandidate(candidate, snapshot);
     } catch (error) {
-      const current = readStoredConfig();
-      let currentKey = '';
-      try {
-        currentKey =
-          current.authStrategy === 'none'
-            ? ''
-            : readKey(current, { allowLegacyScopeMigration: true });
-      } catch (e) {
-        return { ...safeErrorResult(e), service: getStatus().service };
-      }
-      const fingerprint =
-        current.authStrategy === 'none' || currentKey
-          ? fingerprintFor(current, currentKey)
-          : '';
-      const failed = {
-        ...current,
-        status: fingerprint === expectedFingerprint ? 'failed' : current.status,
-        verifiedAt: 0,
-        configFingerprint: fingerprint,
-        errorCode:
-          fingerprint === expectedFingerprint
-            ? (error && error.code) || 'request-failed'
-            : '',
-      };
-      configStore.set(STORE_CONFIG_KEY, failed);
       return {
         ...safeErrorResult(error),
-        service: publicState(failed, currentKey),
+        // A candidate test never changes the active service on failure,
+        // timeout, or cancellation. The renderer keeps its draft for retry.
+        service: getStatus().service,
       };
     }
   }
