@@ -1,6 +1,5 @@
 <template>
-  <!-- [统计动画] --stat-k = 动画时长倍率：Dev 测试床版=2(慢放观察)，主线/dev-serve=1(不受影响) -->
-  <div class="stats-page" data-selection="ui" :style="{ '--stat-k': animK }">
+  <div class="stats-page" data-selection="ui">
     <!-- [B-38] 顶部：彩虹猫跑步彩蛋（替代火星天）。文案宽度 = 彩虹条长度，末端 nyancat 在跑 -->
     <div class="hero">
       <div class="run-line">
@@ -49,7 +48,10 @@
         v-for="item in visibleList"
         :key="item.podcastId"
         class="stat-row"
-        :style="{ '--stat-bar-duration': item._durationMs + 'ms' }"
+        :style="{
+          '--stat-bar-duration': item.barDuration + 'ms',
+          '--stat-move-duration': item.moveDuration + 'ms',
+        }"
       >
         <div
           class="bar"
@@ -142,11 +144,6 @@ export default {
         it => !this.blockedNames.has((it.title || '').trim())
       );
     },
-    // [统计动画] 动画时长倍率：仅 Dev 测试床构建(VUE_APP_DEV_SEED=true)放慢 2 倍供观察，
-    //   主线/dev-serve 该变量不为 'true' → 1 倍，完全不受影响。
-    animK() {
-      return process.env.VUE_APP_DEV_SEED === 'true' ? 2 : 1;
-    },
   },
   async created() {
     await this.enterWithAnimation();
@@ -201,11 +198,19 @@ export default {
         startW[s.podcastId] = this.barTargetPct(s, sMax);
       });
       const maxWall = fresh.list.length ? fresh.list[0].wallSec : 1;
-      const next = fresh.list.map(it => {
+      const snapshotIndexes = new Map(
+        snap.map((item, index) => [item.podcastId, index])
+      );
+      const next = fresh.list.map((it, newIndex) => {
         const target = this.barTargetPct(it, maxWall);
         // 在快照里→从上次宽度平滑过渡；新条→从 0 长出。
         const start = startW[it.podcastId] != null ? startW[it.podcastId] : 0;
-        return withStatsBarMotion(it, start, target);
+        return withStatsBarMotion(it, start, target, {
+          oldIndex: snapshotIndexes.has(it.podcastId)
+            ? snapshotIndexes.get(it.podcastId)
+            : newIndex,
+          newIndex,
+        });
       });
       this.list = next;
       this.loaded = true;
@@ -283,15 +288,18 @@ export default {
       // prevList 先剔除上一轮还没清完的幽灵，避免叠加 + 污染留存判定
       const prevList = this.list.filter(it => !it._leaving);
       const prev = {};
-      prevList.forEach(it => {
-        prev[it.podcastId] = it;
+      prevList.forEach((it, oldIndex) => {
+        prev[it.podcastId] = { item: it, oldIndex };
       });
-      const next = freshList.map(it => {
-        const p = prev[it.podcastId];
+      const next = freshList.map((it, newIndex) => {
+        const previous = prev[it.podcastId];
+        const p = previous && previous.item;
         const target = this.barTargetPct(it, maxWall);
         return withStatsBarMotion(it, p ? p._w : 0, target, {
           // 留存沿用色，避免闪色；新增条从 0 起。
           colorHsl: p ? p.colorHsl : undefined,
+          oldIndex: p ? previous.oldIndex : newIndex,
+          newIndex,
         });
       });
       // 差集"将被筛掉的节目"(新范围 fresh 里没有)→ 造幽灵行 _leaving、_target=0：保留原 podcastId 作 key
@@ -299,7 +307,15 @@ export default {
       const freshIds = new Set(freshList.map(x => x.podcastId));
       const ghosts = prevList
         .filter(it => !freshIds.has(it.podcastId))
-        .map(g => withStatsBarMotion(g, g._w, 0, { _leaving: true, _op: 1 }));
+        .map((g, ghostIndex) => {
+          const previous = prev[g.podcastId];
+          return withStatsBarMotion(g, g._w, 0, {
+            _leaving: true,
+            _op: 1,
+            oldIndex: previous ? previous.oldIndex : ghostIndex,
+            newIndex: next.length + ghostIndex,
+          });
+        });
       const merged = next.concat(ghosts);
       this.list = merged;
       // [兜底] 取色同步异常不能中断后面的双 rAF 过渡调度 + 幽灵清理定时器注册
@@ -329,11 +345,23 @@ export default {
       //   _animSeq 守卫:连点时旧定时器作废、不误删新一轮列表(连点每次 animateTo 都 _animSeq++)。
       if (ghosts.length) {
         const D = statsBarCleanupDelayMs(ghosts);
-        setTimeout(() => {
+        const removeGhosts = () => {
           if (!isCurrentStatsBarAnimation(myTurn, this._animSeq)) return;
           this.list = this.list.filter(it => !it._leaving);
-        }, D);
+        };
+        if (this.prefersReducedMotion()) {
+          this.$nextTick(removeGhosts);
+        } else {
+          setTimeout(removeGhosts, D);
+        }
       }
+    },
+    prefersReducedMotion() {
+      return (
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      );
     },
     // [B-54] 上次进入时的排行快照（localStorage，按 range 分键），作为下次动画起点
     loadSnapshot(range) {
@@ -579,16 +607,14 @@ export default {
   //   独立层叠上下文反而徒增合成层、提高重绘残留概率)。
   background: var(--color-body-bg);
 }
-.stat-move {
-  transition: transform calc(0.65s * var(--stat-k, 1))
-    cubic-bezier(0.22, 1, 0.36, 1);
+.stat-move,
+.stat-enter-active,
+.stat-row {
+  transition: transform var(--stat-move-duration, 300ms)
+    cubic-bezier(0.16, 1, 0.3, 1);
 }
 /* [统计动画 v1.2] 新增条：不再淡入。时间条"从左长出"由 .bar 的 width 过渡(0→目标宽)驱动，
    整条始终不透明 = 实心条生长；行级仅加「轻微左移→归位」让文字不硬蹦，无 opacity。 */
-.stat-enter-active {
-  transition: transform calc(0.5s * var(--stat-k, 1))
-    cubic-bezier(0.22, 1, 0.36, 1);
-}
 .stat-enter {
   transform: translateX(-12px);
 }
@@ -612,12 +638,9 @@ export default {
   //   padding 属于行盒、被 v1.3 的不透明底色一并涂实 → 行与行无缝全覆盖，细线无处可漏。
   padding-bottom: 14px;
   // [点击区收窄] 整行不再可点(进度条空白处不跳转)，cursor 交给 .thumb(封面)/.label(名字)
-  // [FLIP 保护] .stat-row 自带 transform 过渡：transition-group 给移动中的行附加 .stat-move
-  //   (transition:transform)，transition 简写整体替换、同特异性下后声明的本 .stat-row 会覆盖它，
-  //   故必须自带等效 transform 过渡兜住，否则 FLIP 丢失致留存/新增行瞬时跳位。
+  // .stat-move、.stat-enter-active 与 .stat-row 共用同一条 transform 过渡，避免后声明的
+  // 行级 transition 覆盖 transition-group 的 FLIP 规则。
   //   [进度条不渐隐] opacity 过渡已移到 .label(只文字淡出)，进度条 .bar 只走自身 width 过渡自然伸缩。
-  transition: transform calc(0.65s * var(--stat-k, 1))
-    cubic-bezier(0.22, 1, 0.36, 1);
   // [裁切修 2026-06-26] 去掉原「整行不透明底色 + 2px 同色描边」——它们为盖半透明条而**铺满整行**，
   //   副作用=重排交叉时按整行宽把相邻条裁掉(用户截图"卡片宽度被裁、形状不完整")。
   //   改由「条自带 body-bg 不透明底(见 barColor 双层背景) + 文字自带 body-bg 底」承担覆盖：

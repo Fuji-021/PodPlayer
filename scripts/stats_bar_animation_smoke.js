@@ -42,24 +42,50 @@ async function main() {
       'the early segment must cover more distance than the final segment'
     );
 
-    const grow = animation.withStatsBarMotion({ podcastId: 'grow' }, 12, 48);
+    const grow = animation.withStatsBarMotion({ podcastId: 'grow' }, 12, 48, {
+      oldIndex: 1,
+      newIndex: 4,
+    });
     const shrink = animation.withStatsBarMotion(
       { podcastId: 'shrink' },
       48,
-      12
+      12,
+      { oldIndex: 4, newIndex: 1 }
     );
     assert.strictEqual(grow._w, 12);
     assert.strictEqual(grow._target, 48);
     assert.strictEqual(shrink._w, 48);
     assert.strictEqual(shrink._target, 12);
-    assert.strictEqual(grow._durationMs, shrink._durationMs);
+    assert.strictEqual(grow.barDuration, shrink.barDuration);
+    assert.strictEqual(grow.moveRows, 3);
+    assert.strictEqual(shrink.moveRows, 3);
+    assert.strictEqual(grow.moveDuration, shrink.moveDuration);
+    assert.strictEqual(
+      grow.motionDuration,
+      Math.max(grow.barDuration, grow.moveDuration)
+    );
+
+    assert.strictEqual(animation.statMoveRows(4, 4), 0);
+    assert.strictEqual(animation.statMoveRows(4, 5), 1);
+    assert.strictEqual(animation.statMoveRows(4, 8), 4);
+    assert.strictEqual(animation.statMoveDurationMs(4, 4), 300);
+    assert.strictEqual(animation.statMoveDurationMs(4, 5), 300);
+    assert.ok(
+      animation.statMoveDurationMs(4, 8) > animation.statMoveDurationMs(4, 5),
+      'moving across more rows must take longer without a linear runaway'
+    );
+    assert.strictEqual(animation.statMoveDurationMs(0, 1000), 650);
 
     const cleanupDelay = animation.statsBarCleanupDelayMs([
-      { _durationMs: 280 },
-      { _durationMs: 455 },
-      { _durationMs: 320 },
+      { barDuration: 280, moveDuration: 300, motionDuration: 300 },
+      { barDuration: 455, moveDuration: 520, motionDuration: 520 },
+      { barDuration: 320, moveDuration: 650, motionDuration: 650 },
     ]);
-    assert.strictEqual(cleanupDelay, 455 + 96);
+    assert.strictEqual(
+      cleanupDelay,
+      650 + 96,
+      'ghost cleanup must wait for the actual longest bar or FLIP motion'
+    );
     assert.strictEqual(animation.isCurrentStatsBarAnimation(3, 3), true);
     assert.strictEqual(
       animation.isCurrentStatsBarAnimation(3, 4),
@@ -72,11 +98,32 @@ async function main() {
       'utf8'
     );
     assert.ok(
-      source.includes("'--stat-bar-duration': item._durationMs + 'ms'")
+      source.includes("'--stat-bar-duration': item.barDuration + 'ms'")
+    );
+    assert.ok(
+      source.includes("'--stat-move-duration': item.moveDuration + 'ms'")
     );
     assert.ok(source.includes('statsBarCleanupDelayMs(ghosts)'));
+    assert.ok(
+      source.includes('oldIndex: p ? previous.oldIndex : newIndex'),
+      'retained rows must derive FLIP distance from the prior and next ranks'
+    );
+    assert.ok(
+      source.includes('newIndex: next.length + ghostIndex'),
+      'leaving rows must include their actual final row position in motion timing'
+    );
+    assert.ok(
+      source.includes('this.$nextTick(removeGhosts)'),
+      'reduced motion must clean ghosts on the next tick'
+    );
+    assert.ok(
+      source.includes('.stat-move,\n.stat-enter-active,\n.stat-row'),
+      'FLIP, enter, and row transforms must have one shared transition source'
+    );
     assert.ok(source.includes('cubic-bezier(0.16, 1, 0.3, 1)'));
     assert.ok(!source.includes('720 * (this.animK || 1)'));
+    assert.ok(!source.includes('calc(0.65s * var(--stat-k, 1))'));
+    assert.ok(!source.includes('calc(0.5s * var(--stat-k, 1))'));
     assert.ok(source.includes('prefers-reduced-motion: reduce'));
     process.stdout.write('stats bar animation smoke: PASS\n');
   } finally {

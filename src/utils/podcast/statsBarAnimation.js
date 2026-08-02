@@ -1,6 +1,8 @@
 export const STATS_BAR_EASING = 'cubic-bezier(0.16, 1, 0.3, 1)';
 export const STATS_BAR_MIN_DURATION_MS = 280;
 export const STATS_BAR_MAX_DURATION_MS = 560;
+export const STATS_MOVE_MIN_DURATION_MS = 300;
+export const STATS_MOVE_MAX_DURATION_MS = 650;
 export const STATS_BAR_CLEANUP_SAFETY_MS = 96;
 
 function clamp(value, min, max) {
@@ -10,6 +12,11 @@ function clamp(value, min, max) {
 function finiteNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
+}
+
+function finiteIndex(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.round(number)) : null;
 }
 
 export function statBarDurationMs(startPct, targetPct) {
@@ -23,20 +30,54 @@ export function statBarDurationMs(startPct, targetPct) {
   );
 }
 
+export function statMoveRows(oldIndex, newIndex) {
+  const oldValue = finiteIndex(oldIndex);
+  const newValue = finiteIndex(newIndex);
+  if (oldValue == null || newValue == null) return 0;
+  return Math.abs(newValue - oldValue);
+}
+
+export function statMoveDurationMs(oldIndex, newIndex) {
+  const rows = statMoveRows(oldIndex, newIndex);
+  return Math.round(
+    clamp(
+      300 + 70 * Math.sqrt(Math.max(0, rows - 1)),
+      STATS_MOVE_MIN_DURATION_MS,
+      STATS_MOVE_MAX_DURATION_MS
+    )
+  );
+}
+
 export function withStatsBarMotion(item, startPct, targetPct, extra) {
+  const motion = extra || {};
+  const oldIndex = finiteIndex(motion.oldIndex);
+  const newIndex = finiteIndex(motion.newIndex);
+  const resolvedOldIndex = oldIndex == null ? newIndex : oldIndex;
+  const resolvedNewIndex = newIndex == null ? oldIndex : newIndex;
+  const barDuration = statBarDurationMs(startPct, targetPct);
+  const moveRows = statMoveRows(resolvedOldIndex, resolvedNewIndex);
+  const moveDuration = statMoveDurationMs(resolvedOldIndex, resolvedNewIndex);
   return {
     ...(item || {}),
-    ...(extra || {}),
+    ...motion,
     _target: targetPct,
     _w: startPct,
-    _durationMs: statBarDurationMs(startPct, targetPct),
+    oldIndex: resolvedOldIndex,
+    newIndex: resolvedNewIndex,
+    moveRows,
+    barDuration,
+    moveDuration,
+    motionDuration: Math.max(barDuration, moveDuration),
   };
 }
 
 export function statsBarCleanupDelayMs(items, safetyMs) {
   const maximumDuration = (Array.isArray(items) ? items : []).reduce(
     (maximum, item) =>
-      Math.max(maximum, finiteNumber(item && item._durationMs)),
+      Math.max(
+        maximum,
+        finiteNumber(item && (item.motionDuration || item.barDuration))
+      ),
     0
   );
   const safety =
