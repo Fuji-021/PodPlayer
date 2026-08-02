@@ -78,6 +78,15 @@
               @click.native="goPodcast(item)"
             />
             <span
+              class="stats-solid-bridge"
+              :class="{
+                'stats-solid-bridge-hidden': !solidBridgeVisible(item),
+                'stats-solid-bridge-immediate': !statsBarCoverTexture,
+              }"
+              :style="solidBridgeStyle(item)"
+              aria-hidden="true"
+            ></span>
+            <span
               v-if="barTexture(item)"
               class="stats-texture-bridge"
               :class="{
@@ -117,6 +126,7 @@ import {
   STATS_BAR_TEXTURE_CONFIG,
   cancelStatsBarTextureRequests,
   collectStatsBarTextureResults,
+  getStatsBarTextureOverlayState,
   getStatsBarTexture,
   isStatsBarTextureValue,
   peekStatsBarTexture,
@@ -229,6 +239,7 @@ export default {
     barTexture(item) {
       const entry = item && this.barTextures[item.podcastId];
       if (
+        !this.statsBarCoverTexture ||
         !entry ||
         entry.url !== item.coverUrl ||
         !isStatsBarTextureValue(entry.value)
@@ -236,6 +247,20 @@ export default {
         return null;
       }
       return entry;
+    },
+    solidBridgeVisible(item) {
+      const entry = this.barTexture(item);
+      return getStatsBarTextureOverlayState(
+        this.statsBarCoverTexture,
+        !!(entry && entry.ready)
+      ).solidVisible;
+    },
+    solidBridgeStyle(item) {
+      return {
+        '--stats-solid-bridge-color': this.barColor(item),
+        '--stats-solid-bridge-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeWidth}px`,
+        '--stats-solid-bridge-outer-width': `${STATS_BAR_TEXTURE_CONFIG.bridgeOuterWidth}px`,
+      };
     },
     barTextureFillStyle(item) {
       const entry = this.barTexture(item);
@@ -1026,9 +1051,50 @@ export default {
         cursor: pointer; // [点击区收窄] 只有封面可点跳转
       }
 
-      .stats-texture-bridge {
+      // This is an alpha mask only. The color always comes from barColor(),
+      // so no transparent-black color gradient can darken the cover edge.
+      .stats-solid-bridge {
         position: absolute;
         z-index: 1;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: var(--stats-solid-bridge-width);
+        pointer-events: none;
+        opacity: 1;
+        background: var(--stats-solid-bridge-color);
+        -webkit-mask-mode: alpha;
+        -webkit-mask-image: linear-gradient(
+          to right,
+          rgba(0, 0, 0, 1) 0,
+          rgba(0, 0, 0, 1) var(--stats-solid-bridge-outer-width),
+          rgba(0, 0, 0, 0) var(--stats-solid-bridge-width)
+        );
+        -webkit-mask-repeat: no-repeat;
+        -webkit-mask-size: 100% 100%;
+        mask-mode: alpha;
+        mask-image: linear-gradient(
+          to right,
+          rgba(0, 0, 0, 1) 0,
+          rgba(0, 0, 0, 1) var(--stats-solid-bridge-outer-width),
+          rgba(0, 0, 0, 0) var(--stats-solid-bridge-width)
+        );
+        mask-repeat: no-repeat;
+        mask-size: 100% 100%;
+        transition: opacity 130ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      .stats-solid-bridge-hidden {
+        opacity: 0;
+      }
+
+      .stats-solid-bridge-immediate {
+        transition-duration: 0ms;
+      }
+
+      .stats-texture-bridge {
+        position: absolute;
+        z-index: 2;
         top: 0;
         bottom: 0;
         left: 0;
@@ -1086,7 +1152,8 @@ export default {
   .stat-row .bar-texture {
     transition-duration: 0ms;
   }
-  .stat-row .stats-texture-bridge {
+  .stat-row .stats-texture-bridge,
+  .stat-row .stats-solid-bridge {
     transition-duration: 0ms;
   }
 }

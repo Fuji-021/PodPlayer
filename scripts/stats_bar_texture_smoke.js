@@ -161,6 +161,21 @@ async function main() {
       'inactive pages schedule zero texture work'
     );
     assert.strictEqual(texture.shouldPrepareStatsBarTextures(true, true), true);
+    assert.deepStrictEqual(
+      texture.getStatsBarTextureOverlayState(false, false),
+      { solidVisible: true, textureVisible: false },
+      'texture off keeps the solid bridge visible'
+    );
+    assert.deepStrictEqual(
+      texture.getStatsBarTextureOverlayState(true, false),
+      { solidVisible: true, textureVisible: false },
+      'a pending or failed texture keeps the solid bridge visible'
+    );
+    assert.deepStrictEqual(
+      texture.getStatsBarTextureOverlayState(true, true),
+      { solidVisible: false, textureVisible: true },
+      'a ready texture crossfades in only after the solid bridge can fade out'
+    );
 
     assert.strictEqual(texture.srgbByteToLinear(0), 0);
     assert.strictEqual(texture.linearToSrgbByte(1), 255);
@@ -774,6 +789,7 @@ async function main() {
     assert.ok(statsSource.includes('isStatsBarTextureValue('));
     assert.ok(statsSource.includes('bar-texture-fill'));
     assert.ok(statsSource.includes('class="stats-texture-endcap"'));
+    assert.ok(statsSource.includes('class="stats-solid-bridge"'));
     assert.ok(statsSource.includes('class="stats-texture-bridge"'));
     assert.ok(!statsSource.includes('bar-texture-bridge-external'));
     assert.ok(!statsSource.includes('bar-texture-ingress'));
@@ -787,6 +803,7 @@ async function main() {
     );
     assert.ok(
       statsSource.includes('.stats-texture-endcap') &&
+        statsSource.includes('.stats-solid-bridge') &&
         statsSource.includes('.stats-texture-bridge') &&
         statsSource.includes('pointer-events: none') &&
         statsSource.includes('pointer-events: auto'),
@@ -805,6 +822,53 @@ async function main() {
       endcapStyle.includes('border-radius: var(--radius-cover-sm);') &&
         endcapStyle.includes('overflow: hidden;'),
       'the endcap is the sole local radius and clipping owner for bridge plus cover'
+    );
+    const solidBridgeClassIndex = statsSource.indexOf(
+      'class="stats-solid-bridge"'
+    );
+    const solidBridgeTag = statsSource.slice(
+      statsSource.lastIndexOf('<span', solidBridgeClassIndex),
+      statsSource.indexOf('></span>', solidBridgeClassIndex) + 8
+    );
+    assert.ok(
+      !solidBridgeTag.includes('v-if') &&
+        solidBridgeTag.includes(':style="solidBridgeStyle(item)"'),
+      'the solid bridge is always mounted rather than appearing only after a state change'
+    );
+    assert.ok(
+      endcapStyle.includes('width: var(--stats-solid-bridge-width);') &&
+        endcapStyle.includes('background: var(--stats-solid-bridge-color);') &&
+        endcapStyle.includes('--stats-solid-bridge-outer-width') &&
+        endcapStyle.includes('-webkit-mask-mode: alpha;') &&
+        endcapStyle.includes('mask-mode: alpha;') &&
+        endcapStyle.includes('-webkit-mask-image') &&
+        endcapStyle.includes('mask-image'),
+      'the solid bridge uses the current bar color with a 24px opaque and 8px alpha-mask overlap'
+    );
+    const solidBridgeMethod = statsSource.slice(
+      statsSource.indexOf('solidBridgeStyle(item) {'),
+      statsSource.indexOf('barTextureFillStyle(item) {')
+    );
+    assert.ok(
+      solidBridgeMethod.includes('this.barColor(item)') &&
+        solidBridgeMethod.includes('bridgeWidth') &&
+        solidBridgeMethod.includes('bridgeOuterWidth'),
+      'the solid bridge uses the exact current barColor and the shared 24px plus 8px geometry'
+    );
+    const textureEntryMethod = statsSource.slice(
+      statsSource.indexOf('barTexture(item) {'),
+      statsSource.indexOf('solidBridgeVisible(item) {')
+    );
+    assert.ok(
+      textureEntryMethod.includes('!this.statsBarCoverTexture'),
+      'turning the independent texture switch off immediately removes texture display'
+    );
+    assert.ok(
+      endcapStyle.includes('.stats-solid-bridge-hidden') &&
+        endcapStyle.includes('.stats-solid-bridge-immediate') &&
+        endcapStyle.includes('transition: opacity 130ms') &&
+        endcapStyle.includes('z-index: 2'),
+      'solid and texture bridges share the 130ms handoff while the texture remains topmost when ready'
     );
     assert.ok(
       endcapStyle.includes('right: 0;') &&

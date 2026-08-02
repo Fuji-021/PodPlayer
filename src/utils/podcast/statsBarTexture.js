@@ -67,6 +67,16 @@ export function shouldPrepareStatsBarTextures(textureEnabled, active) {
   return !!textureEnabled && !!active;
 }
 
+// The solid bridge remains visible until a current texture has reached its
+// ready paint. This keeps the bar-to-cover join stable during cold cache work.
+export function getStatsBarTextureOverlayState(textureEnabled, textureReady) {
+  const textureVisible = !!textureEnabled && !!textureReady;
+  return {
+    solidVisible: !textureVisible,
+    textureVisible,
+  };
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
