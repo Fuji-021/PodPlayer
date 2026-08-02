@@ -3,19 +3,21 @@ import { peekTinyCover } from '@/utils/podcast/coverHalo';
 
 // The texture is deliberately tiny. It is a visual fill for the stats bar, not
 // a second cover image, so keeping it in a bounded in-memory cache is enough.
+export const STATS_BAR_TEXTURE_WIDTH = 4;
+export const STATS_BAR_TEXTURE_HEIGHT = 64;
+
 export const STATS_BAR_TEXTURE_PROFILES = {
-  soft: 64,
-  balanced: 128,
-  fine: 192,
+  soft: 40,
+  balanced: STATS_BAR_TEXTURE_HEIGHT,
+  fine: STATS_BAR_TEXTURE_HEIGHT,
 };
 
 export const STATS_BAR_TEXTURE_DEFAULT_PROFILE = 'balanced';
-export const STATS_BAR_TEXTURE_HEIGHT = 4;
 export const STATS_BAR_TEXTURE_CACHE_MAX = 128;
 export const STATS_BAR_TEXTURE_CONCURRENCY = 2;
 export const STATS_BAR_TEXTURE_QUEUE_MAX = 256;
 
-const BAND_RATIOS = [0.18, 0.34, 0.5, 0.66, 0.82];
+const LEFT_EDGE_RATIO = 0.08;
 
 export function shouldPrepareStatsBarTextures(nyancatStyle, active) {
   return !!nyancatStyle && !!active;
@@ -90,15 +92,15 @@ function tuneColor(sample) {
   };
 }
 
-function averageBandColumn(data, width, height, x, center, thickness) {
+function averageBandRow(data, width, height, center, y, thickness) {
   const half = Math.floor(thickness / 2);
-  const start = clamp(center - half, 0, height - 1);
-  const end = clamp(center + half, 0, height - 1);
+  const start = clamp(center - half, 0, width - 1);
+  const end = clamp(center + half, 0, width - 1);
   let r = 0;
   let g = 0;
   let b = 0;
   let count = 0;
-  for (let y = start; y <= end; y += 1) {
+  for (let x = start; x <= end; x += 1) {
     const offset = (y * width + x) * 4;
     r += data[offset];
     g += data[offset + 1];
@@ -108,47 +110,22 @@ function averageBandColumn(data, width, height, x, center, thickness) {
   return { r: r / count, g: g / count, b: b / count };
 }
 
-function scoreSamples(samples) {
-  let saturation = 0;
-  let brightness = 0;
-  let transitions = 0;
-  let previous = null;
-  samples.forEach(sample => {
-    const hsl = rgbToHsl(sample.r, sample.g, sample.b);
-    saturation += hsl[1];
-    brightness += Math.abs(hsl[2] - 0.5);
-    if (previous) {
-      transitions +=
-        Math.abs(sample.r - previous.r) +
-        Math.abs(sample.g - previous.g) +
-        Math.abs(sample.b - previous.b);
-    }
-    previous = sample;
-  });
-  const length = Math.max(1, samples.length);
-  return (
-    (saturation / length) * 80 +
-    (brightness / length) * 32 +
-    transitions / length
-  );
-}
-
 function readBand(imageData, sampleCount, center, thickness) {
   const samples = [];
-  const width = imageData.width;
+  const height = imageData.height;
   for (let index = 0; index < sampleCount; index += 1) {
-    const x = clamp(
-      Math.floor(((index + 0.5) * width) / sampleCount),
+    const y = clamp(
+      Math.floor(((index + 0.5) * height) / sampleCount),
       0,
-      width - 1
+      height - 1
     );
     samples.push(
-      averageBandColumn(
+      averageBandRow(
         imageData.data,
-        width,
-        imageData.height,
-        x,
+        imageData.width,
+        height,
         center,
+        y,
         thickness
       )
     );
@@ -160,22 +137,22 @@ export function selectStatsBarTextureBand(imageData, sampleCount) {
   if (!imageData || !imageData.data || !imageData.width || !imageData.height) {
     return null;
   }
-  const count = sampleCount || STATS_BAR_TEXTURE_PROFILES.balanced;
-  const thickness = clamp(Math.round(imageData.height * 0.035), 1, 5);
-  let best = null;
-  BAND_RATIOS.forEach((ratio, index) => {
-    const center = clamp(
-      Math.round((imageData.height - 1) * ratio),
-      0,
-      imageData.height - 1
-    );
-    const samples = readBand(imageData, count, center, thickness);
-    const score = scoreSamples(samples);
-    if (!best || score > best.score) {
-      best = { index, center, thickness, samples, score };
-    }
-  });
-  return best;
+  const count = clamp(
+    sampleCount || STATS_BAR_TEXTURE_PROFILES.balanced,
+    40,
+    STATS_BAR_TEXTURE_HEIGHT
+  );
+  const thickness = clamp(Math.round(imageData.width * 0.02), 3, 5);
+  const center = clamp(
+    Math.round((imageData.width - 1) * LEFT_EDGE_RATIO),
+    0,
+    imageData.width - 1
+  );
+  return {
+    center,
+    thickness,
+    samples: readBand(imageData, count, center, thickness),
+  };
 }
 
 export function buildStatsBarTexturePixels(imageData, options) {
@@ -185,8 +162,9 @@ export function buildStatsBarTexturePixels(imageData, options) {
     opts.sampleCount ||
     STATS_BAR_TEXTURE_PROFILES[profile] ||
     STATS_BAR_TEXTURE_PROFILES.balanced;
-  const height = opts.height || STATS_BAR_TEXTURE_HEIGHT;
-  const band = selectStatsBarTextureBand(imageData, sampleCount);
+  const width = clamp(opts.width || STATS_BAR_TEXTURE_WIDTH, 2, 4);
+  const height = clamp(opts.height || sampleCount, 40, 64);
+  const band = selectStatsBarTextureBand(imageData, height);
   if (!band) return null;
   const smoothed = band.samples.map((sample, index, source) => {
     const before = source[Math.max(0, index - 1)];
@@ -197,11 +175,14 @@ export function buildStatsBarTexturePixels(imageData, options) {
       b: (before.b + sample.b * 2 + after.b) / 4,
     };
   });
-  const data = new Uint8ClampedArray(sampleCount * height * 4);
-  smoothed.forEach((sample, x) => {
+  const data = new Uint8ClampedArray(width * height * 4);
+  // Direction contract: output(x, y) = coverSample(y). Each source Y sample
+  // becomes one horizontal colour band, so CSS can stretch the texture along
+  // X without turning cover colours into vertical columns.
+  smoothed.forEach((sample, y) => {
     const tuned = tuneColor(sample);
-    for (let y = 0; y < height; y += 1) {
-      const offset = (y * sampleCount + x) * 4;
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
       data[offset] = tuned.r;
       data[offset + 1] = tuned.g;
       data[offset + 2] = tuned.b;
@@ -209,10 +190,9 @@ export function buildStatsBarTexturePixels(imageData, options) {
     }
   });
   return {
-    width: sampleCount,
+    width,
     height,
     data,
-    bandIndex: band.index,
     bandCenter: band.center,
   };
 }

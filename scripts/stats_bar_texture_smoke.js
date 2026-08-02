@@ -106,25 +106,23 @@ async function main() {
     assert.strictEqual(texture.shouldPrepareStatsBarTextures(true, true), true);
 
     const fixture = makeImageData(96, 80, (x, y) => {
-      if (y > 34 && y < 46) {
-        return x % 2 ? [230, 48, 72] : [32, 182, 214];
-      }
-      return [96, 96, 96];
+      if (y < 27) return [228, 48, 72];
+      if (y < 53) return [236, 184, 38];
+      return [44, 116, 220];
     });
-    const band = texture.selectStatsBarTextureBand(fixture, 128);
-    assert.strictEqual(
-      band.index,
-      2,
-      'the highest-information middle band wins'
+    const band = texture.selectStatsBarTextureBand(fixture, 64);
+    assert.ok(
+      band.center <= Math.round(fixture.width * 0.1),
+      'the sampling strip stays inside the cover left edge'
     );
 
-    const ordered = makeImageData(16, 32, x => [x * 14, 80, 150]);
-    const orderedBand = texture.selectStatsBarTextureBand(ordered, 16);
+    const ordered = makeImageData(16, 32, (x, y) => [40, y * 7, 150]);
+    const orderedBand = texture.selectStatsBarTextureBand(ordered, 40);
     orderedBand.samples.forEach((sample, index) => {
       if (index) {
         assert.ok(
-          sample.r >= orderedBand.samples[index - 1].r,
-          'horizontal samples keep source X order'
+          sample.g >= orderedBand.samples[index - 1].g,
+          'vertical samples keep source Y order'
         );
       }
     });
@@ -136,11 +134,67 @@ async function main() {
       Array.from(second.data),
       'fixed pixels produce stable texture bytes'
     );
-    assert.strictEqual(first.width, 128);
-    assert.strictEqual(first.height, 4);
+    assert.ok(first.width >= 2 && first.width <= 4);
+    assert.ok(first.height >= 40 && first.height <= 64);
     for (let index = 3; index < first.data.length; index += 4) {
       assert.strictEqual(first.data[index], 255, 'texture output is opaque');
     }
+    // Direction contract: output(x, y) = coverSample(y). A source Y sample
+    // must fill a whole output row, never become a left-to-right colour column.
+    for (let y = 0; y < first.height; y += 1) {
+      const row = [];
+      for (let x = 0; x < first.width; x += 1) {
+        const offset = (y * first.width + x) * 4;
+        row.push(Array.from(first.data.slice(offset, offset + 3)));
+      }
+      row.slice(1).forEach(value => {
+        assert.deepStrictEqual(
+          value,
+          row[0],
+          'every output row is a horizontal colour band'
+        );
+      });
+    }
+    const firstColumn = Array.from({ length: first.height }, (_, y) => {
+      const offset = y * first.width * 4;
+      return Array.from(first.data.slice(offset, offset + 3));
+    });
+    for (let x = 1; x < first.width; x += 1) {
+      const column = Array.from({ length: first.height }, (_, y) => {
+        const offset = (y * first.width + x) * 4;
+        return Array.from(first.data.slice(offset, offset + 3));
+      });
+      assert.deepStrictEqual(
+        column,
+        firstColumn,
+        'all output columns keep the same vertical colour sequence'
+      );
+    }
+    assert.notDeepStrictEqual(
+      firstColumn[0],
+      firstColumn[firstColumn.length - 1],
+      'different Y rows preserve cover colour variation'
+    );
+    assert.ok(
+      firstColumn[0][0] > firstColumn[0][1] &&
+        firstColumn[0][0] > firstColumn[0][2],
+      'top fixture samples become red horizontal bands'
+    );
+    const middle = firstColumn[Math.floor(firstColumn.length / 2)];
+    assert.ok(
+      middle[0] > 150 && middle[1] > 100 && middle[2] < 100,
+      'middle fixture samples become yellow horizontal bands'
+    );
+    const bottom = firstColumn[firstColumn.length - 1];
+    assert.ok(
+      bottom[2] > bottom[0] && bottom[2] > bottom[1],
+      'bottom fixture samples become blue horizontal bands'
+    );
+    assert.deepStrictEqual(
+      Array.from(first.data),
+      Array.from(texture.buildStatsBarTexturePixels(fixture).data),
+      'bar width changes stretch this fixed texture instead of regenerating it'
+    );
     let written;
     const dataUrl = texture.statsBarTextureDataUrl(first, (width, height) => ({
       getContext() {
