@@ -107,7 +107,7 @@
         模型。请先到设置页完成模型部署或选择本地模型目录。
       </div>
       <div v-else class="t-guide-body">
-        PodPlayer 0.6.0 的本地转文字稿仅验证 Windows x64。
+        PodPlayer 0.7.0 的本地转文字稿仅验证 Windows x64。
       </div>
       <button
         v-if="platformSupported"
@@ -360,6 +360,7 @@ import {
   cancelAiRefine,
   aiRefineState,
   aiPromptVersion,
+  hasAiKey,
   getTranscriptSummary,
   startTranscriptSummary,
   cancelTranscriptSummary,
@@ -638,8 +639,7 @@ export default {
       return Math.max(24, Math.floor(textW / 15));
     },
     aiKey() {
-      const s = this.$store.state.settings;
-      return !!(s && s.deepseekKey && String(s.deepseekKey).trim());
+      return hasAiKey();
     },
     // 处理后的段（事件分类 + 专名词典替换）；原文=原样；AI 态在 opt 之上叠加段内词汇纠错。
     //   词典/viewMode/aiMap 变 → computed 自动重算 → 即时生效、可回退。原始 segments 永不改。
@@ -723,7 +723,7 @@ export default {
     episodeId(nextEpisodeId, previousEpisodeId) {
       if (previousEpisodeId && previousEpisodeId !== nextEpisodeId) {
         cancelTranscriptSummary(previousEpisodeId);
-        cancelAiRefine(previousEpisodeId);
+        cancelAiRefine(previousEpisodeId, { invalidate: true });
       }
       this.init();
     },
@@ -787,6 +787,7 @@ export default {
   },
   deactivated() {
     this.cancelTranscriptRestoreFrame();
+    cancelAiRefine(this.episodeId, { invalidate: true });
   },
   beforeDestroy() {
     this._initReq = (this._initReq || 0) + 1;
@@ -807,6 +808,7 @@ export default {
     ) {
       cancelTranscriptSummary(this.episodeId);
     }
+    cancelAiRefine(this.episodeId, { invalidate: true });
   },
   methods: {
     cancelTranscriptRestoreFrame() {
@@ -1077,7 +1079,7 @@ export default {
           row &&
           row.promptVer === aiPromptVersion &&
           row.segs &&
-          row.status !== 'partial' &&
+          row.status === 'ready' &&
           coverageReady &&
           (!row.segCount || row.segCount === segmentCount)
         ) {
@@ -1126,7 +1128,7 @@ export default {
       const segmentCount = this.segments.length;
       this.showAiTools = false;
       if (!this.aiKey) {
-        this.$store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
+        this.$store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
         if (this.$router) this.$router.push('/settings').catch(() => {});
         return;
       }
@@ -1175,7 +1177,7 @@ export default {
       const episodeId = this.episodeId;
       if (!episodeId || !this.summarySourceSegments.length) return;
       if (!this.aiKey) {
-        this.$store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
+        this.$store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
         if (this.$router) this.$router.push('/settings').catch(() => {});
         return;
       }

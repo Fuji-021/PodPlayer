@@ -23,6 +23,10 @@ import http from 'http';
 import { URL } from 'url';
 import { shouldRecoverStalledDownload } from '@/utils/powerResumePolicy';
 import { inspectRangeResponse } from './downloadResumePolicy';
+import {
+  listRecoverySnapshots,
+  readRecoverySnapshot,
+} from './backupRecoveryFiles';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -765,6 +769,74 @@ export function registerPodcastDownloadIpc(getWindow) {
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
+
+  // Recovery snapshots are intentionally separate from the normal three-file
+  // backup rotation. A full restore writes one before replacing IndexedDB so a
+  // failed restore can be rolled back without overwriting a known-good backup.
+  ipcMain.handle(
+    'podcast:backup:writeRecoverySnapshot',
+    async (_e, { json } = {}) => {
+      if (typeof json !== 'string' || !json) {
+        return { ok: false, error: 'invalid-recovery-snapshot' };
+      }
+      const dir = path.join(app.getPath('userData'), 'backups', 'recovery');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const name = `pre-restore-${stamp}.json`;
+      const target = path.join(dir, name);
+      const temp = path.join(dir, `.${name}.${process.pid}.tmp`);
+      try {
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(temp, json, 'utf8');
+        fs.renameSync(temp, target);
+        const retained = fs
+          .readdirSync(dir)
+          .filter(file => /^pre-restore-.*\.json$/.test(file))
+          .sort();
+        while (retained.length > 2) {
+          const stale = retained.shift();
+          try {
+            fs.unlinkSync(path.join(dir, stale));
+          } catch (e) {
+            // A failed retention cleanup must not invalidate the new snapshot.
+          }
+        }
+        return {
+          ok: true,
+          dir,
+          name,
+          relativePath: `backups/recovery/${name}`,
+        };
+      } catch (e) {
+        try {
+          if (fs.existsSync(temp)) fs.unlinkSync(temp);
+        } catch (cleanupError) {
+          /* ignore cleanup-only failure */
+        }
+        return { ok: false, error: String((e && e.message) || e) };
+      }
+    }
+  );
+
+  ipcMain.handle('podcast:backup:listRecoverySnapshots', async () => {
+    try {
+      const dir = path.join(app.getPath('userData'), 'backups', 'recovery');
+      return { ok: true, snapshots: listRecoverySnapshots(fs, path, dir) };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+
+  ipcMain.handle(
+    'podcast:backup:readRecoverySnapshot',
+    async (_e, { name } = {}) => {
+      try {
+        const dir = path.join(app.getPath('userData'), 'backups', 'recovery');
+        return { ok: true, ...readRecoverySnapshot(fs, path, dir, name) };
+      } catch (e) {
+        return { ok: false, error: String((e && e.message) || e) };
+      }
+    }
+  );
 
   // [事故恢复] 读取最新一份备份 JSON(供"从备份恢复"用)。返回最新 *.json 的文件名与内容。
   ipcMain.handle('podcast:backup:readLatest', async () => {

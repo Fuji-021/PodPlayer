@@ -1,5 +1,4 @@
 const assert = require('assert');
-const EventEmitter = require('events');
 const esbuild = require('esbuild');
 const fs = require('fs');
 const os = require('os');
@@ -9,31 +8,6 @@ const root = path.resolve(__dirname, '..');
 const tempDir = fs.mkdtempSync(
   path.join(os.tmpdir(), 'podplayer-transcript-summary-')
 );
-
-function loadResponse(onResponse, statusCode, body) {
-  const response = new EventEmitter();
-  response.statusCode = statusCode;
-  response.setEncoding = () => {};
-  process.nextTick(() => {
-    onResponse(response);
-    response.emit('data', body);
-    response.emit('end');
-  });
-}
-
-function createHttps(plan) {
-  return {
-    request(options, onResponse) {
-      const request = new EventEmitter();
-      request.write = () => {};
-      request.end = () => plan({ options, onResponse, request });
-      request.destroy = () => {
-        request.destroyed = true;
-      };
-      return request;
-    },
-  };
-}
 
 function segment(text, start) {
   return {
@@ -77,10 +51,12 @@ async function expectReject(promise, code) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise(done => {
-    resolve = done;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function waitFor(check, message) {
@@ -102,6 +78,7 @@ async function loadTranscriptStateMachine() {
     aiRefine: path.join(mockDir, 'ai-refine.js'),
     summary: path.join(mockDir, 'summary.js'),
     openAi: path.join(mockDir, 'open-ai.js'),
+    aiService: path.join(mockDir, 'ai-service.js'),
   };
   fs.writeFileSync(
     files.vue,
@@ -179,7 +156,11 @@ export function generateTranscriptSummary(options) {
   );
   fs.writeFileSync(
     files.openAi,
-    "export function hasOpenAiKey(cfg) { return !!String((cfg && cfg.key) || '').trim(); }\n"
+    "export function hasOpenAiKey(cfg) { return !!(cfg && cfg.hasKey && cfg.status === 'available'); }\n"
+  );
+  fs.writeFileSync(
+    files.aiService,
+    'export function getAiServiceConfig(settings) { return (settings && settings.aiService) || {}; }\n'
   );
   const output = path.join(tempDir, 'transcripts-state-machine.cjs');
   await esbuild.build({
@@ -201,6 +182,7 @@ export function generateTranscriptSummary(options) {
             '@/utils/podcast/aiRefine': files.aiRefine,
             '@/utils/podcast/transcriptSummary': files.summary,
             '@/utils/podcast/openAiCompatible': files.openAi,
+            '@/utils/podcast/aiService': files.aiService,
           };
           Object.keys(exact).forEach(filter => {
             build.onResolve(
@@ -242,10 +224,12 @@ function table(name) {
 }
 export const db = {
   podcasts: table('podcasts'),
+  episodes: table('episodes'),
   favorites: table('favorites'),
   episodeProgress: table('episodeProgress'),
   episodeListenStats: table('episodeListenStats'),
   listenDaily: table('listenDaily'),
+  coverCache: table('coverCache'),
   episodeDownloads: table('episodeDownloads'),
   transcripts: table('transcripts'),
   transcriptDict: table('transcriptDict'),
@@ -333,9 +317,15 @@ async function loadAiRefineHarness() {
 async function testTranscriptStateMachine(summary) {
   const harness = {
     settings: {
-      deepseekKey: '',
-      deepseekModel: 'mock-model',
-      deepseekEndpoint: 'https://mock.invalid',
+      aiService: {
+        provider: 'deepseek',
+        model: 'mock-model',
+        baseUrl: 'https://mock.invalid',
+        authStrategy: 'bearer',
+        hasKey: false,
+        status: 'unconfigured',
+        configFingerprint: '',
+      },
     },
     transcriptSummaries: new Map(),
     transcriptAi: new Map(),
@@ -360,14 +350,25 @@ async function testTranscriptStateMachine(summary) {
     'podcast',
     segments
   );
-  assert.deepStrictEqual(noKey, { ok: false, reason: 'no-key' });
+  assert.deepStrictEqual(noKey, {
+    ok: false,
+    reason: 'configuration-unverified',
+  });
   assert.strictEqual(
     harness.generateCalls,
     0,
     'no key must never start network work'
   );
 
-  harness.settings.deepseekKey = 'configured-for-smoke';
+  harness.settings.aiService = {
+    provider: 'deepseek',
+    model: 'mock-model',
+    baseUrl: 'https://mock.invalid',
+    authStrategy: 'bearer',
+    hasKey: true,
+    status: 'available',
+    configFingerprint: 'summary-smoke',
+  };
   let refineSignal = null;
   harness.refine = (...args) => {
     refineSignal = args[6] && args[6].signal;
@@ -453,6 +454,188 @@ async function testTranscriptStateMachine(summary) {
       toast => !String(toast.value || '').includes(privateRefineError)
     ),
     'AI refine errors must not expose internal request details'
+  );
+
+  const refineCallsBeforeDedupe = harness.refineCalls.length;
+  const sameRefine = deferred();
+  harness.refine = () => sameRefine.promise;
+  const refineFirst = transcripts.startAiRefine(
+    'refine-dedupe',
+    'podcast',
+    [{ idx: 0, text: '同集去重' }],
+    [],
+    1
+  );
+  const refineSecond = transcripts.startAiRefine(
+    'refine-dedupe',
+    'podcast',
+    [{ idx: 0, text: '同集去重' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.length === refineCallsBeforeDedupe + 1,
+    'same-episode refine must reuse one active request'
+  );
+  sameRefine.resolve({
+    map: { 0: '同集去重完成' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const dedupedResults = await Promise.all([refineFirst, refineSecond]);
+  assert.ok(dedupedResults.every(result => result.ok));
+  assert.strictEqual(
+    harness.refineCalls.length,
+    refineCallsBeforeDedupe + 1,
+    'same-episode refine must never duplicate network work'
+  );
+
+  const lateSuccessA = deferred();
+  const lateSuccessB = deferred();
+  harness.toasts.length = 0;
+  harness.refine = (...args) => {
+    const id = args[0][0].text;
+    return id === 'A-success' ? lateSuccessA.promise : lateSuccessB.promise;
+  };
+  const refineA = transcripts.startAiRefine(
+    'refine-A-success',
+    'podcast',
+    [{ idx: 0, text: 'A-success' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'A-success'),
+    'A refine must enter the controlled request'
+  );
+  const refineB = transcripts.startAiRefine(
+    'refine-B-success',
+    'podcast',
+    [{ idx: 0, text: 'B-success' }],
+    [],
+    1
+  );
+  lateSuccessA.resolve({
+    map: { 0: 'stale A' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'B-success'),
+    'B must start only after canceled A has converged'
+  );
+  lateSuccessB.resolve({
+    map: { 0: 'current B' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const lateSuccessResults = await Promise.all([refineA, refineB]);
+  assert.deepStrictEqual(lateSuccessResults[0], { ok: false, canceled: true });
+  assert.strictEqual(lateSuccessResults[1].ok, true);
+  assert.strictEqual(
+    harness.transcriptAi.has('refine-A-success'),
+    false,
+    'a late success from an invalidated episode must not write Dexie'
+  );
+  assert.strictEqual(
+    harness.transcriptAi.get('refine-B-success').segs[0],
+    'current B'
+  );
+  assert.ok(
+    harness.toasts.every(
+      toast => !String(toast.value || '').includes('stale A')
+    ),
+    'a late A success must not publish a completion toast'
+  );
+
+  const lateFailureA = deferred();
+  const lateFailureB = deferred();
+  harness.toasts.length = 0;
+  harness.refine = (...args) => {
+    const id = args[0][0].text;
+    return id === 'A-failure' ? lateFailureA.promise : lateFailureB.promise;
+  };
+  const refineFailureA = transcripts.startAiRefine(
+    'refine-A-failure',
+    'podcast',
+    [{ idx: 0, text: 'A-failure' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'A-failure'),
+    'A failure refine must enter the controlled request'
+  );
+  const refineFailureB = transcripts.startAiRefine(
+    'refine-B-failure',
+    'podcast',
+    [{ idx: 0, text: 'B-failure' }],
+    [],
+    1
+  );
+  lateFailureA.reject(new Error('stale A private failure'));
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'B-failure'),
+    'B must still start after A fails late'
+  );
+  lateFailureB.resolve({
+    map: { 0: 'current after failure' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const lateFailureResults = await Promise.all([
+    refineFailureA,
+    refineFailureB,
+  ]);
+  assert.strictEqual(lateFailureResults[0].canceled, true);
+  assert.strictEqual(lateFailureResults[1].ok, true);
+  assert.ok(
+    harness.toasts.every(
+      toast => !String(toast.value || '').includes('stale A private failure')
+    ),
+    'a late A failure must not publish an error toast'
+  );
+
+  const destroyedLate = deferred();
+  harness.refine = () => destroyedLate.promise;
+  const destroyedRefine = transcripts.startAiRefine(
+    'refine-destroyed',
+    'podcast',
+    [{ idx: 0, text: 'destroyed' }],
+    [],
+    1
+  );
+  await waitFor(
+    () => harness.refineCalls.some(call => call[0][0].text === 'destroyed'),
+    'the destroy simulation must reach its request'
+  );
+  transcripts.cancelAiRefine('refine-destroyed', { invalidate: true });
+  destroyedLate.resolve({
+    map: { 0: 'must not persist' },
+    changedIdx: [],
+    stats: { accepted: 1, rejected: 0 },
+    coverageCount: 1,
+    expectedCount: 1,
+    complete: true,
+  });
+  const destroyedResult = await destroyedRefine;
+  assert.strictEqual(destroyedResult.canceled, true);
+  assert.strictEqual(
+    harness.transcriptAi.has('refine-destroyed'),
+    false,
+    'an invalidated component must reject an Abort-late result before Dexie writes'
   );
 
   const cached = {
@@ -765,10 +948,12 @@ async function testTranscriptStateMachine(summary) {
 async function testBackupCompatibility() {
   const tableNames = [
     'podcasts',
+    'episodes',
     'favorites',
     'episodeProgress',
     'episodeListenStats',
     'listenDaily',
+    'coverCache',
     'episodeDownloads',
     'transcripts',
     'transcriptDict',
@@ -781,7 +966,13 @@ async function testBackupCompatibility() {
     tables[name] = [];
     bulkPuts[name] = [];
   });
-  tables.podcasts = [{ id: 'podcast-1', title: '备份节目' }];
+  tables.podcasts = [
+    {
+      id: 'podcast-1',
+      title: '备份节目',
+      feedUrl: 'https://example.test/current-feed.xml',
+    },
+  ];
   tables.transcriptSummaries = [
     { id: 'episode-1', summary: '已备份的本集总结' },
   ];
@@ -799,6 +990,13 @@ async function testBackupCompatibility() {
       if (channel === 'podcast:backup:write') {
         harness.writes.push(payload);
         return { ok: true };
+      }
+      if (channel === 'podcast:backup:writeRecoverySnapshot') {
+        return {
+          ok: true,
+          name: 'pre-restore-legacy-fixture.json',
+          relativePath: 'backups/recovery/pre-restore-legacy-fixture.json',
+        };
       }
       if (channel === 'podcast:backup:readLatest') return harness.latestBackup;
       throw new Error('unexpected backup IPC: ' + channel);
@@ -823,7 +1021,15 @@ async function testBackupCompatibility() {
     );
 
     const legacy = {
-      podcasts: [{ id: 'podcast-legacy', title: '旧备份节目' }],
+      podcasts: [
+        {
+          id: 'podcast-legacy',
+          title: '旧备份节目',
+          // feedUrl existed in the original backup schema; only transcript
+          // derivative tables are optional for pre-v16 backups.
+          feedUrl: 'https://example.test/legacy-feed.xml',
+        },
+      ],
       favorites: [],
       episodeProgress: [],
       episodeListenStats: [],
@@ -953,105 +1159,102 @@ async function main() {
     await testBackupCompatibility();
     await testAiRefineRequestLayer();
     const cfg = {
-      key: 'mock-key-only',
+      provider: 'deepseek',
       model: 'mock-model',
-      endpoint: 'https://api.deepseek.com',
+      baseUrl: 'https://api.deepseek.com',
+      authStrategy: 'bearer',
+      hasKey: true,
+      status: 'available',
+      configFingerprint: 'summary-smoke',
     };
-    assert.strictEqual(request.hasOpenAiKey({ key: '' }), false);
-    assert.strictEqual(request.hasOpenAiKey({ key: ' configured ' }), true);
+    assert.strictEqual(request.hasOpenAiKey({ hasKey: false }), false);
+    assert.strictEqual(
+      request.hasOpenAiKey({ ...cfg, status: 'pending' }),
+      false,
+      'a key alone must not enable a request before manual verification'
+    );
     let noKeyRequests = 0;
     await expectReject(
-      request.requestOpenAiJson({ ...cfg, key: '' }, [], {
-        https: createHttps(() => {
+      request.requestOpenAiJson({ ...cfg, hasKey: false }, [], {
+        invoke: () => {
           noKeyRequests += 1;
-        }),
+          return Promise.resolve({ ok: true });
+        },
       }),
       'no-key'
     );
     assert.strictEqual(noKeyRequests, 0, 'missing key must not open a request');
+    await expectReject(
+      request.requestOpenAiJson({ ...cfg, status: 'pending' }, [], {
+        invoke: () => Promise.resolve({ ok: true }),
+      }),
+      'configuration-unverified'
+    );
 
     assert.strictEqual(
       request.resolveOpenAiChatUrl('https://api.example.test/v1').pathname,
       '/v1/chat/completions'
     );
-    await expectReject(
-      request.requestOpenAiJson({ ...cfg, endpoint: 'not a url' }, [], {
-        https: createHttps(() => {}),
-      }),
-      'invalid-endpoint'
+    assert.throws(
+      () => request.resolveOpenAiChatUrl('not a url'),
+      error => error && error.code === 'invalid-endpoint'
     );
-    await expectReject(
-      request.requestOpenAiJson(
-        { ...cfg, endpoint: 'http://ai.example.test' },
-        [],
-        { https: createHttps(() => {}) }
-      ),
-      'insecure-endpoint'
+    assert.throws(
+      () => request.resolveOpenAiChatUrl('http://ai.example.test'),
+      error => error && error.code === 'insecure-endpoint'
     );
 
-    let localHttpOptions = null;
-    const localHttp = createHttps(({ options, onResponse }) => {
-      localHttpOptions = options;
-      loadResponse(
-        onResponse,
-        200,
-        JSON.stringify({
-          choices: [{ message: { content: '{"summary":"local only"}' } }],
-        })
-      );
-    });
-    const localHttpResult = await request.requestOpenAiJson(
-      { ...cfg, endpoint: 'http://127.0.0.1:11434/v1' },
-      [],
-      { http: localHttp }
-    );
-    assert.strictEqual(localHttpResult.data.summary, 'local only');
-    assert.strictEqual(localHttpOptions.protocol, 'http:');
-    assert.strictEqual(localHttpOptions.port, '11434');
-
-    const validHttps = createHttps(({ onResponse }) => {
-      loadResponse(
-        onResponse,
-        200,
-        JSON.stringify({
-          choices: [{ message: { content: '{"summary":"有效总结"}' } }],
-          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
-        })
-      );
-    });
+    let invokePayload = null;
     const valid = await request.requestOpenAiJson(cfg, [], {
-      https: validHttps,
+      invoke: async (channel, payload) => {
+        invokePayload = { channel, payload };
+        return {
+          ok: true,
+          data: { summary: '有效总结' },
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+          provider: 'api.deepseek.com',
+          model: 'mock-model',
+        };
+      },
     });
     assert.strictEqual(valid.data.summary, '有效总结');
     assert.strictEqual(valid.provider, 'api.deepseek.com');
-
-    const invalidHttps = createHttps(({ onResponse }) => {
-      loadResponse(
-        onResponse,
-        200,
-        JSON.stringify({ choices: [{ message: { content: '{bad-json' } }] })
-      );
-    });
-    await expectReject(
-      request.requestOpenAiJson(cfg, [], { https: invalidHttps }),
-      'invalid-json'
+    assert.strictEqual(invokePayload.channel, 'ai:service:requestJson');
+    assert.strictEqual(
+      invokePayload.payload.configFingerprint,
+      'summary-smoke'
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(invokePayload.payload, 'key')
     );
 
     await expectReject(
       request.requestOpenAiJson(cfg, [], {
-        https: createHttps(() => {}),
-        timeoutMs: 5,
+        invoke: () =>
+          Promise.resolve({
+            ok: false,
+            code: 'invalid-json',
+            error: 'mock invalid JSON',
+          }),
       }),
-      'timeout'
+      'invalid-json'
     );
 
     const controller = new AbortController();
+    let canceledRequestId = '';
     const canceled = request.requestOpenAiJson(cfg, [], {
-      https: createHttps(() => {}),
+      invoke: () => new Promise(() => {}),
+      cancel: requestId => {
+        canceledRequestId = requestId;
+      },
       signal: controller.signal,
     });
     controller.abort();
     await expectReject(canceled, 'canceled');
+    assert.ok(
+      canceledRequestId,
+      'abort must cancel the main-process request id'
+    );
 
     const paragraphs = summary.buildSummaryParagraphs([
       segment('第一段。', 0),
@@ -1125,10 +1328,10 @@ async function main() {
     assert.ok(panelSource.includes('async onGenerateSummary()'));
     assert.ok(panelSource.includes('@click="onGenerateSummary"'));
     assert.ok(
-      panelSource.includes("row.status !== 'partial'"),
-      'partial AI refinement must never be treated as valid summary input'
+      panelSource.includes("row.status === 'ready'"),
+      'only a completed AI refinement may be treated as valid summary input'
     );
-    assert.ok(panelSource.includes('请先在设置中配置联网 AI 服务'));
+    assert.ok(panelSource.includes('请先在设置中配置并测试联网 AI 服务'));
     assert.ok(
       !panelSource.includes('填入 DeepSeek API Key'),
       'AI actions must use the provider-neutral service wording'
@@ -1160,6 +1363,21 @@ async function main() {
     assert.ok(
       /async onAiRefine\(\)[\s\S]{0,1400}startAiRefine\(/.test(panelSource),
       'the refine request must remain inside the explicit user action'
+    );
+    assert.ok(
+      /episodeId\(nextEpisodeId, previousEpisodeId\)[\s\S]{0,360}cancelAiRefine\(previousEpisodeId, \{ invalidate: true \}\)/.test(
+        panelSource
+      ),
+      'switching episodes must invalidate the prior refine request'
+    );
+    assert.ok(
+      /deactivated\(\)[\s\S]{0,220}cancelAiRefine\(this\.episodeId, \{ invalidate: true \}\)/.test(
+        panelSource
+      ) &&
+        /beforeDestroy\(\)[\s\S]{0,1300}cancelAiRefine\(this\.episodeId, \{ invalidate: true \}\)/.test(
+          panelSource
+        ),
+      'deactivation and destroy must invalidate the visible episode refine task'
     );
     assert.ok(
       !/mounted\(\)[\s\S]{0,500}(startTranscriptSummary|startAiRefine)/.test(
@@ -1225,8 +1443,12 @@ async function main() {
     );
     assert.ok(dbSource.includes('db.version(16)'));
     assert.ok(dbSource.includes('transcriptSummaries'));
-    assert.ok(backupSource.includes("arr('transcriptSummaries')"));
-    assert.ok(backupSource.includes('db.transcriptSummaries'));
+    assert.ok(
+      backupSource.includes("'transcriptSummaries'") &&
+        backupSource.includes('RESTORE_TABLES'),
+      'full backups must continue to include transcript summaries'
+    );
+    assert.ok(backupSource.includes('normalizeBackupPayload'));
     const detailSource = fs.readFileSync(
       path.join(root, 'src/views/episodeDetail.vue'),
       'utf8'
@@ -1256,11 +1478,7 @@ async function main() {
       'utf8'
     );
     assert.ok(settingsSource.includes('联网 AI 服务'));
-    assert.ok(
-      settingsSource.includes(
-        '只有在你主动生成总结或精修稿时，才会将本集文字稿发送至已配置的'
-      )
-    );
+    assert.ok(settingsSource.includes('才会发送本集文字稿；音频不会上传'));
     const refineSource = fs.readFileSync(
       path.join(root, 'src/utils/podcast/aiRefine.js'),
       'utf8'

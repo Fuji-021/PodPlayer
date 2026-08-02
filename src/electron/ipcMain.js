@@ -184,7 +184,22 @@ function parseSourceStringToList(executor, sourceString) {
     });
 }
 
+function stripLegacyAiSettings(options) {
+  const settings = Object.assign({}, options || {});
+  const fields = ['deepseekKey', 'deepseekModel', 'deepseekEndpoint'];
+  const changed = fields.some(field =>
+    Object.prototype.hasOwnProperty.call(settings, field)
+  );
+  fields.forEach(field => delete settings[field]);
+  return { settings, changed };
+}
+
 export function initIpcMain(win, store, trayEventEmitter) {
+  // Earlier builds mirrored legacy AI fields into generic electron-store.
+  // Renderer startup keeps the local legacy value long enough to migrate it
+  // into main-process credential storage; this generic copy is never a credential source.
+  const storedSettings = stripLegacyAiSettings(store.get('settings'));
+  if (storedSettings.changed) store.set('settings', storedSettings.settings);
   // WIP: Do not enable logging as it has some issues in non-blocking I/O environment.
   // UNM.enableLogging(UNM.LoggingType.ConsoleEnv);
   const unmExecutor = new UNM.Executor();
@@ -307,8 +322,9 @@ export function initIpcMain(win, store, trayEventEmitter) {
   });
 
   ipcMain.on('settings', (event, options) => {
-    store.set('settings', options);
-    if (options.enableGlobalShortcut) {
+    const settings = stripLegacyAiSettings(options).settings;
+    store.set('settings', settings);
+    if (settings.enableGlobalShortcut) {
       registerGlobalShortcut(win, store);
     } else {
       log('unregister global shortcut');

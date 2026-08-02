@@ -12,7 +12,7 @@ const tempDir = fs.mkdtempSync(
 function closeTo(actual, expected, message) {
   assert.ok(
     Math.abs(actual - expected) < 0.02,
-    message + ': expected ' + expected + ', received ' + actual
+    `${message}: expected ${expected}, received ${actual}`
   );
 }
 
@@ -21,19 +21,20 @@ function transformOffset(transform) {
   return match ? Number(match[1]) : 0;
 }
 
-function createInputEvent(type, { key = '', target = null } = {}) {
+function createEvent(type, options = {}) {
   return {
     type,
-    key,
-    code: key,
-    target,
-    currentTarget: target,
-    ctrlKey: false,
-    metaKey: false,
-    altKey: false,
+    key: options.key || '',
+    target: options.target || null,
+    currentTarget: options.currentTarget || options.target || null,
+    deltaX: options.deltaX || 0,
+    deltaY: options.deltaY || 0,
+    shiftKey: !!options.shiftKey,
+    pointerId: options.pointerId || 1,
+    clientX: options.clientX || 0,
+    isPrimary: options.isPrimary !== false,
     defaultPrevented: false,
     propagationStopped: false,
-    appHandled: false,
     preventDefault() {
       this.defaultPrevented = true;
     },
@@ -63,13 +64,6 @@ function createRafClock() {
       next[1](timestamp);
       return true;
     },
-    flushId(id, timestamp) {
-      const callback = callbacks.get(id);
-      if (!callback) return false;
-      callbacks.delete(id);
-      callback(timestamp);
-      return true;
-    },
     get size() {
       return callbacks.size;
     },
@@ -80,31 +74,25 @@ function buildRailHarness(
   component,
   { scrollLeft = 180, reducedMotion = false } = {}
 ) {
-  const pageLeft = 300;
-  let viewportWidth = 300;
-  let scrollWidth = 800;
-  let trackWidth = 400;
   const itemWidth = 80;
-  const gap = 10;
-  const positions = {
-    all: 0,
-    B: 90,
-    C: 180,
-    D: 270,
-    E: 360,
-    F: 450,
-    G: 540,
-  };
-  const writes = [];
-  const timerCalls = [];
-  const layoutReads = { viewport: 0, item: 0, track: 0 };
-  const raf = createRafClock();
-  const rootClasses = new Set();
-  let vm;
+  let viewportWidth = 300;
+  let trackWidth = 400;
   let railLeft = scrollLeft;
+  let vm;
+  const raf = createRafClock();
+  const writes = [];
+  const layoutReads = { viewport: 0, item: 0, track: 0 };
+  const timerCalls = [];
+  const rootClasses = new Set();
   const viewportAttributes = {};
+  const viewportStyle = {};
 
   const viewport = {
+    style: {
+      setProperty(name, value) {
+        viewportStyle[name] = String(value);
+      },
+    },
     get clientWidth() {
       layoutReads.viewport += 1;
       return viewportWidth;
@@ -114,10 +102,7 @@ function buildRailHarness(
     },
     get scrollWidth() {
       layoutReads.viewport += 1;
-      return scrollWidth;
-    },
-    set scrollWidth(value) {
-      scrollWidth = value;
+      return 800;
     },
     get scrollLeft() {
       return railLeft;
@@ -127,24 +112,14 @@ function buildRailHarness(
       writes.push(value);
       if (vm && vm._dispatchScrollOnWrite) vm.onScroll();
     },
-    getBoundingClientRect() {
-      layoutReads.viewport += 1;
-      return {
-        left: pageLeft,
-        right: pageLeft + viewportWidth,
-        width: viewportWidth,
-      };
-    },
     focus(options) {
       this.focusOptions = options || null;
       this.focusCalls = (this.focusCalls || 0) + 1;
       global.document.focusElement(this);
     },
     blur() {
-      this.blurCalls = (this.blurCalls || 0) + 1;
-      if (global.document.activeElement === this) {
+      if (global.document.activeElement === this)
         global.document.focusElement(null);
-      }
     },
     setAttribute(name, value) {
       viewportAttributes[name] = String(value);
@@ -158,24 +133,12 @@ function buildRailHarness(
       delete viewportAttributes[name];
     },
   };
-  const rootAttributes = {};
-  const root = {
+  const rootNode = {
     classList: {
       toggle(name, enabled) {
         if (enabled) rootClasses.add(name);
         else rootClasses.delete(name);
       },
-    },
-    setAttribute(name, value) {
-      rootAttributes[name] = String(value);
-    },
-    getAttribute(name) {
-      return Object.prototype.hasOwnProperty.call(rootAttributes, name)
-        ? rootAttributes[name]
-        : null;
-    },
-    removeAttribute(name) {
-      delete rootAttributes[name];
     },
   };
   const track = {
@@ -188,25 +151,21 @@ function buildRailHarness(
     },
   };
   const thumb = { offsetWidth: 64, style: {} };
-  const makeItem = (id, contentLeft) => {
+
+  const makeItem = id => {
     const attributes = {};
     const halo = { style: {} };
     return {
       dataset: { podcastId: id },
-      offsetParent: { id: 'page-positioned-parent' },
-      // Deliberately page-relative: this is the real regression shape.
-      offsetLeft: pageLeft + contentLeft,
       offsetWidth: itemWidth,
-      focusOptions: null,
-      focusCalls: 0,
       halo,
+      focusCalls: 0,
       focus(options) {
         this.focusCalls += 1;
         this.focusOptions = options || null;
         global.document.focusElement(this);
       },
       blur() {
-        this.blurCalls = (this.blurCalls || 0) + 1;
         if (global.document.activeElement === this) {
           global.document.focusElement(null);
         }
@@ -223,35 +182,28 @@ function buildRailHarness(
         delete attributes[name];
       },
       querySelector(selector) {
-        return selector === '.rail-cover-halo' ? halo : null;
-      },
-      getBoundingClientRect() {
-        layoutReads.item += 1;
-        return {
-          left: pageLeft + contentLeft - viewport.scrollLeft,
-          right: pageLeft + contentLeft - viewport.scrollLeft + itemWidth,
-          width: itemWidth,
-        };
+        if (selector === '.rail-cover-halo') return halo;
+        if (selector === '.rail-cover-image') return { offsetWidth: 72 };
+        return null;
       },
     };
   };
-  const allItem = makeItem('all', positions.all);
-  const items = Object.keys(positions)
-    .filter(id => id !== 'all')
-    .map(id => makeItem(id, positions[id]));
+
+  const allItem = makeItem('');
+  const ids = ['B', 'C', 'D', 'E', 'F', 'G'];
+  const items = ids.map(makeItem);
   viewport.contains = target =>
     target === viewport || target === allItem || items.includes(target);
   const emitted = [];
   const data = component.data.call({});
-
   vm = {
     ...data,
     podcasts: items.map(item => ({
       id: item.dataset.podcastId,
-      coverUrl: 'https://covers.test/' + item.dataset.podcastId + '.jpg',
+      coverUrl: `https://covers.test/${item.dataset.podcastId}.jpg`,
     })),
     selectedPodcastId: '',
-    $refs: { root, viewport, track, thumb, items },
+    $refs: { root: rootNode, viewport, track, thumb, items },
     $el: {
       querySelector(selector) {
         return selector === '.rail-all' ? allItem : null;
@@ -260,11 +212,8 @@ function buildRailHarness(
     $nextTick(callback) {
       callback();
     },
-    $set(target, key, value) {
-      target[key] = value;
-    },
     $emit(name, value) {
-      emitted.push({ name, value, goalAtEmit: vm._railGoal });
+      emitted.push({ name, value, goalAtEmit: vm._railGoalStart });
       if (name !== 'select') return;
       vm.selectedPodcastId = value;
       component.watch.selectedPodcastId.call(vm, value);
@@ -279,19 +228,18 @@ function buildRailHarness(
 
   return {
     vm,
-    root,
     viewport,
+    viewportStyle,
     track,
     thumb,
-    writes,
-    timerCalls,
-    layoutReads,
-    raf,
-    rootClasses,
-    emitted,
-    items,
     allItem,
-    pageLeft,
+    items,
+    emitted,
+    raf,
+    writes,
+    layoutReads,
+    timerCalls,
+    rootClasses,
     get scrollLeft() {
       return railLeft;
     },
@@ -299,8 +247,6 @@ function buildRailHarness(
       railLeft = value;
     },
     reducedMotion,
-    itemWidth,
-    gap,
   };
 }
 
@@ -370,17 +316,23 @@ async function main() {
   };
   const listeners = new Map();
   let activeHarness;
+  const addListener = (name, callback) => {
+    if (!listeners.has(name)) listeners.set(name, new Set());
+    listeners.get(name).add(callback);
+  };
+  const removeListener = (name, callback) => {
+    const set = listeners.get(name);
+    if (!set) return;
+    set.delete(callback);
+    if (!set.size) listeners.delete(name);
+  };
   global.document = {
     activeElement: null,
-    addEventListener(name, callback) {
-      listeners.set(name, callback);
-    },
-    removeEventListener(name) {
-      listeners.delete(name);
-    },
+    addEventListener: addListener,
+    removeEventListener: removeListener,
     dispatchEvent(event) {
-      const listener = listeners.get(event.type);
-      if (listener) listener(event);
+      const set = listeners.get(event.type);
+      if (set) [...set].forEach(listener => listener(event));
       return !event.defaultPrevented;
     },
     focusElement(target) {
@@ -394,10 +346,7 @@ async function main() {
       }
       this.activeElement = target;
       if (target && activeHarness && activeHarness.viewport.contains(target)) {
-        activeHarness.vm.handleRailFocusIn({
-          target,
-          relatedTarget: previous,
-        });
+        activeHarness.vm.handleRailFocusIn({ target, relatedTarget: previous });
       }
     },
   };
@@ -419,461 +368,338 @@ async function main() {
   global.clearTimeout = () => {};
 
   try {
-    const built = await buildComponent();
-    const component = built.component;
-    const source = built.source;
+    const { component, source } = await buildComponent();
     activeHarness = buildRailHarness(component);
-    const { vm, viewport, track, thumb, raf, timerCalls, emitted, allItem } =
-      activeHarness;
-    vm.updateMetrics();
+    const {
+      vm,
+      viewport,
+      viewportStyle,
+      thumb,
+      allItem,
+      items,
+      emitted,
+      raf,
+      writes,
+      layoutReads,
+      rootClasses,
+    } = activeHarness;
+    const item = id => items.find(entry => entry.dataset.podcastId === id);
+    const flushMotion = (startAt = 0) => {
+      let now = startAt;
+      let guard = 0;
+      while (raf.size && guard < 12) {
+        now += 100;
+        raf.flush(now);
+        guard += 1;
+      }
+      assert.ok(
+        guard < 12,
+        'rail controller must settle without an unbounded rAF tail'
+      );
+    };
+    const pointerSelect = (target, id) => {
+      vm.handleRailPointerDown(createEvent('pointerdown', { target }));
+      target.focus(); // native button focus, not component-managed focus
+      vm.select(id);
+    };
 
-    // C is at the left edge while B is hidden. Its offsetParent is not the
-    // viewport, so the contract catches page-relative offsetLeft regressions.
-    vm.ensureSelectedVisible('C');
-    assert.strictEqual(
-      vm._railGoal,
-      90,
-      'left-edge C must move the rail left to reveal B in viewport coordinates; actual goal=' +
-        vm._railGoal
-    );
-    vm.interruptRailMotion();
-
-    activeHarness.scrollLeft = 260;
     vm.updateMetrics();
-    vm.ensureSelectedVisible('F');
-    assert.strictEqual(
-      vm._railGoal,
-      320,
-      'right-edge F must move the rail right to reveal G in viewport coordinates'
-    );
-    vm.interruptRailMotion();
+    assert.strictEqual(viewportStyle['--rail-outer-gutter'], '20px');
+    assert.strictEqual(vm._railRenderPosition, 2);
+    assert.strictEqual(vm._railWindowStart, 2);
+    assert.ok(!source.includes('getRailSlotSelectionTarget'));
+    assert.ok(!source.includes('getRailSlotArrowGoal'));
+    assert.ok(!source.includes('getRailSlotTarget'));
+    assert.ok(source.includes('getRailWindowSelectionTarget'));
+    assert.ok(source.includes('getRailWindowRevealTarget'));
+    assert.ok(source.includes('getRailRenderMotionFrame'));
+    assert.ok(!source.includes('draggable="false"'));
+    assert.ok(!source.includes('-webkit-user-drag: none'));
+    assert.ok(!source.includes('@dragstart.prevent'));
+    assert.ok(source.includes("[data-rail-keyboard-focus='true']:focus"));
+    assert.ok(!source.includes(':focus-visible'));
 
-    // Selection scroll must be prepared before the parent receives the filter
-    // update, otherwise the watcher can retarget after the list has changed.
-    activeHarness.scrollLeft = 180;
-    vm.updateMetrics();
-    vm.select('C');
+    // Real click chain: pointerdown -> native focus -> select -> parent prop
+    // writeback -> watcher -> rAF -> programmatic scroll/thumb projection.
+    pointerSelect(item('C'), 'C');
+    assert.strictEqual(vm._railGoalStart, 1, 'left edge C must reveal B');
     assert.strictEqual(
       emitted[0].goalAtEmit,
-      90,
-      'user selection must calculate its contextual rail target before emit'
-    );
-    vm.interruptRailMotion();
-
-    const cItem = activeHarness.items.find(
-      item => item.dataset.podcastId === 'C'
-    );
-    const dispatchDocumentKey = (type, key, target) => {
-      const event = createInputEvent(type, { key, target });
-      global.document.dispatchEvent(event);
-      return event;
-    };
-    const dispatchRailKey = (target, key) => {
-      const event = dispatchDocumentKey('keydown', key, target);
-      event.currentTarget = viewport;
-      if (key === 'ArrowLeft' || key === 'ArrowRight') {
-        event.preventDefault();
-        event.stopPropagation();
-        vm.moveRailFocus(key === 'ArrowLeft' ? -1 : 1);
-      } else if (key === 'Home' || key === 'End') {
-        vm.handleRailEdgeKey(event, key === 'End');
-      }
-      if (
-        !event.propagationStopped &&
-        ['ArrowDown', 'Home', 'End'].includes(key)
-      ) {
-        event.appHandled = true;
-        event.preventDefault();
-      }
-      return event;
-    };
-    const dispatchPointerSelect = (target, podcastId) => {
-      const pointerEvent = createInputEvent('pointerdown', { target });
-      pointerEvent.currentTarget = viewport;
-      vm.handleRailPointerDown(pointerEvent);
-      if (!pointerEvent.defaultPrevented) target.focus();
-      vm.select(podcastId);
-      return pointerEvent;
-    };
-
-    vm.bindRailTabTracking();
-    assert.ok(
-      listeners.has('keydown') && listeners.has('keyup'),
-      'active rail must register only paired Tab intent listeners'
-    );
-    assert.ok(
-      !listeners.has('pointerdown') && !listeners.has('wheel'),
-      'document pointer and wheel compensation must be removed'
-    );
-
-    // A: native pointer focus is allowed, but it never receives a keyboard
-    // marker. ArrowDown/wheel then Home must yield to App.vue page scrolling.
-    vm.selectedPodcastId = '';
-    const cFocusBeforePointer = cItem.focusCalls;
-    dispatchPointerSelect(cItem, 'C');
-    assert.strictEqual(
-      cItem.focusCalls,
-      cFocusBeforePointer + 1,
-      'pointer selection must rely on the browser default focus exactly once'
-    );
-    assert.strictEqual(
-      cItem.getAttribute('data-rail-keyboard-focus'),
-      null,
-      'mouse-focused program C must not receive a keyboard outline marker'
-    );
-    assert.strictEqual(
-      allItem.getAttribute('data-rail-keyboard-focus'),
-      null,
-      'mouse selection must not leave an outline marker on all programs'
-    );
-    const arrowDown = dispatchRailKey(cItem, 'ArrowDown');
-    assert.strictEqual(
-      arrowDown.appHandled,
-      true,
-      'ArrowDown after mouse selection must remain a page scroll command'
-    );
-    global.document.dispatchEvent(
-      createInputEvent('wheel', { target: { id: 'page-outside-rail' } })
-    );
-    const pointerHome = dispatchRailKey(cItem, 'Home');
-    assert.strictEqual(
-      pointerHome.appHandled,
-      true,
-      'Home after mouse selection must yield to App.vue page scroll'
-    );
-    assert.strictEqual(
-      allItem.getAttribute('data-rail-keyboard-focus'),
-      null,
-      'scrolling away and returning must not create an all-programs outline'
-    );
-
-    // B: a scrollbar pointer path lives outside the rail and therefore cannot
-    // manufacture a marker when the page leaves and returns.
-    global.document.dispatchEvent(
-      createInputEvent('pointerdown', { target: { id: 'page-scrollbar' } })
-    );
-    assert.strictEqual(
-      allItem.getAttribute('data-rail-keyboard-focus'),
-      null,
-      'scrollbar round trips must leave all programs unmarked'
-    );
-
-    // C: a real Tab intent is captured before focus moves into the rail. Left
-    // and right navigation transfer the explicit marker to the focused item.
-    cItem.blur();
-    dispatchDocumentKey('keydown', 'Tab', { id: 'before-rail' });
-    viewport.focus({ preventScroll: true });
-    dispatchDocumentKey('keyup', 'Tab', viewport);
-    assert.strictEqual(
-      viewport.getAttribute('data-rail-keyboard-focus'),
-      'true',
-      'Tab entry must mark the exact focused rail element'
-    );
-    const arrowRight = dispatchRailKey(viewport, 'ArrowRight');
-    const keyboardTarget = global.document.activeElement;
-    assert.strictEqual(arrowRight.propagationStopped, true);
-    assert.strictEqual(
-      viewport.getAttribute('data-rail-keyboard-focus'),
-      null,
-      'arrow navigation must clear the prior element marker'
-    );
-    assert.strictEqual(
-      keyboardTarget.getAttribute('data-rail-keyboard-focus'),
-      'true',
-      'arrow navigation must mark only the newly focused program'
-    );
-
-    // D: Home/End act on the rail only while that exact element carries the
-    // keyboard marker, and they stop App.vue from scrolling at the same time.
-    const endKey = dispatchRailKey(keyboardTarget, 'End');
-    assert.strictEqual(endKey.appHandled, false);
-    assert.strictEqual(endKey.defaultPrevented, true);
-    assert.strictEqual(endKey.propagationStopped, true);
-    const lastItem = activeHarness.items[activeHarness.items.length - 1];
-    assert.strictEqual(global.document.activeElement, lastItem);
-    assert.strictEqual(
-      lastItem.getAttribute('data-rail-keyboard-focus'),
-      'true'
-    );
-    const homeKey = dispatchRailKey(lastItem, 'Home');
-    assert.strictEqual(homeKey.appHandled, false);
-    assert.strictEqual(homeKey.defaultPrevented, true);
-    assert.strictEqual(homeKey.propagationStopped, true);
-    assert.strictEqual(global.document.activeElement, allItem);
-    assert.strictEqual(
-      allItem.getAttribute('data-rail-keyboard-focus'),
-      'true'
-    );
-
-    dispatchPointerSelect(cItem, 'C');
-    assert.strictEqual(
-      allItem.getAttribute('data-rail-keyboard-focus'),
-      null,
-      'mouse input must clear the prior keyboard marker immediately'
-    );
-    assert.strictEqual(
-      cItem.getAttribute('data-rail-keyboard-focus'),
-      null,
-      'browser pointer focus must remain visually unmarked'
-    );
-    cItem.blur();
-    assert.strictEqual(
-      vm._railKeyboardFocusTarget,
-      null,
-      'focusout must clear the element-level keyboard focus state'
-    );
-
-    vm.deactivateRail();
-    assert.ok(
-      !listeners.has('keydown') && !listeners.has('keyup'),
-      'keep-alive deactivation must release both Tab intent listeners'
-    );
-    vm.activateRail();
-    assert.ok(
-      listeners.has('keydown') && listeners.has('keyup'),
-      'keep-alive activation must register one fresh Tab listener pair'
-    );
-    assert.ok(
-      source.includes("[data-rail-keyboard-focus='true']:focus"),
-      'visible focus must be scoped to an explicitly marked element'
-    );
-    assert.ok(
-      !source.includes('data-rail-input-mode') &&
-        !source.includes('prepareRailItemFocus') &&
-        !source.includes('_railDocumentWheelListener') &&
-        !source.includes('_railDocumentPointerListener') &&
-        !source.includes('Date.now() - startedAt <= 750'),
-      'shared input mode, pointer focus, document compensation and timed intent must be removed'
-    );
-    assert.ok(
-      !source.includes(':focus-visible') && source.includes('&:focus {'),
-      'browser focus heuristics must not bypass the explicit element marker'
-    );
-    assert.ok(
-      source.includes('<PodImage class="rail-cover-image"') &&
-        !source.includes('draggable="false"') &&
-        !source.includes('-webkit-user-drag: none') &&
-        !source.includes('@dragstart.prevent'),
-      'native foreground cover drag must remain enabled'
-    );
-    assert.ok(
-      !Object.prototype.hasOwnProperty.call(vm, 'previewPodcastId') &&
-        !Object.prototype.hasOwnProperty.call(vm, 'haloMap') &&
-        !source.includes('@pointerenter="previewHalo'),
-      'hover must not write a reactive full-rail preview state'
-    );
-    assert.ok(
-      source.includes('--rail-cover-lift: -6px;') &&
-        source.includes('--rail-cover-scale: 1.055;') &&
-        source.includes('.rail-item:active,'),
-      'hover and pointer-active cover feedback must use the documented compositor values'
-    );
-
-    // A controller frame owns both native position and thumb transform. The
-    // passive scroll event caused by that write must not create a stop timer.
-    timerCalls.length = 0;
-    activeHarness.scrollLeft = 180;
-    vm.updateMetrics();
-    activeHarness.layoutReads.viewport = 0;
-    activeHarness.layoutReads.item = 0;
-    activeHarness.layoutReads.track = 0;
-    let controllerStateSyncs = 0;
-    const originalSyncRailState = vm.syncRailState;
-    vm.syncRailState = metrics => {
-      controllerStateSyncs += 1;
-      return originalSyncRailState(metrics);
-    };
-    vm.retargetRailMotion(320);
-    assert.strictEqual(raf.size, 1, 'controller must own exactly one rAF');
-    for (let frame = 1; frame <= 3; frame += 1) {
-      assert.ok(
-        raf.flush(frame * 16),
-        'controller should schedule frame ' + frame
-      );
-      const ratio = viewport.scrollLeft / vm._metrics.maxScroll;
-      const expected = vm._thumbGeometry.travel * ratio;
-      closeTo(
-        transformOffset(thumb.style.transform),
-        expected,
-        'thumb must share the controller frame position'
-      );
-    }
-    assert.strictEqual(
-      controllerStateSyncs,
-      3,
-      'controller-owned scroll events must not run a second state update'
-    );
-    assert.deepStrictEqual(
-      activeHarness.layoutReads,
-      { viewport: 0, item: 0, track: 0 },
-      'controller frames must not remeasure viewport, items, or thumb geometry'
-    );
-    assert.strictEqual(
-      timerCalls.length,
-      0,
-      'controller-owned scroll events must not schedule stop timers'
-    );
-    vm.syncRailState = originalSyncRailState;
-    vm.interruptRailMotion();
-    assert.strictEqual(
-      raf.size,
-      0,
-      'interrupt must cancel the pending controller frame'
-    );
-    assert.ok(
-      !activeHarness.rootClasses.has('is-moving'),
-      'interrupt must finish the rail motion class once'
-    );
-
-    // The newest selection wins before the next animation frame; stale watcher
-    // work must not overwrite it.
-    activeHarness.scrollLeft = 260;
-    vm.updateMetrics();
-    vm.selectedPodcastId = '';
-    emitted.length = 0;
-    vm.select('C');
-    vm.select('F');
-    vm.select('D');
-    assert.strictEqual(
-      vm._railGoal,
-      180,
-      "rapid C to F to D selection must retain D's newest contextual target; actual goal=" +
-        vm._railGoal
-    );
-    assert.strictEqual(
-      raf.size,
       1,
-      'rapid selection changes must retarget one existing controller rAF'
+      'parent writeback sees one logical goal'
     );
-    assert.deepStrictEqual(
-      emitted.map(item => item.goalAtEmit),
-      [90, 320, 180],
-      'each user selection must calculate its own target before emit'
-    );
-    vm.interruptRailMotion();
-
-    // Native wheel and thumb dragging each merge their latest input through
-    // one rAF; controller ownership is not reused as a second scroll loop.
-    activeHarness.scrollLeft = 180;
-    vm.updateMetrics();
-    let prevented = 0;
-    vm.handleRailWheel({
-      deltaX: 30,
-      deltaY: 0,
-      shiftKey: false,
-      preventDefault() {
-        prevented += 1;
-      },
-    });
-    vm.handleRailWheel({
-      deltaX: 20,
-      deltaY: 0,
-      shiftKey: false,
-      preventDefault() {
-        prevented += 1;
-      },
-    });
-    assert.strictEqual(raf.size, 1, 'wheel updates must merge into one rAF');
     assert.strictEqual(
-      prevented,
-      2,
-      'only handled horizontal wheel events prevent page scroll'
+      item('C').getAttribute('data-rail-keyboard-focus'),
+      null
     );
-    assert.ok(raf.flush(80), 'wheel frame should commit the latest position');
+    assert.strictEqual(allItem.getAttribute('data-rail-keyboard-focus'), null);
+    assert.strictEqual(raf.size, 1, 'selection must use one controller rAF');
+    flushMotion();
     assert.strictEqual(
       viewport.scrollLeft,
-      230,
-      'wheel frame should merge both deltas'
+      90,
+      'left edge advances one slot only'
+    );
+    closeTo(
+      transformOffset(thumb.style.transform),
+      vm._thumbGeometry.travel / 4,
+      'thumb shares C edge frame'
+    );
+
+    vm.commitRailFrame(2, { settled: true });
+    vm.selectedPodcastId = '';
+    emitted.length = 0;
+    pointerSelect(item('E'), 'E');
+    assert.strictEqual(vm._railGoalStart, 3, 'right edge E must reveal F');
+    flushMotion(400);
+    assert.strictEqual(
+      viewport.scrollLeft,
+      270,
+      'right edge advances one slot only'
+    );
+
+    vm.commitRailFrame(2, { settled: true });
+    vm.selectedPodcastId = '';
+    const beforeMiddleWriteCount = writes.length;
+    pointerSelect(item('D'), 'D');
+    assert.strictEqual(
+      vm._railGoalStart,
+      null,
+      'middle selection must not queue motion'
+    );
+    assert.strictEqual(
+      writes.length,
+      beforeMiddleWriteCount,
+      'middle selection keeps scrollLeft intact'
+    );
+    assert.strictEqual(
+      raf.size,
+      0,
+      'middle selection has no controller animation'
+    );
+
+    vm.commitRailFrame(2, { settled: true });
+    vm.selectedPodcastId = 'E';
+    const repeatEmitCount = emitted.length;
+    pointerSelect(item('E'), 'E');
+    assert.strictEqual(
+      emitted.length,
+      repeatEmitCount,
+      'same selected feed does not emit a duplicate filter event'
+    );
+    assert.strictEqual(
+      vm._railGoalStart,
+      3,
+      'same selected right edge still advances the carousel'
+    );
+    flushMotion(800);
+    assert.strictEqual(viewport.scrollLeft, 270);
+
+    vm.commitRailFrame(2, { settled: true });
+    vm.selectedPodcastId = '';
+    emitted.length = 0;
+    pointerSelect(item('C'), 'C');
+    pointerSelect(item('F'), 'F');
+    pointerSelect(item('G'), 'G');
+    assert.strictEqual(
+      vm._railGoalStart,
+      4,
+      'rapid A->B->C style input keeps only the latest logical target'
+    );
+    assert.deepStrictEqual(
+      emitted.map(entry => entry.goalAtEmit),
+      [1, 3, 4]
+    );
+    flushMotion(1200);
+    assert.strictEqual(
+      viewport.scrollLeft,
+      360,
+      'latest selection wins without returning to an obsolete target'
+    );
+
+    // Parent prop echoes can arrive out of order. A stale C echo must not
+    // reveal C after the user has already requested F.
+    vm.commitRailFrame(2, { settled: true });
+    vm.selectedPodcastId = '';
+    const originalEmit = vm.$emit;
+    vm.$emit = () => {};
+    vm.select('C');
+    vm.select('F');
+    assert.strictEqual(vm._pendingUserSelection.id, 'F');
+    assert.strictEqual(vm._railGoalStart, 3);
+    vm.selectedPodcastId = 'C';
+    component.watch.selectedPodcastId.call(vm, 'C');
+    assert.strictEqual(
+      vm._railGoalStart,
+      3,
+      'a stale parent echo must not overwrite the latest rail selection goal'
+    );
+    assert.strictEqual(vm._pendingUserSelection.id, 'F');
+    vm.selectedPodcastId = 'F';
+    component.watch.selectedPodcastId.call(vm, 'F');
+    assert.strictEqual(vm._pendingUserSelection, null);
+    vm.$emit = originalEmit;
+    vm.interruptRailMotion();
+
+    // A controller frame cannot read layout and commits rail and thumb using
+    // exactly the same renderPosition.
+    vm.commitRailFrame(1, { settled: true });
+    layoutReads.viewport = 0;
+    layoutReads.item = 0;
+    layoutReads.track = 0;
+    vm.retargetRailMotion(3, { direction: 1 });
+    assert.strictEqual(raf.size, 1);
+    raf.flush(1600);
+    const firstRenderPosition = vm._railRenderPosition;
+    closeTo(
+      transformOffset(thumb.style.transform),
+      (vm._thumbGeometry.travel * firstRenderPosition) / vm.getRailMaxStart(),
+      'controller frame projects one renderPosition to thumb'
+    );
+    assert.deepStrictEqual(layoutReads, { viewport: 0, item: 0, track: 0 });
+    flushMotion(1600);
+    assert.strictEqual(viewport.scrollLeft, 270);
+    assert.ok(!rootClasses.has('is-moving'));
+
+    vm.commitRailFrame(2, { settled: true });
+    vm.scrollRail(1);
+    assert.strictEqual(
+      vm._railGoalStart,
+      4,
+      'arrow pages visibleCount - 1 slots'
+    );
+    vm.scrollRail(-1);
+    assert.strictEqual(
+      vm._railGoalStart,
+      0,
+      'reverse arrow derives from the live render position'
     );
     vm.interruptRailMotion();
 
+    vm.commitRailFrame(2, { settled: true });
+    let prevented = 0;
+    vm.handleRailWheel({
+      ...createEvent('wheel', { deltaX: 30, target: viewport }),
+      preventDefault() {
+        prevented += 1;
+      },
+    });
+    vm.handleRailWheel({
+      ...createEvent('wheel', { deltaX: 20, target: viewport }),
+      preventDefault() {
+        prevented += 1;
+      },
+    });
+    assert.strictEqual(raf.size, 1, 'wheel frames merge current input');
+    raf.flush(2000);
+    closeTo(
+      viewport.scrollLeft,
+      230,
+      'wheel keeps a fractional physical render position'
+    );
+    vm.finishNativeRailMotion();
+    assert.strictEqual(
+      vm._railGoalStart,
+      3,
+      'wheel release snaps to a complete slot'
+    );
+    vm.interruptRailMotion();
+    assert.strictEqual(prevented, 2);
+
+    vm.commitRailFrame(1, { settled: true });
     const dragTarget = {
       setPointerCapture() {},
       releasePointerCapture() {},
     };
-    vm.startDrag({
-      isPrimary: true,
-      pointerId: 7,
-      clientX: 10,
-      currentTarget: dragTarget,
-    });
-    vm.onDragMove({ pointerId: 7, clientX: 35 });
-    vm.onDragMove({ pointerId: 7, clientX: 60 });
-    assert.strictEqual(raf.size, 1, 'drag updates must merge into one rAF');
-    assert.ok(
-      raf.flush(96),
-      'drag frame should commit the latest pointer position'
+    vm.startDrag(
+      createEvent('pointerdown', {
+        pointerId: 7,
+        clientX: 10,
+        currentTarget: dragTarget,
+      })
     );
-    vm.finishDrag({ pointerId: 7 });
+    vm.onDragMove(createEvent('pointermove', { pointerId: 7, clientX: 52 }));
+    assert.strictEqual(
+      raf.size,
+      1,
+      'thumb drag merges pointer input through one rAF'
+    );
+    raf.flush(2200);
+    assert.ok(
+      vm._railRenderPosition > 1,
+      'thumb drag updates logical render position'
+    );
+    vm.finishDrag(createEvent('pointerup', { pointerId: 7 }));
+    assert.ok(
+      !vm._drag,
+      'pointer capture and temporary drag state must be released on pointerup'
+    );
+    vm.interruptRailMotion();
+
+    // Resize changes geometry at a measurement boundary, clamps the logical
+    // window, and only then performs a reveal if the selected item is outside.
+    viewport.clientWidth = 500;
+    vm.updateMetrics(true);
+    assert.strictEqual(vm._railSlotLayout.visibleCount, 5);
+    assert.strictEqual(vm.getRailMaxStart(), 2);
+    assert.ok(
+      vm._railRenderPosition <= 2,
+      'resize clamps to the new complete-slot range'
+    );
+
+    vm.bindRailTabTracking();
+    assert.ok(listeners.has('keydown') && listeners.has('keyup'));
+    global.document.dispatchEvent(
+      createEvent('keydown', { key: 'Tab', target: { id: 'before-rail' } })
+    );
+    viewport.focus({ preventScroll: true });
+    global.document.dispatchEvent(
+      createEvent('keyup', { key: 'Tab', target: viewport })
+    );
+    assert.strictEqual(
+      viewport.getAttribute('data-rail-keyboard-focus'),
+      'true'
+    );
+    vm.moveRailFocus(1);
+    const keyboardTarget = global.document.activeElement;
+    assert.strictEqual(
+      keyboardTarget.getAttribute('data-rail-keyboard-focus'),
+      'true'
+    );
+    const homeEvent = createEvent('keydown', {
+      key: 'Home',
+      target: keyboardTarget,
+    });
+    vm.handleRailEdgeKey(homeEvent, false);
+    assert.strictEqual(homeEvent.defaultPrevented, true);
+    assert.strictEqual(global.document.activeElement, allItem);
+
+    vm.deactivateRail();
     assert.strictEqual(
       listeners.size,
-      2,
-      'drag cleanup must remove only its temporary listeners and retain the active rail input listeners'
+      0,
+      'deactivation releases document listeners'
     );
 
-    // Resize changes geometry only at the explicit measurement boundary. First
-    // and last targets remain clamped even when the viewport gets wider.
-    viewport.clientWidth = 500;
-    track.clientWidth = 500;
-    activeHarness.scrollLeft = 20;
-    vm.updateMetrics();
-    assert.strictEqual(
-      vm._metrics.maxScroll,
-      300,
-      'resize should refresh the rail range once'
-    );
-    assert.ok(
-      Number.parseFloat(thumb.style.width) > 64,
-      'resize should refresh thumb geometry'
-    );
-    vm.retargetRailMotion(-100);
-    assert.strictEqual(vm._railGoal, 0, 'first-edge target must clamp to zero');
-    vm.interruptRailMotion();
-    activeHarness.scrollLeft = 280;
-    vm.updateMetrics();
-    vm.retargetRailMotion(900);
-    assert.strictEqual(
-      vm._railGoal,
-      300,
-      'last-edge target must clamp to max scroll'
-    );
-    vm.interruptRailMotion();
-
-    // Reduced motion still uses the same commit path, but does not schedule a
-    // frame or leave a stale controller goal behind.
     activeHarness = buildRailHarness(component, {
       scrollLeft: 180,
       reducedMotion: true,
     });
     activeHarness.vm.updateMetrics();
-    activeHarness.vm.retargetRailMotion(320);
-    assert.strictEqual(activeHarness.viewport.scrollLeft, 320);
-    assert.strictEqual(activeHarness.raf.size, 0);
+    activeHarness.vm.retargetRailMotion(3, { direction: 1 });
+    assert.strictEqual(activeHarness.viewport.scrollLeft, 270);
+    assert.strictEqual(
+      activeHarness.raf.size,
+      0,
+      'reduced motion shares targets but skips rAF animation'
+    );
 
-    const hoverVm = activeHarness.vm;
-    const hoverItem = activeHarness.items.find(
-      item => item.dataset.podcastId === 'C'
-    );
-    const hoverPodcast = hoverVm.podcasts.find(item => item.id === 'C');
-    hoverVm.beginHaloHover(hoverPodcast, hoverItem);
-    assert.strictEqual(
-      hoverItem.halo.style.backgroundImage,
-      'url("tiny-cover")',
-      'hover halo should update only the hovered DOM item without a Vue preview state'
-    );
-    hoverVm.endHaloHover(hoverPodcast, hoverItem);
-    assert.strictEqual(
-      hoverItem.halo.style.backgroundImage,
-      '',
-      'unselected hover must release its halo image after pointer leave'
-    );
-    vm.deactivateRail();
+    activeHarness.vm.deactivateRail();
     assert.strictEqual(
       listeners.size,
       0,
-      'final keep-alive cleanup must release every document listener'
+      'deactivation releases document listeners'
     );
-
     console.log('subscription program rail component contract smoke passed');
   } finally {
     global.document = saved.document;

@@ -80,7 +80,11 @@ import {
 registerDownloadListeners();
 // [转文字稿] 注册 ASR 事件监听（进度/分段/完成/失败/取消 → 实时态 + Dexie 索引）
 import { registerTranscriptListeners } from '@/utils/podcast/transcripts';
+import { initializeAiServiceSettings } from '@/utils/podcast/aiService';
 registerTranscriptListeners();
+// This only migrates legacy local settings into main-process credential storage and
+// reads public status. It never contacts an AI provider during app startup.
+initializeAiServiceSettings(store).catch(() => {});
 // [C1] 启动时应用持久化的"同时下载集数"(否则重启回落底层默认 3)
 setDownloadConcurrency(store.state.settings.downloadConcurrency || 3);
 // [事故恢复·一次性] 实例改名后按"当前身份"修正下载绝对路径 + sha1 反查兜底（只跑一次）。
@@ -104,6 +108,8 @@ import {
   startBackupSchedule,
   restoreFromLatestBackup,
   mergeRestoreHistoryFromLatestBackup,
+  listPreRestoreSnapshots,
+  restoreFromRecoverySnapshot,
   maybeAutoRestore,
 } from '@/utils/podcast/backup';
 startBackupSchedule();
@@ -120,7 +126,15 @@ openDatabase()
 window.restoreFromBackup = async () => {
   const r = await restoreFromLatestBackup();
   // eslint-disable-next-line no-console
-  console.log('[restore] 已恢复:', r);
+  console.log('[restore] result:', r);
+  if (!r || !r.ok) {
+    if (typeof window.alert === 'function') {
+      window.alert(
+        `恢复未完成：${(r && r.error) || '未知错误'}\n${(r && r.action) || ''}`
+      );
+    }
+    return r;
+  }
   if (typeof window.alert === 'function') {
     window.alert(`已恢复 ${r.podcasts} 档订阅，即将刷新页面。`);
   }
@@ -133,9 +147,66 @@ window.restoreFromBackup = async () => {
 window.mergeRestoreHistory = async () => {
   const r = await mergeRestoreHistoryFromLatestBackup();
   // eslint-disable-next-line no-console
-  console.log('[merge-restore] 已合并恢复历史:', r);
+  console.log('[merge-restore] result:', r);
+  if (!r || !r.ok) {
+    if (typeof window.alert === 'function') {
+      window.alert(`历史合并未完成：${(r && r.error) || '未知错误'}`);
+    }
+    return r;
+  }
   if (typeof window.alert === 'function') {
     window.alert('已合并恢复收听历史，即将刷新页面。');
+  }
+  window.location.reload();
+  return r;
+};
+
+// Recovery snapshots are deliberately separate from the normal backup rotation.
+// These two manual entries only accept a main-process-validated snapshot name;
+// they never accept an arbitrary filesystem path.
+window.listPreRestoreSnapshots = async () => {
+  const r = await listPreRestoreSnapshots();
+  // eslint-disable-next-line no-console
+  console.log('[pre-restore-snapshots] result:', r);
+  return r;
+};
+
+window.restorePreRestoreSnapshot = async name => {
+  const snapshots = await listPreRestoreSnapshots();
+  const snapshot =
+    snapshots && snapshots.ok
+      ? (snapshots.snapshots || []).find(item => item.name === name)
+      : null;
+  if (!snapshot) {
+    const r = {
+      ok: false,
+      code: 'recovery-snapshot-not-found',
+      error: '未找到指定的恢复前安全快照。请先运行 listPreRestoreSnapshots()。',
+    };
+    // eslint-disable-next-line no-console
+    console.log('[pre-restore] result:', r);
+    return r;
+  }
+  const ok =
+    typeof window.confirm === 'function' &&
+    window.confirm(
+      `将恢复安全快照 ${snapshot.name}。\n` +
+        '完整恢复会覆盖订阅、进度、统计、收藏、下载记录、文稿、词典、精修稿和本集总结；是否继续？'
+    );
+  if (!ok) return { ok: false, code: 'restore-canceled' };
+  const r = await restoreFromRecoverySnapshot(snapshot.name);
+  // eslint-disable-next-line no-console
+  console.log('[pre-restore] result:', r);
+  if (!r || !r.ok) {
+    if (typeof window.alert === 'function') {
+      window.alert(
+        `恢复未完成：${(r && r.error) || '未知错误'}\n${(r && r.action) || ''}`
+      );
+    }
+    return r;
+  }
+  if (typeof window.alert === 'function') {
+    window.alert(`已恢复安全快照 ${snapshot.name}，即将刷新页面。`);
   }
   window.location.reload();
   return r;

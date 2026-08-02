@@ -14,6 +14,7 @@ import {
   TRANSCRIPT_SUMMARY_PROMPT_VERSION,
 } from '@/utils/podcast/transcriptSummary';
 import { hasOpenAiKey } from '@/utils/podcast/openAiCompatible';
+import { getAiServiceConfig as getPublicAiServiceConfig } from '@/utils/podcast/aiService';
 
 const ipcRenderer = window.require
   ? window.require('electron').ipcRenderer
@@ -574,7 +575,8 @@ export function registerTranscriptListeners() {
 // ---------- [B 路·AI 精修] 第三层：调 DeepSeek 段内词汇纠错(可选/默认关/自带key)，按段存可回退 ----------
 export const aiRefineState = Vue.observable({
   episodeId: '',
-  status: 'idle', // idle | running | done | error
+  token: 0,
+  status: 'idle', // idle | running | done | error | canceled
   done: 0,
   total: 0,
   accepted: 0,
@@ -582,14 +584,35 @@ export const aiRefineState = Vue.observable({
   error: '',
 });
 const aiRefineJobs = new Map();
+const aiRefineStarts = new Map();
+let activeAiRefineJob = null;
+let aiRefineSerial = Promise.resolve();
+let aiRefineToken = 0;
 
-function isCurrentAiRefineJob(job) {
-  return !!(job && aiRefineJobs.get(job.episodeId) === job && !job.invalidated);
+function ownsAiRefineJob(job) {
+  return !!(
+    job &&
+    !job.invalidated &&
+    activeAiRefineJob === job &&
+    aiRefineJobs.get(job.episodeId) === job &&
+    aiRefineState.episodeId === job.episodeId &&
+    aiRefineState.token === job.token
+  );
 }
 
 function releaseAiRefineJob(job) {
   if (job && aiRefineJobs.get(job.episodeId) === job) {
     aiRefineJobs.delete(job.episodeId);
+  }
+  if (activeAiRefineJob === job) activeAiRefineJob = null;
+}
+
+async function restoreAiRefineRow(episodeId, row, dropResult) {
+  try {
+    if (dropResult || !row) await db.transcriptAi.delete(episodeId);
+    else await db.transcriptAi.put(row);
+  } catch (e) {
+    /* best effort: cancellation must never surface stale data as ready */
   }
 }
 
@@ -620,14 +643,15 @@ export function deleteTranscriptSummary(episodeId) {
 }
 export function cancelAiRefine(episodeId, options) {
   const id = episodeId || aiRefineState.episodeId;
-  const job = aiRefineJobs.get(id);
+  const job = aiRefineJobs.get(id) || aiRefineStarts.get(id);
   if (!job) return false;
   job.canceled = true;
   if (options && options.invalidate) job.invalidated = true;
+  if (options && options.dropPersistedResult) job.dropPersistedResult = true;
   if (job.controller && typeof job.controller.abort === 'function') {
     job.controller.abort();
   }
-  if (aiRefineState.episodeId === id) {
+  if (activeAiRefineJob === job && aiRefineState.episodeId === id) {
     aiRefineState.status = 'canceled';
     aiRefineState.error = '';
   }
@@ -635,13 +659,8 @@ export function cancelAiRefine(episodeId, options) {
 }
 
 export function getAiServiceConfig() {
-  const s = (store.state && store.state.settings) || {};
-  return {
-    key: String(s.deepseekKey || '').trim(),
-    model: String(s.deepseekModel || '').trim() || 'deepseek-chat',
-    endpoint:
-      String(s.deepseekEndpoint || '').trim() || 'https://api.deepseek.com',
-  };
+  const settings = (store.state && store.state.settings) || {};
+  return getPublicAiServiceConfig(settings);
 }
 export function hasAiKey() {
   return hasOpenAiKey(getAiServiceConfig());
@@ -659,129 +678,147 @@ export async function startAiRefine(
 ) {
   const cfg = getAiServiceConfig();
   if (!hasOpenAiKey(cfg)) {
-    store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
-    return { ok: false, reason: 'no-key' };
+    store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
+    return { ok: false, reason: 'configuration-unverified' };
   }
-  const controller =
-    typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const existingJob =
+    aiRefineJobs.get(episodeId) || aiRefineStarts.get(episodeId);
+  if (existingJob) return existingJob.promise;
+  cancelOtherAiRefines(episodeId);
   const job = {
     episodeId,
-    controller,
+    token: ++aiRefineToken,
+    controller: null,
     canceled: false,
     invalidated: false,
+    dropPersistedResult: false,
     promise: null,
   };
-  aiRefineJobs.set(episodeId, job);
-  aiRefineState.episodeId = episodeId;
-  aiRefineState.status = 'running';
-  aiRefineState.done = 0;
-  aiRefineState.total = speechSegs.length;
-  aiRefineState.accepted = 0;
-  aiRefineState.rejected = 0;
-  aiRefineState.error = '';
-  let existing = {};
-  let existingRow = null;
-  try {
-    const row = await getAiRefine(episodeId);
-    existingRow = row || null;
-    if (row && row.promptVer === AI_PROMPT_VERSION && row.segs)
-      existing = row.segs;
-  } catch (e) {
-    /* ignore */
-  }
-  let res;
-  try {
-    res = await refineEpisode(
-      speechSegs,
-      anchors,
-      cfg,
-      (done, total) => {
-        if (!isCurrentAiRefineJob(job)) return;
-        aiRefineState.done = done;
-        aiRefineState.total = total;
-      },
-      () => job.canceled || job.invalidated,
-      existing,
-      { signal: controller && controller.signal }
-    );
-  } catch (e) {
-    const canceled =
-      job.canceled || job.invalidated || (e && e.code === 'canceled');
-    if (canceled) {
-      if (aiRefineState.episodeId === episodeId) {
-        aiRefineState.status = 'canceled';
-        aiRefineState.error = '';
-      }
-      releaseAiRefineJob(job);
+  aiRefineStarts.set(episodeId, job);
+  job.promise = aiRefineSerial.then(async () => {
+    if (job.canceled || job.invalidated) {
       return { ok: false, canceled: true };
     }
-    const message = aiServiceErrorMessage(e, 'refine');
-    aiRefineState.status = 'error';
-    aiRefineState.error = message;
-    store.dispatch('showToast', message);
-    releaseAiRefineJob(job);
-    return { ok: false, error: aiRefineState.error };
-  }
-  if (!isCurrentAiRefineJob(job)) {
-    releaseAiRefineJob(job);
-    return { ok: false, canceled: true };
-  }
-  const completed = !!res.complete && !job.canceled;
-  try {
-    await db.transcriptAi.put({
-      id: episodeId,
-      podcastId: podcastId,
-      promptVer: AI_PROMPT_VERSION,
-      status: completed ? 'ready' : 'partial',
-      segCount: baseSegCount || 0, // 基于的总段数；段数变(续转)即弃旧缓存防下标错位
-      coverageCount: res.coverageCount || 0,
-      expectedCount: res.expectedCount || 0,
-      segs: res.map,
-      changedIdx: res.changedIdx,
-      stats: res.stats,
-      createdAt: (existingRow && existingRow.createdAt) || Date.now(),
-      updatedAt: Date.now(),
-    });
-  } catch (e) {
-    /* ignore */
-  }
-  if (!isCurrentAiRefineJob(job)) {
-    if (job.invalidated) {
-      await db.transcriptAi.delete(episodeId).catch(() => {});
+    const controller =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
+    job.controller = controller;
+    activeAiRefineJob = job;
+    aiRefineJobs.set(episodeId, job);
+    aiRefineState.episodeId = episodeId;
+    aiRefineState.token = job.token;
+    aiRefineState.status = 'running';
+    aiRefineState.done = 0;
+    aiRefineState.total = speechSegs.length;
+    aiRefineState.accepted = 0;
+    aiRefineState.rejected = 0;
+    aiRefineState.error = '';
+    let existing = {};
+    let existingRow = null;
+    try {
+      const existingCandidate = await getAiRefine(episodeId);
+      existingRow = existingCandidate || null;
+      if (
+        existingCandidate &&
+        existingCandidate.promptVer === AI_PROMPT_VERSION &&
+        existingCandidate.segs
+      ) {
+        existing = existingCandidate.segs;
+      }
+      if (job.canceled || job.invalidated || !ownsAiRefineJob(job)) {
+        return { ok: false, canceled: true };
+      }
+      const res = await refineEpisode(
+        speechSegs,
+        anchors,
+        cfg,
+        (done, total) => {
+          if (!ownsAiRefineJob(job) || job.canceled) return;
+          aiRefineState.done = done;
+          aiRefineState.total = total;
+        },
+        () => job.canceled || job.invalidated,
+        existing,
+        { signal: controller && controller.signal }
+      );
+      if (!ownsAiRefineJob(job)) return { ok: false, canceled: true };
+      const completed = !!res.complete && !job.canceled;
+      const row = {
+        id: episodeId,
+        podcastId,
+        promptVer: AI_PROMPT_VERSION,
+        status: completed ? 'ready' : 'partial',
+        segCount: baseSegCount || 0,
+        coverageCount: res.coverageCount || 0,
+        expectedCount: res.expectedCount || 0,
+        segs: res.map,
+        changedIdx: res.changedIdx,
+        stats: res.stats,
+        createdAt: (existingRow && existingRow.createdAt) || Date.now(),
+        updatedAt: Date.now(),
+      };
+      await db.transcriptAi.put(row);
+      if (!ownsAiRefineJob(job)) {
+        await restoreAiRefineRow(
+          episodeId,
+          existingRow,
+          job.dropPersistedResult
+        );
+        return { ok: false, canceled: true };
+      }
+      aiRefineState.accepted = (res.stats && res.stats.accepted) || 0;
+      aiRefineState.rejected = (res.stats && res.stats.rejected) || 0;
+      if (!completed) {
+        aiRefineState.status = job.canceled ? 'canceled' : 'error';
+        aiRefineState.error = job.canceled ? '' : 'AI 精修未完成，可重新继续';
+        if (!job.canceled) store.dispatch('showToast', aiRefineState.error);
+        return {
+          ok: false,
+          canceled: job.canceled,
+          partial: true,
+          segs: res.map,
+        };
+      }
+      aiRefineState.status = 'done';
+      store.dispatch(
+        'showToast',
+        'AI 精修完成：纠正 ' +
+          aiRefineState.accepted +
+          ' 处' +
+          (aiRefineState.rejected
+            ? '（保守挡下 ' + aiRefineState.rejected + ' 处瞎改）'
+            : '')
+      );
+      return {
+        ok: true,
+        complete: true,
+        changedIdx: res.changedIdx,
+        segs: res.map,
+        canceled: false,
+      };
+    } catch (e) {
+      const canceled =
+        job.canceled || job.invalidated || (e && e.code === 'canceled');
+      if (!ownsAiRefineJob(job)) return { ok: false, canceled: true };
+      if (canceled) {
+        aiRefineState.status = 'canceled';
+        aiRefineState.error = '';
+        return { ok: false, canceled: true };
+      }
+      const message = aiServiceErrorMessage(e, 'refine');
+      aiRefineState.status = 'error';
+      aiRefineState.error = message;
+      store.dispatch('showToast', message);
+      return { ok: false, error: message };
+    } finally {
+      releaseAiRefineJob(job);
     }
-    releaseAiRefineJob(job);
-    return { ok: false, canceled: true };
+  });
+  aiRefineSerial = job.promise.catch(() => {});
+  try {
+    return await job.promise;
+  } finally {
+    if (aiRefineStarts.get(episodeId) === job) aiRefineStarts.delete(episodeId);
   }
-  const canceled = job.canceled || job.invalidated;
-  aiRefineState.accepted = res.stats.accepted;
-  aiRefineState.rejected = res.stats.rejected;
-  if (!completed) {
-    aiRefineState.status = canceled ? 'canceled' : 'error';
-    aiRefineState.error = canceled ? '' : 'AI 精修未完成，可重新继续';
-    if (!canceled) store.dispatch('showToast', aiRefineState.error);
-    releaseAiRefineJob(job);
-    return { ok: false, canceled, partial: true, segs: res.map };
-  }
-  aiRefineState.status = 'done';
-  if (completed) {
-    store.dispatch(
-      'showToast',
-      'AI 精修完成：纠正 ' +
-        res.stats.accepted +
-        ' 处' +
-        (res.stats.rejected
-          ? '（保守挡下 ' + res.stats.rejected + ' 处瞎改）'
-          : '')
-    );
-  }
-  releaseAiRefineJob(job);
-  return {
-    ok: true,
-    complete: true,
-    changedIdx: res.changedIdx,
-    segs: res.map,
-    canceled: false,
-  };
 }
 
 function aiServiceErrorMessage(error, action) {
@@ -798,6 +835,16 @@ function aiServiceErrorMessage(error, action) {
     return 'AI 服务地址需使用 HTTPS；HTTP 仅限本机服务';
   }
   if (code === 'network') return 'AI 服务连接失败，请检查网络或服务配置';
+  if (code === 'configuration-unverified') {
+    return '请先在设置中测试联网 AI 服务连接';
+  }
+  if (code === 'unauthorized') return 'API 密钥无效或没有访问权限';
+  if (code === 'endpoint-not-found') return '服务地址或模型接口不存在';
+  if (code === 'rate-limited') return 'AI 服务请求过于频繁，请稍后重试';
+  if (code === 'json-mode-unsupported') {
+    return '当前模型不支持 JSON 输出，请更换模型或服务';
+  }
+  if (code === 'model-or-request') return '模型标识或请求参数不被服务接受';
   if (code === 'http') return 'AI 服务请求失败，请稍后重试';
   return action === 'refine'
     ? 'AI 精修失败，请稍后重试'
@@ -824,7 +871,17 @@ export function cancelTranscriptSummary(episodeId, options) {
 export function invalidateTranscriptDerivedTasks(episodeId) {
   if (!episodeId) return;
   cancelTranscriptSummary(episodeId, { invalidate: true });
-  cancelAiRefine(episodeId, { invalidate: true });
+  cancelAiRefine(episodeId, { invalidate: true, dropPersistedResult: true });
+}
+
+function cancelOtherAiRefines(episodeId) {
+  const ids = new Set([
+    ...Array.from(aiRefineStarts.keys()),
+    ...Array.from(aiRefineJobs.keys()),
+  ]);
+  ids.forEach(id => {
+    if (id !== episodeId) cancelAiRefine(id, { invalidate: true });
+  });
 }
 
 function cancelOtherTranscriptSummaries(episodeId) {
@@ -854,8 +911,8 @@ export async function startTranscriptSummary(
   const sourceHash = hashTranscriptSummarySource(paragraphs);
   const cfg = getAiServiceConfig();
   if (!hasOpenAiKey(cfg)) {
-    store.dispatch('showToast', '请先在设置中配置联网 AI 服务');
-    return { ok: false, reason: 'no-key' };
+    store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
+    return { ok: false, reason: 'configuration-unverified' };
   }
   cancelOtherTranscriptSummaries(episodeId);
   const existingJob =

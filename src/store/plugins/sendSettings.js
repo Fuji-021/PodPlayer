@@ -5,7 +5,13 @@ export function getSendSettingsPlugin() {
     store.subscribe((mutation, state) => {
       // console.log(mutation);
       if (mutation.type !== 'updateSettings') return;
-      ipcRenderer.send('settings', state.settings);
+      // Legacy renderer-stored AI keys must never be mirrored into
+      // electron-store while safeStorage migration is in progress.
+      const settings = Object.assign({}, state.settings || {});
+      delete settings.deepseekKey;
+      delete settings.deepseekModel;
+      delete settings.deepseekEndpoint;
+      ipcRenderer.send('settings', settings);
     });
   };
 }

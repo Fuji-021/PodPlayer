@@ -328,7 +328,7 @@
               </div>
             </div>
             <div class="description">
-              部署模型后，可在已下载单集上手动生成文字稿。
+              部署模型后，可在已下载单集详情页手动生成文字稿；生成后可在沉浸页点击封面查看。
             </div>
           </div>
           <div class="right settings-feature-actions">
@@ -448,7 +448,7 @@
               <button
                 class="settings-info-button"
                 type="button"
-                aria-label="联网 AI 精修说明"
+                aria-label="联网 AI 服务说明"
                 :aria-expanded="settingsInfoPopover === 'ai-refine'"
                 aria-controls="ai-refine-info"
                 @mousedown.stop
@@ -466,21 +466,27 @@
               >
                 <strong>联网与兼容性</strong>
                 <p>
-                  只有在你主动生成总结或精修稿时，才会将本集文字稿发送至已配置的
-                  AI 服务；音频文件不会上传。 默认服务为 DeepSeek，接口兼容
-                  OpenAI 格式；其它服务尚未经过兼容性认证。
+                  联网 AI 不等于 SenseVoice
+                  本地转写模型。只有在你主动生成总结或精修稿时，
+                  才会发送本集文字稿；音频不会上传。自定义服务仅提供实验性
+                  OpenAI Chat Completions 兼容。
                 </p>
               </div>
             </div>
             <div class="description">
-              只有在你主动生成总结或精修稿时，才会将本集文字稿发送至已配置的 AI
-              服务；音频文件不会上传。
+              选择服务后保存并测试连接，才能主动生成本集总结或精修稿。
             </div>
           </div>
           <div class="right settings-feature-actions">
-            <span class="settings-status">{{
-              aiRefineConfigured ? '已配置' : '未配置'
-            }}</span>
+            <span
+              class="settings-status"
+              :class="{
+                ready: aiServicePublic.status === 'available',
+                warning: aiServicePublic.status === 'failed',
+              }"
+            >
+              {{ aiServiceStatusText }}
+            </span>
             <button
               class="settings-primary-action"
               type="button"
@@ -495,41 +501,124 @@
         <div
           v-if="showAiRefineAdvanced"
           id="ai-refine-advanced"
-          class="settings-advanced-panel"
+          class="settings-advanced-panel settings-ai-panel"
         >
-          <div class="settings-advanced-copy">
-            <div class="title">高级设置</div>
+          <div class="settings-ai-panel-intro">
+            <div class="title">服务配置</div>
             <div class="description">
-              默认服务为 DeepSeek；模型和 Endpoint 是 OpenAI-compatible
-              高级配置。
+              选择服务并填写 API
+              密钥后，保存并测试连接。密钥只加密保存在本机；只有你主动生成总结或精修时才会发送文字稿。
             </div>
           </div>
           <div class="settings-advanced-controls settings-ai-controls">
-            <label class="settings-field">
-              <span>API Key</span>
-              <input
-                v-model="deepseekKey"
-                type="password"
-                class="text-input margin-right-0"
-                placeholder="仅保存在本机"
-              />
-            </label>
-            <label class="settings-field">
-              <span>模型</span>
-              <input
-                v-model="deepseekModel"
-                class="text-input margin-right-0"
-                placeholder="deepseek-chat"
-              />
-            </label>
-            <label class="settings-field settings-wide-field">
-              <span>Endpoint</span>
-              <input
-                v-model="deepseekEndpoint"
-                class="text-input margin-right-0"
-                placeholder="https://api.deepseek.com"
-              />
-            </label>
+            <div class="settings-ai-fields">
+              <label class="settings-field">
+                <span>服务商</span>
+                <select
+                  v-model="aiServiceDraft.provider"
+                  @change="onAiProviderChange"
+                >
+                  <option
+                    v-for="provider in aiServiceProviders"
+                    :key="provider.id"
+                    :value="provider.id"
+                  >
+                    {{ provider.label }}
+                  </option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>API 密钥</span>
+                <input
+                  v-model="aiServiceKeyDraft"
+                  type="password"
+                  class="text-input margin-right-0"
+                  autocomplete="off"
+                  :placeholder="aiServiceKeyPlaceholder"
+                />
+              </label>
+            </div>
+            <div class="settings-ai-model-row">
+              <span>推荐模型</span>
+              <strong>{{
+                aiServiceDraft.model || '请在高级设置填写模型标识'
+              }}</strong>
+            </div>
+            <div class="settings-ai-action-row">
+              <div class="settings-ai-actions">
+                <button
+                  class="settings-primary-action"
+                  type="button"
+                  :disabled="aiServiceBusy && !aiServiceTestRequestId"
+                  @click="
+                    aiServiceTestRequestId
+                      ? cancelAiServiceTest()
+                      : saveAndTestAiService()
+                  "
+                >
+                  {{ aiServiceTestRequestId ? '取消测试' : '保存并测试' }}
+                </button>
+                <button
+                  v-if="aiServiceCanRemoveKey"
+                  class="settings-text-action"
+                  type="button"
+                  :disabled="aiServiceBusy"
+                  @click="removeAiServiceKey"
+                >
+                  移除密钥
+                </button>
+              </div>
+              <div class="settings-ai-advanced-toggle">
+                <button
+                  type="button"
+                  :aria-expanded="showAiServiceDetails"
+                  aria-controls="ai-service-details"
+                  @click="showAiServiceDetails = !showAiServiceDetails"
+                >
+                  {{ showAiServiceDetails ? '收起高级设置' : '高级设置' }}
+                </button>
+              </div>
+            </div>
+            <div
+              v-if="
+                aiServiceCredentialScopeChanged &&
+                aiServiceDraft.authStrategy !== 'none' &&
+                !aiServiceKeyDraft
+              "
+              class="settings-ai-message"
+              role="status"
+            >
+              已切换服务，请填写该服务的 API 密钥
+            </div>
+            <div
+              v-if="aiServiceMessage"
+              class="settings-ai-message"
+              role="status"
+            >
+              {{ aiServiceMessage }}
+            </div>
+            <div
+              v-if="showAiServiceDetails"
+              id="ai-service-details"
+              class="settings-ai-details"
+            >
+              <label class="settings-field">
+                <span>模型标识</span>
+                <input
+                  v-model.trim="aiServiceDraft.model"
+                  class="text-input margin-right-0"
+                  placeholder="服务商提供的模型标识"
+                />
+              </label>
+              <label class="settings-field settings-wide-field">
+                <span>服务地址（Base URL）</span>
+                <input
+                  v-model.trim="aiServiceDraft.baseUrl"
+                  class="text-input margin-right-0"
+                  placeholder="https://api.example.com/v1"
+                />
+              </label>
+            </div>
           </div>
         </div>
       </section>
@@ -760,6 +849,28 @@
         </div>
       </div>
 
+      <div class="item">
+        <div class="left">
+          <div class="title">
+            {{ $t('settings.pod.statsBarCoverTexture') }}
+          </div>
+          <div class="description">
+            {{ $t('settings.pod.statsBarCoverTextureDesc') }}
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="stats-bar-cover-texture"
+              v-model="statsBarCoverTexture"
+              type="checkbox"
+              name="stats-bar-cover-texture"
+            />
+            <label for="stats-bar-cover-texture"></label>
+          </div>
+        </div>
+      </div>
+
       <!-- [§12] 已删「代理」+「Real IP」段：原为网易云 API 走代理 / 伪装 IP 绕区域限制；
            本应用播客 RSS 走主进程直连、下载走 Node 原生 https(Clash TUN 路由)，不依赖此设置。
            底层 proxy/realIP 配置逻辑保留(dormant)、仅移除 UI 配置项。 -->
@@ -969,6 +1080,19 @@ import {
   verifyModel,
   onModelInstallProgress,
 } from '@/utils/podcast/asrModel';
+import {
+  createDefaultAiServiceConfig,
+  getAiServiceConfig,
+  getAiServiceStatus,
+  nextAiRequestId,
+  deleteAiServiceKey,
+  cancelAiServiceRequest,
+  testAiServiceConnection,
+} from '@/utils/podcast/aiService';
+import {
+  getAiProviderOptions,
+  hasSameAiCredentialScope,
+} from '@/utils/podcast/aiServiceConfig';
 // [缓存·C1] 统一缓存占用统计 + 清理
 import {
   getCacheBreakdown,
@@ -1039,6 +1163,13 @@ export default {
       showPodcastIndexAdvanced: false,
       showAsrModelAdvanced: false,
       showAiRefineAdvanced: false,
+      showAiServiceDetails: false,
+      aiServiceDraft: createDefaultAiServiceConfig('deepseek'),
+      aiServiceKeyDraft: '',
+      aiServiceBusy: false,
+      aiServiceTestRequestId: '',
+      aiServiceTestCanceled: false,
+      aiServiceMessage: '',
       asrModel: {
         status: 'checking',
         ready: false,
@@ -1161,11 +1292,62 @@ export default {
     podcastIndexActionLabel() {
       return this.podcastIndexConfigured ? '高级设置' : '配置密钥';
     },
-    aiRefineConfigured() {
-      return !!this.deepseekKey;
+    aiServicePublic() {
+      return getAiServiceConfig(this.settings);
+    },
+    aiServiceProviders() {
+      return getAiProviderOptions();
+    },
+    aiServiceDraftDirty() {
+      const saved = this.aiServicePublic;
+      const draft = this.aiServiceDraft || {};
+      return (
+        !!this.aiServiceKeyDraft ||
+        ['provider', 'model', 'baseUrl', 'authStrategy', 'jsonMode'].some(
+          key => String(saved[key] || '') !== String(draft[key] || '')
+        )
+      );
+    },
+    aiServiceCredentialScopeChanged() {
+      return !hasSameAiCredentialScope(
+        this.aiServicePublic,
+        this.aiServiceDraft || {}
+      );
+    },
+    aiServiceKeyPlaceholder() {
+      if (this.aiServiceDraft.authStrategy === 'none') {
+        return '本地服务通常不需要密钥';
+      }
+      if (
+        !this.aiServiceCredentialScopeChanged &&
+        this.aiServicePublic.maskedKey
+      ) {
+        return this.aiServicePublic.maskedKey;
+      }
+      return this.aiServiceCredentialScopeChanged
+        ? '已切换服务，请填写该服务的 API 密钥'
+        : '仅加密保存在本机';
+    },
+    aiServiceStatusText() {
+      if (this.aiServiceDraftDirty) return '待保存';
+      const status = this.aiServicePublic.status;
+      if (status === 'available') return '可用';
+      if (status === 'pending') return '待验证';
+      if (status === 'failed') return '验证失败';
+      if (status === 'unavailable') return '不可用';
+      return '未配置';
+    },
+    aiServiceCanRemoveKey() {
+      return (
+        this.aiServicePublic.authStrategy !== 'none' &&
+        this.aiServicePublic.hasKey &&
+        !this.aiServiceCredentialScopeChanged
+      );
     },
     aiRefineActionLabel() {
-      return this.aiRefineConfigured ? '高级设置' : '配置服务';
+      return this.aiServicePublic.status === 'available'
+        ? '管理服务'
+        : '配置服务';
     },
     asrModelShortStatus() {
       if (this.asrModel.installing) return '部署中';
@@ -1191,13 +1373,13 @@ export default {
       if (this.asrDownloadAvailable)
         return '联网下载约 240 MB 并校验 SenseVoiceSmall 模型';
       if (!this.asrModel.platformSupported)
-        return 'PodPlayer 0.6.0 的本地转文字稿仅验证 Windows x64';
+        return 'PodPlayer 0.7.0 的本地转文字稿仅验证 Windows x64';
       return '当前无法使用远程部署，请稍后重试或选择本地模型目录';
     },
     asrModelStatusText() {
       if (this.asrModel.installing) return '正在部署模型';
       if (!this.asrModel.platformSupported) {
-        return '当前平台暂不支持。本地转文字稿在 0.6.0 仅验证 Windows x64。';
+        return '当前平台暂不支持。本地转文字稿在 0.7.0 仅验证 Windows x64。';
       }
       if (this.asrModel.error) {
         return '模型不可用，请重新校验或选择本地模型目录';
@@ -1352,6 +1534,18 @@ export default {
         });
       },
     },
+    statsBarCoverTexture: {
+      get() {
+        if (this.settings.statsBarCoverTexture === undefined) return false;
+        return this.settings.statsBarCoverTexture;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'statsBarCoverTexture',
+          value,
+        });
+      },
+    },
     closeAppOption: {
       get() {
         return this.settings.closeAppOption;
@@ -1463,41 +1657,6 @@ export default {
         });
       },
     },
-    // [B路·AI精修] DeepSeek 接入：key/model/endpoint 仅本地持久化(settings)；
-    //   aiRefine.js 读取。key 绝不硬编码/打印/进 git；留空即不启用、纯本地体验。
-    deepseekKey: {
-      get() {
-        return this.settings.deepseekKey || '';
-      },
-      set(value) {
-        this.$store.commit('updateSettings', {
-          key: 'deepseekKey',
-          value: (value || '').trim(),
-        });
-      },
-    },
-    deepseekModel: {
-      get() {
-        return this.settings.deepseekModel || '';
-      },
-      set(value) {
-        this.$store.commit('updateSettings', {
-          key: 'deepseekModel',
-          value: (value || '').trim(),
-        });
-      },
-    },
-    deepseekEndpoint: {
-      get() {
-        return this.settings.deepseekEndpoint || '';
-      },
-      set(value) {
-        this.$store.commit('updateSettings', {
-          key: 'deepseekEndpoint',
-          value: (value || '').trim(),
-        });
-      },
-    },
     podcastIndexSecret: {
       get() {
         return this.settings.podcastIndexSecret || '';
@@ -1519,6 +1678,7 @@ export default {
       this.refreshCacheStats();
       this.refreshAsrModelStatus();
       this.bindAsrModelProgress();
+      this.refreshAiServiceStatus();
     }
   },
   activated() {
@@ -1530,6 +1690,7 @@ export default {
       this.refreshCacheStats();
       this.refreshAsrModelStatus();
       this.bindAsrModelProgress();
+      this.refreshAiServiceStatus();
     }
   },
   deactivated() {
@@ -1582,6 +1743,112 @@ export default {
     },
     toggleAiRefineAdvanced() {
       this.showAiRefineAdvanced = !this.showAiRefineAdvanced;
+    },
+    applyAiServiceResult(result, preserveDraft) {
+      const service = result && result.service;
+      if (!service) return;
+      const previousKey = this.aiServiceKeyDraft;
+      this.aiServiceDraft = Object.assign({}, service);
+      if (preserveDraft) this.aiServiceKeyDraft = previousKey;
+    },
+    async refreshAiServiceStatus() {
+      const result = await getAiServiceStatus(this.$store);
+      this.applyAiServiceResult(result, true);
+      if (!result || !result.ok) {
+        this.aiServiceMessage =
+          (result && result.error) || '无法读取联网 AI 服务状态';
+      }
+    },
+    onAiProviderChange() {
+      const next = createDefaultAiServiceConfig(this.aiServiceDraft.provider);
+      this.aiServiceDraft = next;
+      this.aiServiceKeyDraft = '';
+      this.aiServiceMessage =
+        next.authStrategy === 'none'
+          ? '服务配置已更改，请保存并测试'
+          : '已切换服务，请填写该服务的 API 密钥';
+    },
+    formatAiServiceError(result) {
+      const code = result && result.code;
+      if (code === 'unauthorized') return 'API 密钥无效或没有访问权限';
+      if (code === 'endpoint-not-found') return '服务地址或模型接口不存在';
+      if (code === 'rate-limited') return '请求过于频繁，请稍后重试';
+      if (code === 'timeout') return '连接测试超时，请稍后重试';
+      if (code === 'json-mode-unsupported') {
+        return '当前模型不支持 JSON 输出，请更换模型或服务';
+      }
+      if (code === 'insecure-endpoint') {
+        return '服务地址需使用 HTTPS；HTTP 仅限本机服务';
+      }
+      if (code === 'safe-storage-unavailable') {
+        return '系统凭据保护不可用，未保存 API 密钥';
+      }
+      if (code === 'configuration-stale') {
+        return '服务配置已变更，请重新测试连接';
+      }
+      if (code === 'credential-scope-mismatch') {
+        return '已切换服务，请填写该服务的 API 密钥';
+      }
+      if (code === 'no-key') return '请先填写 API 密钥或选择本地服务';
+      if (code === 'desktop-only') return '联网 AI 仅桌面版可用';
+      return (result && result.error) || '联网 AI 服务操作失败';
+    },
+    async saveAndTestAiService() {
+      if (this.aiServiceBusy) return;
+      this.aiServiceBusy = true;
+      this.aiServiceTestCanceled = false;
+      const requestId = nextAiRequestId('settings-ai-test');
+      this.aiServiceTestRequestId = requestId;
+      this.aiServiceMessage = '正在测试连接，可能产生极少量 API 用量';
+      try {
+        const result = await testAiServiceConnection(
+          this.$store,
+          this.aiServiceDraft,
+          this.aiServiceKeyDraft,
+          requestId
+        );
+        if (this.aiServiceTestCanceled) {
+          this.aiServiceMessage = '已取消连接测试';
+        } else if (result && result.ok) {
+          this.applyAiServiceResult(result, false);
+          this.aiServiceKeyDraft = '';
+          this.aiServiceMessage =
+            '配置已保存并验证，可用于本集总结和文字稿精修';
+        } else {
+          this.aiServiceMessage = this.formatAiServiceError(result);
+        }
+      } finally {
+        if (this.aiServiceTestRequestId === requestId) {
+          this.aiServiceTestRequestId = '';
+        }
+        this.aiServiceBusy = false;
+      }
+    },
+    cancelAiServiceTest() {
+      if (!this.aiServiceTestRequestId) return;
+      this.aiServiceTestCanceled = true;
+      cancelAiServiceRequest(this.aiServiceTestRequestId);
+    },
+    async removeAiServiceKey() {
+      if (this.aiServiceBusy || !this.aiServiceCanRemoveKey) return;
+      const ok =
+        typeof window.confirm !== 'function' ||
+        window.confirm(
+          '确定移除联网 AI API 密钥？不会删除已有文字稿、精修稿或总结。'
+        );
+      if (!ok) return;
+      this.aiServiceBusy = true;
+      try {
+        const result = await deleteAiServiceKey(this.$store);
+        this.applyAiServiceResult(result, false);
+        this.aiServiceKeyDraft = '';
+        this.aiServiceMessage =
+          result && result.ok
+            ? 'API 密钥已移除'
+            : this.formatAiServiceError(result);
+      } finally {
+        this.aiServiceBusy = false;
+      }
     },
     async onAsrModelPrimaryAction() {
       if (this.asrModel.installing) return;
@@ -2405,11 +2672,116 @@ h3 {
   min-width: 0;
 }
 
-.settings-secret-controls,
-.settings-ai-controls {
+.settings-secret-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.settings-ai-panel {
+  display: block;
+  padding: 16px;
+}
+
+.settings-ai-panel-intro {
+  min-width: 0;
+
+  .title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .description {
+    margin-top: 4px;
+    color: var(--color-secondary);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+}
+
+.settings-ai-controls {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.settings-ai-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(260px, 1.3fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-ai-model-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: var(--color-secondary);
+  font-size: 12px;
+
+  strong {
+    min-width: 0;
+    color: var(--color-text);
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.settings-ai-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-secondary-bg);
+}
+
+.settings-ai-message {
+  min-width: 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-button);
+  background: var(--color-secondary-bg-for-transparent);
+  color: var(--color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-ai-actions,
+.settings-ai-advanced-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+
+  button {
+    margin: 0;
+  }
+}
+
+.settings-ai-actions {
+  justify-content: flex-start;
+}
+
+.settings-ai-advanced-toggle {
+  justify-content: flex-end;
+}
+
+.settings-text-action {
+  color: var(--color-secondary);
+}
+
+.settings-ai-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-secondary-bg);
 }
 
 .settings-field {
@@ -2470,6 +2842,22 @@ h3 {
   .settings-advanced-panel {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+
+  .settings-ai-details {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-ai-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-ai-action-row {
+    align-items: flex-start;
+  }
+
+  .settings-ai-advanced-toggle {
+    justify-content: flex-start;
   }
 }
 

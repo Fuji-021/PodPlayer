@@ -20,17 +20,27 @@
         <div class="title">
           <router-link :to="'/mv/' + getID(mv)">{{ getTitle(mv) }}</router-link>
         </div>
-        <div class="artist" v-html="getSubtitle(mv)"></div>
+        <div v-if="subtitleInfo(mv).text" class="artist">
+          <router-link v-if="subtitleInfo(mv).to" :to="subtitleInfo(mv).to">
+            {{ subtitleInfo(mv).text }}
+          </router-link>
+          <span v-else>{{ subtitleInfo(mv).text }}</span>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script>
+import { getMvSubtitle } from '@/utils/presentationMetadata';
+
 export default {
   name: 'CoverVideo',
   props: {
-    mvs: Array,
+    mvs: {
+      type: Array,
+      default: () => [],
+    },
     subtitle: {
       type: String,
       default: 'artist',
@@ -62,21 +72,8 @@ export default {
       if (mv.name !== undefined) return mv.name;
       if (mv.title !== undefined) return mv.title;
     },
-    getSubtitle(mv) {
-      if (this.subtitle === 'artist') {
-        let artistName = 'null';
-        let artistID = 0;
-        if (mv.artistName !== undefined) {
-          artistName = mv.artistName;
-          artistID = mv.artistId;
-        } else if (mv.creator !== undefined) {
-          artistName = mv.creator[0].userName;
-          artistID = mv.creator[0].userId;
-        }
-        return `<a href="/artist/${artistID}">${artistName}</a>`;
-      } else if (this.subtitle === 'publishTime') {
-        return mv.publishTime;
-      }
+    subtitleInfo(mv) {
+      return getMvSubtitle(mv, this.subtitle);
     },
   },
 };

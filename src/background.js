@@ -39,6 +39,10 @@ import {
   registerAsrModelIpc,
   shutdownAsrModelManager,
 } from './electron/asrModelManager';
+import {
+  registerAiServiceIpc,
+  shutdownAiServiceManager,
+} from './electron/aiServiceManager';
 // [T3] 桌面通知：新单集发现 / 下载完成 → Electron Notification
 import { initNotifications } from './electron/notifications';
 import { createMenu } from './electron/menu';
@@ -603,6 +607,8 @@ class Background {
       // [转文字稿] 注册 ASR IPC（传 store 以读模型路径设置；与播放/下载解耦）
       registerAsrModelIpc(() => this.window);
       registerAsrIpc(() => this.window, this.store);
+      // 联网 AI 凭据与请求均由主进程持有；设置页/文字稿仅通过受控 IPC 访问。
+      registerAiServiceIpc();
 
       // set proxy
       const proxyRules = this.store.get('proxy');
@@ -673,6 +679,7 @@ class Background {
       this.willQuitApp = true;
       this.unbindPowerEvents();
       shutdownAsrModelManager();
+      shutdownAiServiceManager();
     });
 
     app.on('quit', () => {

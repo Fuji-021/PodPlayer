@@ -29,8 +29,11 @@
           /></span>
           <router-link :to="getTitleLink(item)">{{ item.name }}</router-link>
         </div>
-        <div v-if="type !== 'artist' && subText !== 'none'" class="info">
-          <span v-html="getSubText(item)"></span>
+        <div v-if="type !== 'artist' && subTextInfo(item).text" class="info">
+          <router-link v-if="subTextInfo(item).to" :to="subTextInfo(item).to">
+            {{ subTextInfo(item).text }}
+          </router-link>
+          <span v-else>{{ subTextInfo(item).text }}</span>
         </div>
       </div>
     </div>
@@ -40,6 +43,7 @@
 <script>
 import Cover from '@/components/Cover.vue';
 import ExplicitSymbol from '@/components/ExplicitSymbol.vue';
+import { getCoverRowSubText } from '@/utils/presentationMetadata';
 
 export default {
   name: 'CoverRow',
@@ -66,31 +70,8 @@ export default {
     },
   },
   methods: {
-    getSubText(item) {
-      if (this.subText === 'copywriter') return item.copywriter;
-      if (this.subText === 'description') return item.description;
-      if (this.subText === 'updateFrequency') return item.updateFrequency;
-      if (this.subText === 'creator') return 'by ' + item.creator.nickname;
-      if (this.subText === 'releaseYear')
-        return new Date(item.publishTime).getFullYear();
-      if (this.subText === 'artist') {
-        if (item.artist !== undefined)
-          return `<a href="/artist/${item.artist.id}">${item.artist.name}</a>`;
-        if (item.artists !== undefined)
-          return `<a href="/artist/${item.artists[0].id}">${item.artists[0].name}</a>`;
-      }
-      if (this.subText === 'albumType+releaseYear') {
-        let albumType = item.type;
-        if (item.type === 'EP/Single') {
-          albumType = item.size === 1 ? 'Single' : 'EP';
-        } else if (item.type === 'Single') {
-          albumType = 'Single';
-        } else if (item.type === '专辑') {
-          albumType = 'Album';
-        }
-        return `${albumType} · ${new Date(item.publishTime).getFullYear()}`;
-      }
-      if (this.subText === 'appleMusic') return 'by Apple Music';
+    subTextInfo(item) {
+      return getCoverRowSubText(item, this.subText);
     },
     isPrivacy(item) {
       return this.type === 'playlist' && item.privacy === 10;
