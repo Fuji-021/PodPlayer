@@ -534,12 +534,7 @@
                   type="password"
                   class="text-input margin-right-0"
                   autocomplete="off"
-                  :placeholder="
-                    aiServicePublic.maskedKey ||
-                    (aiServiceDraft.authStrategy === 'none'
-                      ? '本地服务通常不需要密钥'
-                      : '仅加密保存在本机')
-                  "
+                  :placeholder="aiServiceKeyPlaceholder"
                 />
               </label>
             </div>
@@ -590,6 +585,17 @@
                   {{ showAiServiceDetails ? '收起高级设置' : '高级设置' }}
                 </button>
               </div>
+            </div>
+            <div
+              v-if="
+                aiServiceCredentialScopeChanged &&
+                aiServiceDraft.authStrategy !== 'none' &&
+                !aiServiceKeyDraft
+              "
+              class="settings-ai-message"
+              role="status"
+            >
+              已切换服务，请填写该服务的 API 密钥
             </div>
             <div
               v-if="aiServiceMessage"
@@ -1069,7 +1075,10 @@ import {
   cancelAiServiceRequest,
   testAiServiceConnection,
 } from '@/utils/podcast/aiService';
-import { getAiProviderOptions } from '@/utils/podcast/aiServiceConfig';
+import {
+  getAiProviderOptions,
+  hasSameAiCredentialScope,
+} from '@/utils/podcast/aiServiceConfig';
 // [缓存·C1] 统一缓存占用统计 + 清理
 import {
   getCacheBreakdown,
@@ -1285,6 +1294,26 @@ export default {
         )
       );
     },
+    aiServiceCredentialScopeChanged() {
+      return !hasSameAiCredentialScope(
+        this.aiServicePublic,
+        this.aiServiceDraft || {}
+      );
+    },
+    aiServiceKeyPlaceholder() {
+      if (this.aiServiceDraft.authStrategy === 'none') {
+        return '本地服务通常不需要密钥';
+      }
+      if (
+        !this.aiServiceCredentialScopeChanged &&
+        this.aiServicePublic.maskedKey
+      ) {
+        return this.aiServicePublic.maskedKey;
+      }
+      return this.aiServiceCredentialScopeChanged
+        ? '已切换服务，请填写该服务的 API 密钥'
+        : '仅加密保存在本机';
+    },
     aiServiceStatusText() {
       if (this.aiServiceDraftDirty) return '待保存';
       const status = this.aiServicePublic.status;
@@ -1297,7 +1326,8 @@ export default {
     aiServiceCanRemoveKey() {
       return (
         this.aiServicePublic.authStrategy !== 'none' &&
-        this.aiServicePublic.hasKey
+        this.aiServicePublic.hasKey &&
+        !this.aiServiceCredentialScopeChanged
       );
     },
     aiRefineActionLabel() {
@@ -1705,13 +1735,12 @@ export default {
     },
     onAiProviderChange() {
       const next = createDefaultAiServiceConfig(this.aiServiceDraft.provider);
-      const current = this.aiServicePublic;
-      if (current.hasKey && next.authStrategy !== 'none') {
-        next.hasKey = true;
-        next.maskedKey = current.maskedKey;
-      }
       this.aiServiceDraft = next;
-      this.aiServiceMessage = '服务配置已更改，请保存并测试连接';
+      this.aiServiceKeyDraft = '';
+      this.aiServiceMessage =
+        next.authStrategy === 'none'
+          ? '服务配置已更改，请保存并测试连接'
+          : '已切换服务，请填写该服务的 API 密钥';
     },
     formatAiServiceError(result) {
       const code = result && result.code;
@@ -1730,6 +1759,9 @@ export default {
       }
       if (code === 'configuration-stale') {
         return '服务配置已变更，请重新测试连接';
+      }
+      if (code === 'credential-scope-mismatch') {
+        return '已切换服务，请填写该服务的 API 密钥';
       }
       if (code === 'no-key') return '请先填写 API 密钥或选择本地服务';
       if (code === 'desktop-only') return '联网 AI 仅桌面版可用';

@@ -246,7 +246,7 @@ async function main() {
 
     const httpsCaptures = [];
     const httpCaptures = [];
-    const httpsPlans = [successPlan(), successPlan()];
+    const httpsPlans = [successPlan(), successPlan(), successPlan()];
     const httpPlans = [successPlan()];
     const configStore = new MemoryStore();
     const service = managerModule.createAiServiceManager({
@@ -327,6 +327,129 @@ async function main() {
     });
     assert.strictEqual(stale.ok, false);
     assert.strictEqual(stale.code, 'configuration-unverified');
+
+    // Credentials are scoped to the provider, normalized base URL, and auth
+    // strategy. A provider or endpoint switch without a fresh key must stop
+    // before requestChat, while model-only changes may reuse the same key.
+    const scopeCaptureCount = httpsCaptures.length;
+    const switchedProviderWithoutKey = await service.testConnection({
+      config: providerConfig('openai', {
+        model: 'openai-model',
+        baseUrl: 'https://service.example.test/v1',
+      }),
+      requestId: 'scope-switch-provider',
+    });
+    assert.strictEqual(switchedProviderWithoutKey.ok, false);
+    assert.strictEqual(
+      switchedProviderWithoutKey.code,
+      'credential-scope-mismatch'
+    );
+    assert.strictEqual(
+      httpsCaptures.length,
+      scopeCaptureCount,
+      'a scope mismatch must never create a transport request'
+    );
+    assert.ok(
+      !JSON.stringify(switchedProviderWithoutKey).includes(
+        'legacy-secret-for-smoke'
+      )
+    );
+    const switchedEndpointWithoutKey = await service.testConnection({
+      config: providerConfig('deepseek', {
+        model: 'changed-model',
+        baseUrl: 'https://other.example.test/v1',
+      }),
+      requestId: 'scope-switch-endpoint',
+    });
+    assert.strictEqual(switchedEndpointWithoutKey.ok, false);
+    assert.strictEqual(
+      switchedEndpointWithoutKey.code,
+      'credential-scope-mismatch'
+    );
+    assert.strictEqual(
+      httpsCaptures.length,
+      scopeCaptureCount,
+      'an endpoint mismatch must never create a transport request'
+    );
+    const sameServiceNewModel = service.saveConfig({
+      config: providerConfig('deepseek', {
+        model: 'another-model',
+        baseUrl: 'https://service.example.test/v1/',
+      }),
+    });
+    assert.strictEqual(sameServiceNewModel.ok, true);
+    assert.strictEqual(sameServiceNewModel.service.hasKey, true);
+    assert.strictEqual(sameServiceNewModel.service.status, 'pending');
+
+    const scopedNewKey = await service.testConnection({
+      config: providerConfig('openai', {
+        model: 'openai-model',
+        baseUrl: 'https://other.example.test/v1',
+      }),
+      key: 'openai-scope-only-smoke-key',
+      requestId: 'scope-switch-new-key',
+    });
+    assert.strictEqual(scopedNewKey.ok, true);
+    assert.strictEqual(httpsCaptures.length, scopeCaptureCount + 1);
+    assert.strictEqual(
+      httpsCaptures[httpsCaptures.length - 1].options.headers.Authorization,
+      'Bearer openai-scope-only-smoke-key'
+    );
+    assert.ok(
+      !JSON.stringify(scopedNewKey).includes('openai-scope-only-smoke-key')
+    );
+    assert.deepStrictEqual(configStore.get('credential').scope, {
+      provider: 'openai',
+      baseUrl: 'https://other.example.test/v1',
+      authStrategy: 'bearer',
+    });
+
+    // Existing encrypted records without a scope are only migrated against the
+    // already-saved configuration, never against the caller's new draft.
+    const legacyScopeStore = new MemoryStore();
+    const legacyScopeSeed = managerModule.createAiServiceManager({
+      configStore: legacyScopeStore,
+      safeStorage: createSafeStorage(true),
+      transports: {
+        https: createTransport([], []),
+        http: createTransport([], []),
+      },
+    });
+    legacyScopeSeed.saveConfig({
+      config: providerConfig('deepseek', {
+        baseUrl: 'https://legacy-scope.example.test/v1',
+      }),
+      key: 'legacy-unscoped-scope-key',
+    });
+    delete legacyScopeStore.get('credential').scope;
+    const legacyScopeCaptures = [];
+    const legacyScopeManager = managerModule.createAiServiceManager({
+      configStore: legacyScopeStore,
+      safeStorage: createSafeStorage(true),
+      transports: {
+        https: createTransport([successPlan()], legacyScopeCaptures),
+        http: createTransport([], []),
+      },
+    });
+    const migratedLegacyScope = legacyScopeManager.getStatus();
+    assert.strictEqual(migratedLegacyScope.ok, true);
+    assert.deepStrictEqual(legacyScopeStore.get('credential').scope, {
+      provider: 'deepseek',
+      baseUrl: 'https://legacy-scope.example.test/v1',
+      authStrategy: 'bearer',
+    });
+    const legacyScopeMismatch = await legacyScopeManager.testConnection({
+      config: providerConfig('custom', {
+        baseUrl: 'https://new-scope.example.test/v1',
+      }),
+      requestId: 'legacy-scope-mismatch',
+    });
+    assert.strictEqual(legacyScopeMismatch.ok, false);
+    assert.strictEqual(legacyScopeMismatch.code, 'credential-scope-mismatch');
+    assert.strictEqual(legacyScopeCaptures.length, 0);
+    assert.ok(
+      !JSON.stringify(legacyScopeMismatch).includes('legacy-unscoped-scope-key')
+    );
 
     const remoteHttp = service.saveConfig({
       config: providerConfig('custom', {

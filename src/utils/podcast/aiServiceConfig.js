@@ -77,6 +77,28 @@ function trimTrailingSlash(value) {
   return trimText(value).replace(/\/+$/, '');
 }
 
+function normalizeCredentialBaseUrl(value) {
+  const raw = trimTrailingSlash(value);
+  try {
+    const url = new URL(raw);
+    // Credentials protect the actual Chat Completions destination. A user may
+    // enter either the API base URL or its explicit /chat/completions endpoint.
+    // Treat those two spellings as the same service, while keeping a query part
+    // because it is sent over the network.
+    let pathname = (url.pathname || '').replace(/\/+$/, '');
+    pathname = pathname.replace(/\/chat\/completions$/i, '');
+    url.username = '';
+    url.password = '';
+    url.hash = '';
+    return url.protocol + '//' + url.host + pathname + url.search;
+  } catch (e) {
+    // Endpoint validation remains in resolveOpenAiChatUrl(). Returning the
+    // normalized raw value here makes an invalid draft fail closed as a scope
+    // mismatch instead of ever borrowing another service's credential.
+    return raw;
+  }
+}
+
 export function getAiProviderPreset(provider) {
   return AI_PROVIDER_PRESETS[provider] || AI_PROVIDER_PRESETS.deepseek;
 }
@@ -113,6 +135,27 @@ export function normalizeAiServiceConfig(input) {
 
 export function createAiProviderPresetConfig(provider) {
   return normalizeAiServiceConfig({ provider });
+}
+
+// This is deliberately public configuration only: it identifies the service a
+// credential is allowed to authenticate, never the credential itself.
+export function getAiCredentialScope(input) {
+  const config = normalizeAiServiceConfig(input);
+  return {
+    provider: config.provider,
+    baseUrl: normalizeCredentialBaseUrl(config.baseUrl),
+    authStrategy: config.authStrategy,
+  };
+}
+
+export function hasSameAiCredentialScope(left, right) {
+  const a = getAiCredentialScope(left);
+  const b = getAiCredentialScope(right);
+  return (
+    a.provider === b.provider &&
+    a.baseUrl === b.baseUrl &&
+    a.authStrategy === b.authStrategy
+  );
 }
 
 export function isLoopbackHost(hostname) {

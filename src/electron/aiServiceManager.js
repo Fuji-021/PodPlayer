@@ -10,6 +10,8 @@ import { createWindowsDpapiProtector } from './windowsDpapi';
 import {
   AI_SERVICE_SCHEMA_VERSION,
   createAiProviderPresetConfig,
+  getAiCredentialScope,
+  hasSameAiCredentialScope,
   isAiServiceReady,
   normalizeAiServiceConfig,
   publicAiServiceConfig,
@@ -228,6 +230,11 @@ export function createAiServiceManager(options) {
     return normalizeAiServiceConfig(raw);
   }
 
+  function hasStoredConfig() {
+    const raw = configStore.get(STORE_CONFIG_KEY);
+    return !!raw && typeof raw === 'object';
+  }
+
   function readCredentialRecord() {
     const record = configStore.get(STORE_CREDENTIAL_KEY);
     return record && typeof record === 'object' ? record : null;
@@ -238,6 +245,7 @@ export function createAiServiceManager(options) {
       record && record.backend,
       record && record.updatedAt,
       record && record.ciphertext,
+      record && record.scope ? JSON.stringify(record.scope) : '',
     ].join(':');
   }
 
@@ -245,11 +253,31 @@ export function createAiServiceManager(options) {
     credentialCache = null;
   }
 
-  function readKey() {
+  function scopeMismatchError() {
+    return createError(
+      'credential-scope-mismatch',
+      '已切换服务，请填写该服务的 API 密钥'
+    );
+  }
+
+  function readKey(config, options) {
     const record = readCredentialRecord();
     if (!record || !record.ciphertext) return '';
+    const normalized = normalizeAiServiceConfig(config);
+    const expectedScope = getAiCredentialScope(normalized);
+    const allowLegacyScopeMigration =
+      options && options.allowLegacyScopeMigration === true;
+    if (
+      record.scope &&
+      !hasSameAiCredentialScope(record.scope, expectedScope)
+    ) {
+      throw scopeMismatchError();
+    }
+    if (!record.scope && !allowLegacyScopeMigration) {
+      throw scopeMismatchError();
+    }
     const cacheId = credentialCacheId(record);
-    if (credentialCache && credentialCache.id === cacheId) {
+    if (record.scope && credentialCache && credentialCache.id === cacheId) {
       return credentialCache.key;
     }
     const backend = credentialBackendFor(record);
@@ -261,7 +289,15 @@ export function createAiServiceManager(options) {
     }
     try {
       const key = cleanString(backend.unprotect(record.ciphertext));
-      credentialCache = { id: cacheId, key };
+      let activeRecord = record;
+      if (!record.scope) {
+        activeRecord = { ...record, scope: expectedScope };
+        // Legacy ciphertext has no service binding. It is only ever bound to
+        // the already-saved configuration after successful local decryption;
+        // this migration never makes a network request.
+        configStore.set(STORE_CREDENTIAL_KEY, activeRecord);
+      }
+      credentialCache = { id: credentialCacheId(activeRecord), key };
       return key;
     } catch (e) {
       throw createError(
@@ -271,13 +307,13 @@ export function createAiServiceManager(options) {
     }
   }
 
-  function publicState(config, key) {
+  function publicState(config, key, options) {
     const normalized = normalizeAiServiceConfig(config);
     const usableKey =
       normalized.authStrategy === 'none'
         ? ''
         : key === undefined
-        ? readKey()
+        ? readKey(normalized, options)
         : key;
     const fingerprint = isAiServiceReady({
       ...normalized,
@@ -308,7 +344,12 @@ export function createAiServiceManager(options) {
 
   function getStatus() {
     try {
-      return { ok: true, service: publicState(readStoredConfig()) };
+      return {
+        ok: true,
+        service: publicState(readStoredConfig(), undefined, {
+          allowLegacyScopeMigration: hasStoredConfig(),
+        }),
+      };
     } catch (error) {
       const config = readStoredConfig();
       return {
@@ -323,7 +364,7 @@ export function createAiServiceManager(options) {
     }
   }
 
-  function writeCredential(key) {
+  function writeCredential(key, config) {
     const backend = credentialBackendFor();
     if (!backend) {
       throw createError(
@@ -339,6 +380,7 @@ export function createAiServiceManager(options) {
         schemaVersion: AI_SERVICE_SCHEMA_VERSION,
         backend: backend.id,
         ciphertext,
+        scope: getAiCredentialScope(config),
         updatedAt: now(),
       };
       configStore.set(STORE_CREDENTIAL_KEY, record);
@@ -373,12 +415,19 @@ export function createAiServiceManager(options) {
     try {
       if (hasIncomingKey) {
         key = cleanString(input.key);
-        writeCredential(key);
+        writeCredential(key, config);
       } else if (input.clearKey === true) {
         configStore.delete(STORE_CREDENTIAL_KEY);
         clearCredentialCache();
       } else if (config.authStrategy !== 'none') {
-        key = readKey();
+        const record = readCredentialRecord();
+        if (record && !record.scope) {
+          // An unscoped legacy record may only be attached to the configuration
+          // already stored before this save. Never bind it to a new draft.
+          if (!hasStoredConfig()) throw scopeMismatchError();
+          readKey(readStoredConfig(), { allowLegacyScopeMigration: true });
+        }
+        key = readKey(config);
       }
     } catch (error) {
       return { ok: false, ...safeErrorResult(error), preserveLegacy: true };
@@ -588,7 +637,10 @@ export function createAiServiceManager(options) {
 
   function currentVerifiedConfig(fingerprint) {
     const config = readStoredConfig();
-    const key = config.authStrategy === 'none' ? '' : readKey();
+    const key =
+      config.authStrategy === 'none'
+        ? ''
+        : readKey(config, { allowLegacyScopeMigration: true });
     const publicConfig = publicState(config, key);
     if (!isAiServiceReady(publicConfig)) {
       throw createError('no-key', '请先配置联网 AI 服务');
@@ -649,7 +701,10 @@ export function createAiServiceManager(options) {
     const expectedFingerprint = saved.service.configFingerprint;
     try {
       const config = readStoredConfig();
-      const key = config.authStrategy === 'none' ? '' : readKey();
+      const key =
+        config.authStrategy === 'none'
+          ? ''
+          : readKey(config, { allowLegacyScopeMigration: true });
       const response = await requestChat(
         config,
         key,
@@ -671,7 +726,10 @@ export function createAiServiceManager(options) {
         throw createError('invalid-json', 'AI 服务未返回预期的测试结果');
       }
       const latest = readStoredConfig();
-      const latestKey = latest.authStrategy === 'none' ? '' : readKey();
+      const latestKey =
+        latest.authStrategy === 'none'
+          ? ''
+          : readKey(latest, { allowLegacyScopeMigration: true });
       const latestFingerprint = fingerprintFor(latest, latestKey);
       if (latestFingerprint !== expectedFingerprint) {
         return {
@@ -694,7 +752,10 @@ export function createAiServiceManager(options) {
       const current = readStoredConfig();
       let currentKey = '';
       try {
-        currentKey = current.authStrategy === 'none' ? '' : readKey();
+        currentKey =
+          current.authStrategy === 'none'
+            ? ''
+            : readKey(current, { allowLegacyScopeMigration: true });
       } catch (e) {
         return { ...safeErrorResult(e), service: getStatus().service };
       }
