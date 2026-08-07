@@ -1994,9 +1994,16 @@ export default {
   &:hover {
     background: var(--color-secondary-bg);
   }
-  // [D·段落重组] 当前播放段落整段轻底色；具体当前句另在 .seg-sent.active 上高亮
-  &.active {
-    background: var(--color-primary-bg-for-transparent);
+  // [D·段落重组] 当前播放段落采用专用低亮度底色和内嵌强调线；不改变虚拟行尺寸。
+  &.active,
+  &.active:hover {
+    background: var(--color-transcript-active-bg);
+    box-shadow: inset 3px 0 0 var(--color-transcript-active-accent);
+
+    .seg-time {
+      color: var(--color-transcript-active-time);
+      opacity: 1;
+    }
   }
 }
 .seg-spacer {
@@ -2028,8 +2035,7 @@ export default {
     color: var(--color-primary);
   }
   &.active {
-    color: var(--color-primary);
-    text-shadow: 0 0 0 currentColor;
+    color: var(--color-transcript-active-text);
   }
   // [B路·AI] 被 AI 精修改过的句：轻微虚线下划线，便于核对(不抢眼)
   &.ai-changed {
