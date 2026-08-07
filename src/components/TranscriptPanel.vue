@@ -1994,11 +1994,10 @@ export default {
   &:hover {
     background: var(--color-secondary-bg);
   }
-  // [D·段落重组] 当前播放段落采用专用低亮度底色和内嵌强调线；不改变虚拟行尺寸。
+  // [D·段落重组] 当前播放段落采用专用低亮度底色；不改变虚拟行尺寸。
   &.active,
   &.active:hover {
     background: var(--color-transcript-active-bg);
-    box-shadow: inset 3px 0 0 var(--color-transcript-active-accent);
 
     .seg-time {
       color: var(--color-transcript-active-time);

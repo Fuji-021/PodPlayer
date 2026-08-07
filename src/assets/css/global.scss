@@ -76,7 +76,6 @@
   // 文字稿当前播放行有独立的阅读语义，不能复用全局主色或通用透明灰。
   --color-transcript-active-bg: #e8efff;
   --color-transcript-active-text: #17213a;
-  --color-transcript-active-accent: #466bc7;
   --color-transcript-active-time: #283a60;
   --html-overflow-y: overlay;
   // [UI 统一] 中型动作按钮/搜索框/弹窗按钮的圆角：iOS 风的适度曲率（非全胶囊，不过弯）。
@@ -101,7 +100,6 @@
   --color-secondary-bg-for-transparent: rgba(255, 255, 255, 0.08);
   --color-transcript-active-bg: #303a4d;
   --color-transcript-active-text: #f4f7ff;
-  --color-transcript-active-accent: #8cabff;
   --color-transcript-active-time: #d8e1f4;
 }
 

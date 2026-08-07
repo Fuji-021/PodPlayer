@@ -15,7 +15,6 @@ const panelSource = fs.readFileSync(
 const tokenNames = [
   'color-transcript-active-bg',
   'color-transcript-active-text',
-  'color-transcript-active-accent',
   'color-transcript-active-time',
 ];
 
@@ -145,10 +144,16 @@ for (const [name, block] of [
 }
 
 assert(
-  /&\.active,\s*&\.active:hover\s*\{[\s\S]*?background:\s*var\(--color-transcript-active-bg\);[\s\S]*?box-shadow:\s*inset 3px 0 0 var\(--color-transcript-active-accent\);/.test(
+  /&\.active,\s*&\.active:hover\s*\{[\s\S]*?background:\s*var\(--color-transcript-active-bg\);/.test(
     panelSource
   ),
   'active row and active-row hover must preserve the transcript active hierarchy'
+);
+assert(
+  !/box-shadow:\s*inset\s+3px\s+0\s+0\s+var\(--color-transcript-active-accent\);/.test(
+    panelSource
+  ),
+  'active transcript rows must not add a left accent line'
 );
 assert(
   /\.seg-time\s*\{[\s\S]*?color:\s*var\(--color-transcript-active-time\);[\s\S]*?opacity:\s*1;/.test(
