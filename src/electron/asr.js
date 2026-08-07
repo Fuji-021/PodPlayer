@@ -23,8 +23,9 @@ var MODEL_NAME = 'SenseVoiceSmall-int8';
 
 var _getWindow = null;
 var _store = null;
-var active = null; // { episodeId, child, canceled, deleting, settled, exitPromise }
+var active = null; // { episodeId, phase, child, canceled, deleting, settled, exitPromise }
 var queue = []; // [{ episodeId, audioPath, title, durationSec }]
+var jobSequence = 0;
 
 function getSettings() {
   var s = {};
@@ -232,10 +233,75 @@ function waitForTaskExit(task, timeoutMs) {
   });
 }
 
+function isActiveJob(job) {
+  return active === job && !job.finalized;
+}
+
+function resolveJobExit(job) {
+  if (job && job.resolveExit) {
+    job.resolveExit();
+    job.resolveExit = null;
+  }
+}
+
+function finalizeJob(job, outcome) {
+  if (!job || job.finalized) return;
+  job.finalized = true;
+  job.phase = 'settled';
+  resolveJobExit(job);
+
+  var ownsActive = active === job;
+  if (ownsActive) active = null;
+
+  if (!job.deleting && !job.reported) {
+    if (job.canceled || (outcome && outcome.type === 'canceled')) {
+      sendEvent('asr:canceled', { episodeId: job.episodeId });
+    } else if (outcome && outcome.error) {
+      sendEvent('asr:error', {
+        episodeId: job.episodeId,
+        error: outcome.error,
+      });
+    }
+  }
+  if (ownsActive) startNext();
+}
+
+function createStartingJob(payload) {
+  var resolveExit;
+  var job = {
+    episodeId: payload.episodeId,
+    audioPath: payload.audioPath,
+    title: payload.title || '',
+    durationSec: payload.durationSec || 0,
+    token: ++jobSequence,
+    phase: 'starting',
+    child: null,
+    canceled: false,
+    deleting: false,
+    settled: false,
+    reported: false,
+    finalized: false,
+    exitPromise: null,
+    resolveExit: null,
+  };
+  job.exitPromise = new Promise(function (resolve) {
+    resolveExit = resolve;
+  });
+  job.resolveExit = resolveExit;
+  return job;
+}
+
 function startNext() {
-  if (active) return;
-  if (!queue.length) return;
+  if (active || !queue.length) return;
   var job = queue.shift();
+  active = job; // Reserve synchronously before any async config/model work.
+  sendEvent('asr:progress', {
+    episodeId: job.episodeId,
+    status: 'starting',
+    processedSec: 0,
+    totalSec: job.durationSec || 0,
+    segCount: 0,
+  });
   runJob(job);
 }
 
@@ -244,27 +310,18 @@ async function runJob(job) {
   try {
     cfg = await resolveConfigForUse();
   } catch (e) {
-    sendEvent('asr:error', {
-      episodeId: job.episodeId,
-      error: String((e && e.message) || e),
-    });
-    startNext();
+    if (isActiveJob(job)) {
+      finalizeJob(job, { error: String((e && e.message) || e) });
+    }
     return;
   }
+  if (!isActiveJob(job) || job.canceled || job.deleting) return;
   if (!modelReady(cfg)) {
-    sendEvent('asr:error', {
-      episodeId: job.episodeId,
-      error: cfg.verifyError || 'model-missing',
-    });
-    startNext();
+    finalizeJob(job, { error: cfg.verifyError || 'model-missing' });
     return;
   }
   if (!job.audioPath || !fs.existsSync(job.audioPath)) {
-    sendEvent('asr:error', {
-      episodeId: job.episodeId,
-      error: '本地音频文件不存在',
-    });
-    startNext();
+    finalizeJob(job, { error: '本地音频文件不存在' });
     return;
   }
   var workDir = workDirFor(job.episodeId);
@@ -292,26 +349,21 @@ async function runJob(job) {
       windowsHide: true,
     });
   } catch (e) {
-    sendEvent('asr:error', {
-      episodeId: job.episodeId,
+    finalizeJob(job, {
       error: '无法启动转录子进程：' + String((e && e.message) || e),
     });
-    startNext();
     return;
   }
-  var resolveExit;
-  var exitPromise = new Promise(function (resolve) {
-    resolveExit = resolve;
-  });
-  active = {
-    episodeId: job.episodeId,
-    child: child,
-    canceled: false,
-    deleting: false,
-    settled: false,
-    exitPromise: exitPromise,
-    resolveExit: resolveExit,
-  };
+  if (!isActiveJob(job) || job.canceled || job.deleting) {
+    try {
+      child.kill();
+    } catch (e) {
+      /* ignore */
+    }
+    return;
+  }
+  job.child = child;
+  job.phase = 'running';
   sendEvent('asr:progress', {
     episodeId: job.episodeId,
     status: 'running',
@@ -321,8 +373,7 @@ async function runJob(job) {
   });
 
   child.on('message', function (ev) {
-    if (!ev || !active || active.episodeId !== job.episodeId || active.deleting)
-      return;
+    if (!ev || !isActiveJob(job) || job.deleting || job.canceled) return;
     if (ev.type === 'progress') {
       sendEvent('asr:progress', {
         episodeId: job.episodeId,
@@ -341,7 +392,8 @@ async function runJob(job) {
     } else if (ev.type === 'segment') {
       sendEvent('asr:segment', { episodeId: job.episodeId, seg: ev.seg });
     } else if (ev.type === 'done') {
-      active.settled = true;
+      job.settled = true;
+      job.reported = true;
       sendEvent('asr:done', {
         episodeId: job.episodeId,
         segCount: ev.segCount,
@@ -352,7 +404,8 @@ async function runJob(job) {
         model: MODEL_NAME,
       });
     } else if (ev.type === 'error') {
-      active.settled = true;
+      job.settled = true;
+      job.reported = true;
       sendEvent('asr:error', { episodeId: job.episodeId, error: ev.msg });
     }
   });
@@ -365,33 +418,19 @@ async function runJob(job) {
     });
   }
 
-  child.on('error', function (err) {
-    if (
-      active &&
-      active.episodeId === job.episodeId &&
-      !active.settled &&
-      !active.deleting
-    ) {
-      active.settled = true;
-      sendEvent('asr:error', {
-        episodeId: job.episodeId,
-        error: String((err && err.message) || err),
-      });
-    }
-  });
-
-  child.on('exit', function (code, signal) {
-    var was = active;
-    active = null;
-    if (was && was.resolveExit) was.resolveExit();
-    if (was && was.episodeId === job.episodeId && !was.settled) {
-      if (was.deleting) {
-        // 删除请求等待 exit 后自行清理；不能发 canceled 让渲染端重建 paused 索引。
-      } else if (was.canceled) {
-        sendEvent('asr:canceled', { episodeId: job.episodeId });
+  function finalizeChildTermination(code, signal, spawnError) {
+    if (!isActiveJob(job)) return;
+    if (job.deleting) {
+      finalizeJob(job);
+    } else if (job.canceled) {
+      finalizeJob(job, { type: 'canceled' });
+    } else if (!job.reported) {
+      if (spawnError) {
+        finalizeJob(job, {
+          error: String((spawnError && spawnError.message) || spawnError),
+        });
       } else {
-        sendEvent('asr:error', {
-          episodeId: job.episodeId,
+        finalizeJob(job, {
           error:
             '转录进程异常退出(code ' +
             code +
@@ -400,8 +439,21 @@ async function runJob(job) {
             (stderrBuf ? '：' + stderrBuf.slice(-300) : ''),
         });
       }
+    } else {
+      finalizeJob(job);
     }
-    startNext();
+  }
+
+  child.on('error', function (err) {
+    finalizeChildTermination(null, null, err);
+  });
+
+  child.on('exit', function (code, signal) {
+    finalizeChildTermination(code, signal, null);
+  });
+
+  child.on('close', function (code, signal) {
+    finalizeChildTermination(code, signal, null);
   });
 }
 
@@ -426,6 +478,7 @@ export function registerAsrIpc(getWindow, store) {
       fallback: !!cfg.fallback,
       busy: !!active,
       busyEpisodeId: active ? active.episodeId : '',
+      activeStatus: active ? active.phase : '',
       queued: queue.map(function (j) {
         return j.episodeId;
       }),
@@ -444,13 +497,6 @@ export function registerAsrIpc(getWindow, store) {
     if (!episodeId || !audioPath) {
       return { ok: false, error: '缺少参数' };
     }
-    var cfg = await resolveConfigForUse();
-    if (!modelReady(cfg)) {
-      return { ok: false, error: cfg.verifyError || 'model-missing' };
-    }
-    if (!fs.existsSync(audioPath)) {
-      return { ok: false, error: '本地音频文件不存在' };
-    }
     if (active && active.episodeId === episodeId) {
       return { ok: true, already: true };
     }
@@ -462,12 +508,14 @@ export function registerAsrIpc(getWindow, store) {
       return { ok: true, queued: true };
     }
     var willQueue = !!active; // 已有任务在跑 → 本任务排队
-    queue.push({
-      episodeId: episodeId,
-      audioPath: audioPath,
-      title: (payload && payload.title) || '',
-      durationSec: (payload && payload.durationSec) || 0,
-    });
+    queue.push(
+      createStartingJob({
+        episodeId: episodeId,
+        audioPath: audioPath,
+        title: (payload && payload.title) || '',
+        durationSec: (payload && payload.durationSec) || 0,
+      })
+    );
     startNext();
     return { ok: true, queued: willQueue };
   });
@@ -490,10 +538,14 @@ export function registerAsrIpc(getWindow, store) {
     }
     if (active && active.episodeId === episodeId) {
       active.canceled = true;
-      try {
-        active.child.kill();
-      } catch (e) {
-        /* ignore */
+      if (!active.child) {
+        finalizeJob(active, { type: 'canceled' });
+      } else {
+        try {
+          active.child.kill();
+        } catch (e) {
+          /* ignore */
+        }
       }
       return { ok: true };
     }
@@ -547,17 +599,23 @@ export function registerAsrIpc(getWindow, store) {
     if (task) {
       task.canceled = true;
       task.deleting = true;
-      try {
-        task.child.kill();
-      } catch (e) {
-        /* ignore */
+      if (!task.child) {
+        finalizeJob(task);
+      } else {
+        try {
+          task.child.kill();
+        } catch (e) {
+          /* ignore */
+        }
       }
       var exited = await waitForTaskExit(task, 5000);
       if (!exited) {
-        try {
-          task.child.kill('SIGKILL');
-        } catch (e) {
-          /* ignore */
+        if (task.child) {
+          try {
+            task.child.kill('SIGKILL');
+          } catch (e) {
+            /* ignore */
+          }
         }
         exited = await waitForTaskExit(task, 2000);
       }

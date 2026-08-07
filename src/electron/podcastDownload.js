@@ -24,6 +24,10 @@ import { URL } from 'url';
 import { shouldRecoverStalledDownload } from '@/utils/powerResumePolicy';
 import { inspectRangeResponse } from './downloadResumePolicy';
 import {
+  createDownloadTaskRegistry,
+  isPathInsideDirectory,
+} from './downloadTaskState';
+import {
   listRecoverySnapshots,
   readRecoverySnapshot,
 } from './backupRecoveryFiles';
@@ -44,7 +48,8 @@ try {
 }
 
 // epId → { res (当前响应流), writeStream, filePath, canceled }
-const activeTasks = new Map();
+const taskRegistry = createDownloadTaskRegistry();
+const activeTasks = taskRegistry.tasks;
 const powerResumeParts = new Map();
 const pendingPowerFinalizers = new Set();
 const POWER_RESUME_GRACE_MS = 5000;
@@ -93,8 +98,36 @@ function safeFileName(guid) {
 // 发起 GET 并手动跟随重定向，resolve 成最终 200 响应流。
 // 完全不使用代理环境变量（直连，交给 TUN 网卡层处理）。
 // [缓存·代理] rangeStart!=null 时带 Range 头从该字节起取(供流播缓存代理断点续传/seek)，接受 206。
-function streamGet(url, redirects = 0, proxyUrl = '', rangeStart = null) {
+function canceledConnectionError() {
+  const error = new Error('download-canceled');
+  error.code = 'download-canceled';
+  return error;
+}
+
+function abortConnection(connection) {
+  if (!connection) return;
+  connection.canceled = true;
+  if (connection.request && typeof connection.request.destroy === 'function') {
+    try {
+      connection.request.destroy(canceledConnectionError());
+    } catch (e) {
+      // ignore
+    }
+  }
+}
+
+function streamGet(
+  url,
+  redirects = 0,
+  proxyUrl = '',
+  rangeStart = null,
+  connection = null
+) {
   return new Promise((resolve, reject) => {
+    if (connection && connection.canceled) {
+      reject(canceledConnectionError());
+      return;
+    }
     if (redirects > 6) {
       reject(new Error('重定向次数过多'));
       return;
@@ -133,7 +166,7 @@ function streamGet(url, redirects = 0, proxyUrl = '', rangeStart = null) {
           reject(new Error('重定向地址非法'));
           return;
         }
-        streamGet(next, redirects + 1, proxyUrl, rangeStart).then(
+        streamGet(next, redirects + 1, proxyUrl, rangeStart, connection).then(
           resolve,
           reject
         );
@@ -144,8 +177,23 @@ function streamGet(url, redirects = 0, proxyUrl = '', rangeStart = null) {
         reject(new Error('HTTP ' + code));
         return;
       }
+      if (connection && connection.canceled) {
+        destroyResponse(res);
+        reject(canceledConnectionError());
+        return;
+      }
       resolve({ res, finalUrl: url, status: code });
     });
+    if (connection) {
+      connection.request = req;
+      if (connection.canceled) {
+        try {
+          req.destroy(canceledConnectionError());
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
     req.on('error', reject);
     // 连接级超时：30s 内没有任何响应头则放弃
     req.setTimeout(30000, () => {
@@ -174,11 +222,17 @@ async function resolveProxyForUrl(url) {
 // [国际下载回退] 直连优先(国内 CDN 快、不绕代理)；直连失败(国际 CDN 域名常被 DNS 污染 →
 //   ETIMEDOUT/ENOTFOUND/ECONNRESET/连接超时)时，问 Chromium 拿代理回退重试一次。
 //   代理不可用(DIRECT / 无 https-proxy-agent) → 抛回原始直连错误(报错信息保持原样)。
-async function streamGetWithFallback(url, rangeStart = null) {
+async function streamGetWithFallback(
+  url,
+  rangeStart = null,
+  connection = null
+) {
   try {
-    return await streamGet(url, 0, '', rangeStart);
+    return await streamGet(url, 0, '', rangeStart, connection);
   } catch (directErr) {
+    if (connection && connection.canceled) throw canceledConnectionError();
     const proxyUrl = await resolveProxyForUrl(url);
+    if (connection && connection.canceled) throw canceledConnectionError();
     if (!proxyUrl || !HttpsProxyAgent) throw directErr;
     console.log(
       '[download] 直连失败，回退代理重试:',
@@ -186,7 +240,7 @@ async function streamGetWithFallback(url, rangeStart = null) {
       '|',
       (directErr && directErr.message) || directErr
     );
-    return await streamGet(url, 0, proxyUrl, rangeStart);
+    return await streamGet(url, 0, proxyUrl, rangeStart, connection);
   }
 }
 
@@ -204,6 +258,17 @@ function destroyResponse(res) {
   }
 }
 
+function discardPowerResumePart(episodeId, resumeInfo) {
+  powerResumeParts.delete(episodeId);
+  const partPath = resumeInfo && resumeInfo.filePath;
+  if (!partPath) return;
+  try {
+    if (fs.existsSync(partPath)) fs.unlinkSync(partPath);
+  } catch (e) {
+    // A stale part must not keep the next user retry in an invalid Range loop.
+  }
+}
+
 function validateRangeResponse(result, rangeStart) {
   const check = inspectRangeResponse(
     result && result.status,
@@ -212,15 +277,30 @@ function validateRangeResponse(result, rangeStart) {
   );
   if (check.ok) return check.total;
   destroyResponse(result && result.res);
+  const error = new Error(
+    check.error === 'range-status'
+      ? '服务器不支持断点续传（Range 未返回 206）'
+      : '断点续传响应范围不匹配'
+  );
+  error.code = 'podcast-download-' + check.error;
   if (check.error === 'range-status') {
-    throw new Error('服务器不支持断点续传（Range 未返回 206）');
+    throw error;
   }
-  throw new Error('断点续传响应范围不匹配');
+  throw error;
 }
 
-async function openDownloadStream(downloadUrl, audioUrl, rangeStart) {
+async function openDownloadStream(
+  downloadUrl,
+  audioUrl,
+  rangeStart,
+  connection
+) {
   try {
-    const result = await streamGetWithFallback(downloadUrl, rangeStart);
+    const result = await streamGetWithFallback(
+      downloadUrl,
+      rangeStart,
+      connection
+    );
     if (rangeStart !== null && rangeStart > 0) {
       result.rangeTotal = validateRangeResponse(result, rangeStart);
     }
@@ -228,7 +308,11 @@ async function openDownloadStream(downloadUrl, audioUrl, rangeStart) {
   } catch (firstError) {
     if (downloadUrl === audioUrl) throw firstError;
     console.log('[download] NAS 源失败，回退原 CDN');
-    const result = await streamGetWithFallback(audioUrl, rangeStart);
+    const result = await streamGetWithFallback(
+      audioUrl,
+      rangeStart,
+      connection
+    );
     if (rangeStart !== null && rangeStart > 0) {
       result.rangeTotal = validateRangeResponse(result, rangeStart);
     }
@@ -242,10 +326,9 @@ function sendToRenderer(getWindow, channel, payload) {
 }
 
 function preserveAndRequeueDownload(episodeId, task, event, getWindow) {
-  if (!task || task.settled) return;
+  if (!task || !taskRegistry.owns(episodeId, task)) return;
   task.powerResumeAttemptedToken = event.token;
-  task.settled = true;
-  activeTasks.delete(episodeId);
+  taskRegistry.finalize(episodeId, task);
   if (task.powerResumeTimer) clearTimeout(task.powerResumeTimer);
   task.powerResumeTimer = null;
   pendingPowerFinalizers.add(task);
@@ -408,12 +491,22 @@ export function registerPodcastDownloadIpc(getWindow) {
     if (activeTasks.has(episodeId)) {
       return { ok: false, error: '已经在下载中' };
     }
+    // Reserve before any network or proxy work. This makes connecting a real
+    // cancellable state instead of a TOCTOU gap before activeTasks.set().
+    const task = taskRegistry.reserve(episodeId, {
+      downloadUrl,
+      audioUrl,
+      title: String(title || ''),
+      auto: auto === true,
+    });
+    if (!task) return { ok: false, error: '已经在下载中' };
+    let resumeInfo = null;
     try {
       const dir = path.join(getPodcastsDir(), podcastHashOf(feedUrl));
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
       // 睡眠唤醒恢复只续当前任务留下的内存登记 .part；普通启动仍沿用原行为，不扫描/接管其它文件。
-      const resumeInfo = powerResumeParts.get(episodeId);
+      resumeInfo = powerResumeParts.get(episodeId);
       let rangeStart = 0;
       if (resumeInfo && resumeInfo.filePath) {
         try {
@@ -431,9 +524,14 @@ export function registerPodcastDownloadIpc(getWindow) {
       const result = await openDownloadStream(
         (resumeInfo && resumeInfo.downloadUrl) || downloadUrl,
         (resumeInfo && resumeInfo.audioUrl) || audioUrl,
-        rangeStart > 0 ? rangeStart : null
+        rangeStart > 0 ? rangeStart : null,
+        task.connection
       );
       const res = result.res;
+      if (!taskRegistry.owns(episodeId, task) || task.canceled) {
+        destroyResponse(res);
+        return { ok: false, canceled: true };
+      }
       const finalUrl = result.finalUrl;
       console.log(
         '[download] response',
@@ -459,12 +557,8 @@ export function registerPodcastDownloadIpc(getWindow) {
         rangeStart > 0
           ? result.rangeTotal || rangeStart + contentLength
           : contentLength;
-      const writeStream = fs.createWriteStream(filePath, {
-        flags: rangeStart > 0 ? 'a' : 'w',
-      });
-      const task = {
+      Object.assign(task, {
         res,
-        writeStream,
         filePath,
         finalPath,
         downloadUrl,
@@ -472,20 +566,38 @@ export function registerPodcastDownloadIpc(getWindow) {
         bytesDone: rangeStart,
         lastProgressAt: Date.now(),
         resumedAfterPower: rangeStart > 0,
-        canceled: false,
-        settled: false,
-        title: String(title || ''),
-        auto: auto === true, // [C3] 自动缓存：完成时静默(不发系统通知)
-      };
-      activeTasks.set(episodeId, task);
+        phase: 'downloading',
+      });
+      if (!taskRegistry.owns(episodeId, task) || task.canceled) {
+        destroyResponse(res);
+        return { ok: false, canceled: true };
+      }
+      const writeStream = fs.createWriteStream(filePath, {
+        flags: rangeStart > 0 ? 'a' : 'w',
+      });
+      Object.assign(task, {
+        writeStream,
+      });
+      if (!taskRegistry.owns(episodeId, task) || task.canceled) {
+        try {
+          writeStream.destroy();
+        } catch (e) {
+          // ignore
+        }
+        destroyResponse(res);
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch (e) {
+          // ignore
+        }
+        return { ok: false, canceled: true };
+      }
 
       // [审P1-1 修] 统一失败收尾：去重(settled) + 停两端流 + 删半成品 + 上报 error(单集不再卡"下载中")。
       //   核心：writeStream 的 'error'(磁盘满 ENOSPC / 目录被删/只读 ENOENT·EACCES)此前无监听，
       //   Node 对未监听的 stream 'error' 会直接 throw → **整个 Electron 主进程崩溃**。这里补上兜底。
       const failDownload = (err, where) => {
-        if (task.settled) return;
-        task.settled = true;
-        activeTasks.delete(episodeId);
+        if (!taskRegistry.finalize(episodeId, task)) return;
         try {
           res.destroy();
         } catch (e) {
@@ -547,9 +659,7 @@ export function registerPodcastDownloadIpc(getWindow) {
       // 完成信号挂 writeStream 'finish'(文件真正落盘后)而非 res 'end'(读完即触发、可能尚未写完)：
       //   更准确，且与 failDownload 的 settled 天然互斥，避免"写失败却报完成"留坏文件。
       writeStream.on('finish', () => {
-        if (task.settled || task.canceled) return;
-        task.settled = true;
-        activeTasks.delete(episodeId);
+        if (!taskRegistry.owns(episodeId, task) || task.canceled) return;
         if (task.powerResumeTimer) clearTimeout(task.powerResumeTimer);
         // [orphan-download] .part 写完 → 原子 rename 成正式名 finalPath。rename 失败则按失败收尾
         //   (删 .part)、不留半成品冒充完成。
@@ -557,27 +667,10 @@ export function registerPodcastDownloadIpc(getWindow) {
           if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
           fs.renameSync(filePath, finalPath);
         } catch (e) {
-          console.error(
-            '[download] rename .part failed',
-            episodeId,
-            (e && e.message) || e
-          );
-          if (!task.resumedAfterPower) {
-            try {
-              if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-            } catch (e2) {
-              // ignore
-            }
-          }
-          const wf = getWindow && getWindow();
-          if (wf && !wf.isDestroyed()) {
-            wf.webContents.send('podcast:download:error', {
-              episodeId,
-              error: 'rename failed',
-            });
-          }
+          failDownload(e, 'rename');
           return;
         }
+        if (!taskRegistry.finalize(episodeId, task)) return;
         powerResumeParts.delete(episodeId);
         console.log('[download] done', episodeId, done, 'bytes');
         const w = getWindow && getWindow();
@@ -614,7 +707,14 @@ export function registerPodcastDownloadIpc(getWindow) {
       //   但避免日后误用它指向已被 rename 走的临时文件。
       return { ok: true, filePath: finalPath };
     } catch (err) {
-      activeTasks.delete(episodeId);
+      const wasCanceled = task.canceled || !taskRegistry.owns(episodeId, task);
+      taskRegistry.finalize(episodeId, task);
+      if (err && err.code === 'podcast-download-range-status' && resumeInfo) {
+        discardPowerResumePart(episodeId, resumeInfo);
+      }
+      if (wasCanceled || (err && err.code === 'download-canceled')) {
+        return { ok: false, canceled: true };
+      }
       console.error('[download] FAILED', err && (err.stack || err.message));
       return { ok: false, error: String((err && err.message) || err) };
     }
@@ -637,15 +737,19 @@ export function registerPodcastDownloadIpc(getWindow) {
       return { ok: true };
     }
     task.canceled = true;
-    task.settled = true; // [审P1-1] 取消即定锚：destroy 触发的 error/finish 全部短路、不误报
+    // The request may still be connecting, so cancel its transport before a
+    // response can attach streams. Identity finalization prevents an old
+    // cancel from deleting a later retry for the same episode.
+    abortConnection(task.connection);
+    taskRegistry.finalize(episodeId, task);
     if (task.powerResumeTimer) clearTimeout(task.powerResumeTimer);
     try {
-      task.res.destroy();
+      if (task.res) task.res.destroy();
     } catch (e) {
       // ignore
     }
     try {
-      task.writeStream.destroy();
+      if (task.writeStream) task.writeStream.destroy();
     } catch (e) {
       // ignore
     }
@@ -656,7 +760,6 @@ export function registerPodcastDownloadIpc(getWindow) {
     } catch (e) {
       // ignore
     }
-    activeTasks.delete(episodeId);
     powerResumeParts.delete(episodeId);
     return { ok: true };
   });
@@ -664,6 +767,9 @@ export function registerPodcastDownloadIpc(getWindow) {
   // 删除已下载文件
   ipcMain.handle('podcast:download:remove', async (_e, { filePath } = {}) => {
     if (!filePath) return { ok: false, error: '缺少 filePath' };
+    if (!isPathInsideDirectory(getPodcastsDir(), filePath)) {
+      return { ok: false, error: '下载路径无效' };
+    }
     try {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return { ok: true };
@@ -675,6 +781,9 @@ export function registerPodcastDownloadIpc(getWindow) {
   // 检查文件是否还在（启动时校验，文件可能被外部删除）
   ipcMain.handle('podcast:download:exists', async (_e, { filePath } = {}) => {
     if (!filePath) return { ok: false, exists: false };
+    if (!isPathInsideDirectory(getPodcastsDir(), filePath)) {
+      return { ok: false, exists: false, error: '下载路径无效' };
+    }
     return { ok: true, exists: fs.existsSync(filePath) };
   });
 

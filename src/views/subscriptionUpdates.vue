@@ -368,6 +368,7 @@ export default {
   },
   deactivated() {
     this._isActive = false;
+    this._loadToken = (this._loadToken || 0) + 1;
     this._refreshToken = (this._refreshToken || 0) + 1;
     if (this._dayRefreshTimer) clearTimeout(this._dayRefreshTimer);
   },

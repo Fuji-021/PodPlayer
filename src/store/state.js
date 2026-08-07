@@ -1,6 +1,7 @@
 import initLocalStorage from './initLocalStorage';
 import pkg from '../../package.json';
 import updateApp from '@/utils/updateApp';
+import { readLocalStorageJson } from '@/utils/safeLocalStorage';
 
 if (localStorage.getItem('appVersion') === null) {
   localStorage.setItem('settings', JSON.stringify(initLocalStorage.settings));
@@ -43,24 +44,24 @@ export default {
   // [B-47 第5点] 已屏蔽节目（首页发现页右键"屏蔽"）。items: [{name, coverUrl}]，按节目名为键。
   //   屏蔽后：发现页不再显示、统计页不显示；取消屏蔽可恢复。持久化到 localStorage。
   podcastBlocked: {
-    items: JSON.parse(localStorage.getItem('podcastBlocked') || '[]'),
+    items: readLocalStorageJson('podcastBlocked', [], 'array'),
   },
   // [B-70] 链接无法解析/打开失败的节目（点进去预览抓取失败）。names: [节目名]，按节目名为键。
   //   用途：发现页卡片标**红点**，让用户一眼避开打不开的节目；下次再点若成功则自动消红点。
   podcastBroken: {
-    names: JSON.parse(localStorage.getItem('podcastBroken') || '[]'),
+    names: readLocalStorageJson('podcastBroken', [], 'array'),
   },
   // [B-75] 单集"标记位置"：用户听到喜欢处打点，进度条上显示细蓝标(封面主色)。
   //   结构 { [episodeId]: [秒,...] }，持久化 localStorage。本集标记 >3 按钮变封面色、>5 变彩虹(彩蛋#2)。
   podcastMarks: {
-    map: JSON.parse(localStorage.getItem('podcastMarks') || '{}'),
+    map: readLocalStorageJson('podcastMarks', {}, 'object'),
   },
   // [B-48 第5点] 自定义头像（裁切后的 1:1 dataURL，持久化 localStorage）；空=用默认头像
   podcastAvatar: localStorage.getItem('podcastAvatar') || '',
   // [播客改造 C-14] 当前是否在加载音频（点单集到出声的等待）
   audioBuffering: false,
   // [播客改造 A-24] 播放队列。每项 = 单集精简对象（id/guid/title/audioUrl/coverUrl/duration/podcastId/podcastTitle）
-  podcastQueue: JSON.parse(localStorage.getItem('podcastQueue') || '[]'),
+  podcastQueue: readLocalStorageJson('podcastQueue', [], 'array'),
   // [B-31] 下载相关：
   //   progressMap: 正在进行的下载进度 { [epId]: { bytesDone, bytesTotal, status } }
   //   doneIds:     已完成下载的 episodeId 集合（用于 UI O(1) 判断），首次加载从 DB 灌进来
@@ -100,8 +101,12 @@ export default {
     },
   },
   dailyTracks: [],
-  lastfm: JSON.parse(localStorage.getItem('lastfm')) || {},
-  player: JSON.parse(localStorage.getItem('player')),
-  settings: JSON.parse(localStorage.getItem('settings')),
-  data: JSON.parse(localStorage.getItem('data')),
+  lastfm: readLocalStorageJson('lastfm', {}, 'object'),
+  player: readLocalStorageJson('player', null, 'object'),
+  settings: readLocalStorageJson(
+    'settings',
+    initLocalStorage.settings,
+    'object'
+  ),
+  data: readLocalStorageJson('data', initLocalStorage.data, 'object'),
 };

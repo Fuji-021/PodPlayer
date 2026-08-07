@@ -55,6 +55,22 @@ export function updatePodcast(id, patch) {
   return db.podcasts.update(id, patch || {});
 }
 
+// Refresh and badge-clearing may overlap. Read-modify-write inside one Dexie
+// transaction so a stale subscribed-podcast snapshot cannot lose newCount.
+export async function incrementPodcastNewCount(id, delta) {
+  const amount = Number(delta) || 0;
+  if (!id || amount === 0) return 0;
+  let nextCount = 0;
+  await db.transaction('rw', db.podcasts, async () => {
+    const podcast = await db.podcasts.get(id);
+    if (!podcast) return;
+    nextCount = Math.max(0, (Number(podcast.newCount) || 0) + amount);
+    await db.podcasts.update(id, { newCount: nextCount });
+  });
+  _podMem.delete(id);
+  return nextCount;
+}
+
 export function getAllPodcasts() {
   return db.podcasts.toArray();
 }

@@ -11,10 +11,12 @@ import {
   getEpisodesByPodcast,
   getEpisodeIdsByPodcast,
   deletePodcast,
+  incrementPodcastNewCount,
 } from './db';
 import { handoffToNas } from './nasSource';
 import { notifySubscriptionUpdatesChanged } from './subscriptionNavigation';
 import { rlog } from '@/utils/log';
+import { readLocalStorageJson } from '@/utils/safeLocalStorage';
 
 const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
@@ -24,12 +26,8 @@ const ipcRenderer = electron?.ipcRenderer ?? null;
 //   localStorage.settings（key 确为 'settings'，见 store/plugins/localStorage.js）。
 //   未设/解析失败 = 默认开(!== false 兼容老用户)。
 function nasHandoffOn() {
-  try {
-    const s = JSON.parse(window.localStorage.getItem('settings') || '{}');
-    return s.nasHandoffEnabled !== false;
-  } catch (e) {
-    return true;
-  }
+  const s = readLocalStorageJson('settings', {}, 'object');
+  return s.nasHandoffEnabled !== false;
 }
 
 async function ipcFetch(channel, url) {
@@ -193,10 +191,22 @@ export async function importRssText(rssText, fallbackId = '') {
     throw new Error('RSS 文件未声明自身 URL，且未提供回退 id');
   }
   const { podcast, episodes } = parseRss(rssText, feedUrl);
-  // [B-48 第1点] 本地文件导入 = 手动来源
-  await upsertPodcast({ ...podcast, source: 'manual' });
+  // 本地 RSS 导入是显式订阅，语义与手动输入链接一致。合并已有
+  // preview metadata so an import cannot clear its badge/source bookkeeping.
+  const existing = await getPodcast(feedUrl);
+  const merged = existing
+    ? {
+        ...existing,
+        ...podcast,
+        source: existing.source || 'manual',
+        subscribed: true,
+        nasRemoveAt: null,
+      }
+    : { ...podcast, source: 'manual', subscribed: true };
+  await upsertPodcast(merged);
   await upsertEpisodes(episodes);
-  return { podcast, episodes };
+  notifySubscriptionUpdatesChanged();
+  return { podcast: merged, episodes };
 }
 
 // [B-46 / D-3] 限并发跑任务（默认 5）。RSS 站点对突发并发敏感，限流更稳。
@@ -283,11 +293,11 @@ export async function refreshAllSubscriptions(onProgress) {
       //   导致首页/我的订阅显示旧封面、详情页显示新封面对不上。这里把 newCount 与 coverUrl 合并写回，
       //   只在确有变化时写；标题/作者不动（它们是按名关联订阅/推荐的 key，贸然改会断匹配）。
       const patch = {};
-      if (newCount > 0) patch.newCount = (p.newCount || 0) + newCount;
       if (meta && meta.coverUrl && meta.coverUrl !== p.coverUrl) {
         patch.coverUrl = meta.coverUrl;
       }
       if (Object.keys(patch).length) await updatePodcast(p.id, patch);
+      if (newCount > 0) await incrementPodcastNewCount(p.id, newCount);
     } catch (e) {
       error = String((e && e.message) || e);
     }

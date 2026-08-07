@@ -1,5 +1,6 @@
 import router from '@/router';
 import { doLogout, getCookie } from '@/utils/auth';
+import { readLocalStorageJson } from '@/utils/safeLocalStorage';
 import axios from 'axios';
 
 let baseURL = '';
@@ -38,18 +39,20 @@ service.interceptors.request.use(function (config) {
     config.params.realIP = '211.161.244.70';
   }
 
-  // Force real_ip
-  const enableRealIP = JSON.parse(
-    localStorage.getItem('settings')
-  ).enableRealIP;
-  const realIP = JSON.parse(localStorage.getItem('settings')).realIP;
+  // Read once: missing or malformed settings degrade to no proxy/real IP.
+  const settings = readLocalStorageJson('settings', {}, 'object');
+  const enableRealIP = settings.enableRealIP === true;
+  const realIP = settings.realIP;
   if (process.env.VUE_APP_REAL_IP) {
     config.params.realIP = process.env.VUE_APP_REAL_IP;
   } else if (enableRealIP) {
     config.params.realIP = realIP;
   }
 
-  const proxy = JSON.parse(localStorage.getItem('settings')).proxyConfig;
+  const proxy =
+    settings.proxyConfig && typeof settings.proxyConfig === 'object'
+      ? settings.proxyConfig
+      : {};
   if (['HTTP', 'HTTPS'].includes(proxy.protocol)) {
     config.params.proxy = `${proxy.protocol}://${proxy.server}:${proxy.port}`;
   }

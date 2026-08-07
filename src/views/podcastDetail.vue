@@ -509,6 +509,33 @@ export default {
         });
       },
     },
+    // A pending ASR request is only valid while its download remains active or
+    // has produced a local path. Failed/canceled downloads clear progressMap;
+    // drop that pending marker on the next Vue turn so a completed pathMap
+    // update in the same batch still gets to start transcription first.
+    '$store.state.podcastDownloads.progressMap': {
+      deep: true,
+      handler() {
+        const token = (this._asrPendingCheckToken || 0) + 1;
+        this._asrPendingCheckToken = token;
+        this.$nextTick(() => {
+          if (token !== this._asrPendingCheckToken) return;
+          const progress =
+            (this.$store.state.podcastDownloads &&
+              this.$store.state.podcastDownloads.progressMap) ||
+            {};
+          const paths =
+            (this.$store.state.podcastDownloads &&
+              this.$store.state.podcastDownloads.pathMap) ||
+            {};
+          Object.keys(this.asrPendingMap).forEach(id => {
+            if (!progress[id] && !paths[id]) {
+              this.$delete(this.asrPendingMap, id);
+            }
+          });
+        });
+      },
+    },
     // [B-31] 监听播放器广播：若广播的 episodeId 在自己列表里 → 重读那一集 listenStats
     '$store.state.podcastListening.listenTick'() {
       const pl = this.$store.state.podcastListening;
