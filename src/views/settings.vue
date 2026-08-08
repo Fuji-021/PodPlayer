@@ -202,7 +202,31 @@
       </div>
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">{{ $t('settings.pod.addConn') }}</div>
+          <div class="settings-feature-title">
+            <div class="title">{{ $t('settings.pod.addConn') }}</div>
+            <button
+              class="settings-info-button"
+              type="button"
+              :aria-label="$t('settings.pod.nasHelpLabel')"
+              :aria-expanded="settingsInfoPopover === 'nas-connection'"
+              aria-controls="nas-connection-info"
+              @mousedown.stop
+              @click.stop="toggleSettingsInfo('nas-connection')"
+            >
+              i
+            </button>
+            <div
+              v-if="settingsInfoPopover === 'nas-connection'"
+              id="nas-connection-info"
+              class="settings-info-popover"
+              role="note"
+              @mousedown.stop
+              @click.stop
+            >
+              <strong>{{ $t('settings.pod.nasHelpTitle') }}</strong>
+              <p>{{ $t('settings.pod.nasHelpDescription') }}</p>
+            </div>
+          </div>
         </div>
         <div class="right">
           <button @click="openNasDialog()">
@@ -328,7 +352,7 @@
               </div>
             </div>
             <div class="description">
-              部署模型后，可在有可用音频地址的单集详情页手动生成文字稿；未永久下载时只会临时准备音频，生成后可在沉浸页点击封面查看。
+              部署模型后，可在有可用音频地址的单集详情页手动生成文字稿；未永久下载时会临时准备音频，文字稿保存后自动清理临时媒体。
             </div>
           </div>
           <div class="right settings-feature-actions">
@@ -881,6 +905,28 @@
               name="stats-bar-cover-texture"
             />
             <label for="stats-bar-cover-texture"></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="left">
+          <div class="title">
+            {{ $t('settings.pod.allowPodcastCoverDrag') }}
+          </div>
+          <div class="description">
+            {{ $t('settings.pod.allowPodcastCoverDragDesc') }}
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="allow-podcast-cover-drag"
+              v-model="allowPodcastCoverDrag"
+              type="checkbox"
+              name="allow-podcast-cover-drag"
+            />
+            <label for="allow-podcast-cover-drag"></label>
           </div>
         </div>
       </div>
@@ -1570,6 +1616,17 @@ export default {
       set(value) {
         this.$store.commit('updateSettings', {
           key: 'statsBarCoverTexture',
+          value,
+        });
+      },
+    },
+    allowPodcastCoverDrag: {
+      get() {
+        return this.settings.allowPodcastCoverDrag !== false;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'allowPodcastCoverDrag',
           value,
         });
       },
