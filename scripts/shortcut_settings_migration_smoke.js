@@ -51,19 +51,19 @@ async function main() {
       {
         id: 'play',
         name: 'Play',
-        shortcut: 'Ctrl+Shift+P',
+        shortcut: 'CommandOrControl+Shift+P',
         globalShortcut: '',
       },
       {
         id: 'next',
         name: 'Next',
-        shortcut: 'Ctrl+Right',
+        shortcut: 'CommandOrControl+Right',
         globalShortcut: 'Alt+Shift+Right',
       },
       {
         id: 'previous',
         name: 'Previous',
-        shortcut: 'Ctrl+Left',
+        shortcut: 'CommandOrControl+Left',
         globalShortcut: 'Alt+Left',
       },
     ]);
