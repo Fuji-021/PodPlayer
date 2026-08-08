@@ -120,11 +120,17 @@
 
     <!-- 未转录 -->
     <div v-else-if="mode === 'idle'" class="t-idle">
-      <button class="t-btn" :disabled="!hasLocalFile" @click="onGenerate">
-        生成文字稿
+      <button class="t-btn" @click="onGenerate"> 生成文字稿 </button>
+      <button class="t-link" @click="onGenerateSummary">
+        生成文字稿并总结
       </button>
-      <span v-if="!hasLocalFile" class="t-note">下载本集后可生成文字稿</span>
-      <span v-else class="t-note">在本地把本集音频转成带时间戳的文字稿</span>
+      <span class="t-note">
+        {{
+          hasLocalFile
+            ? '将复用已下载音频，在本地生成带时间戳的文字稿'
+            : '将临时准备音频，在本地生成文字稿后自动清理'
+        }}
+      </span>
     </div>
 
     <!-- 排队中 -->
@@ -346,6 +352,7 @@ import {
   getAsrStatus,
   readSegments,
   startTranscribe,
+  startTranscribeAndSummarize,
   cancelTranscribe,
   deleteTranscript,
   exportTranscriptText,
@@ -432,7 +439,8 @@ export default {
     },
     isActiveTask() {
       return (
-        this.live.episodeId === this.episodeId && this.live.status === 'running'
+        this.live.episodeId === this.episodeId &&
+        ['preparing', 'running'].indexOf(this.live.status) >= 0
       );
     },
     // dbRow.status 归一化：'running' 但当前并无活动任务（app 重启中断）→ 视为可续 'paused'
@@ -447,6 +455,7 @@ export default {
       if (!this.modelReady) return 'no-model';
       // 实时态优先（同集）：立即反映 running/done/error，避免完成瞬间闪一下"已暂停"
       if (this.live.episodeId === this.episodeId) {
+        if (this.live.status === 'preparing') return 'running';
         if (this.live.status === 'running') return 'running';
         if (this.live.status === 'done') return 'done';
         if (
@@ -470,12 +479,26 @@ export default {
       return Math.max(0, Math.min(99, (this.live.processedSec / t) * 100));
     },
     progressLabel() {
+      if (this.live.phase === 'preparing') {
+        const totalBytes = this.live.totalBytes || 0;
+        if (!totalBytes) return '准备中';
+        return (
+          Math.max(
+            0,
+            Math.min(
+              99,
+              Math.floor(((this.live.preparedBytes || 0) / totalBytes) * 100)
+            )
+          ) + '%'
+        );
+      }
       if (this.live.phase && this.live.phase !== 'transcribing') {
         return this.live.phase === 'decoding' ? '准备中' : '加载中';
       }
       return Math.floor(this.progressPct) + '%';
     },
     runningSubLabel() {
+      if (this.live.phase === 'preparing') return '正在准备音频…';
       if (this.live.phase === 'decoding') return '正在准备音频…';
       if (this.live.phase === 'loading') return '正在载入模型…';
       const done = this.fmtClock(this.live.processedSec || 0);
@@ -558,6 +581,7 @@ export default {
       );
     },
     summaryActionLabel() {
+      if (!this.summarySourceSegments.length) return '生成文字稿并总结';
       return this.hasSummary ? '重新生成本集总结' : '生成本集总结';
     },
     summaryProgressLabel() {
@@ -573,6 +597,7 @@ export default {
         this.initializing ||
         this.mode === 'queued' ||
         this.mode === 'running' ||
+        this.mode === 'idle' ||
         this.mode === 'done' ||
         this.mode === 'paused' ||
         this.mode === 'error'
@@ -616,10 +641,6 @@ export default {
         generate: {
           label: '生成文字稿',
           tip: '生成文字稿',
-        },
-        'needs-download': {
-          label: '下载后生成',
-          tip: '下载本集后可生成文字稿',
         },
         available: {
           label: '跳到文字稿',
@@ -940,12 +961,6 @@ export default {
         this.onGenerate();
       } else if (info.reason === 'unsupported') {
         this.$store.dispatch('showToast', '当前平台暂不支持本地转文字稿');
-      } else if (
-        !this.hasLocalFile &&
-        this.modelReady &&
-        this.platformSupported
-      ) {
-        this.$store.dispatch('showToast', '下载本集后可生成文字稿');
       }
       return info;
     },
@@ -1175,13 +1190,19 @@ export default {
     },
     async onGenerateSummary() {
       const episodeId = this.episodeId;
-      if (!episodeId || !this.summarySourceSegments.length) return;
+      if (!episodeId) return;
       if (!this.aiKey) {
         this.$store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
         if (this.$router) this.$router.push('/settings').catch(() => {});
         return;
       }
       this.showAiTools = false;
+      if (!this.summarySourceSegments.length) {
+        this.queuedLocal = false;
+        const start = await startTranscribeAndSummarize(this.episode);
+        if (start && start.ok && start.queued) this.queuedLocal = true;
+        return;
+      }
       const res = await startTranscriptSummary(
         episodeId,
         this.podcastId,

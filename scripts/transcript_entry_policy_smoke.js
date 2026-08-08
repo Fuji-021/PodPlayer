@@ -42,7 +42,7 @@ async function main() {
         mode: 'idle',
         hasLocalFile: false,
       }),
-      { reason: 'needs-download', action: 'focus', shouldScroll: false }
+      { reason: 'generate', action: 'generate', shouldScroll: false }
     );
     assert.strictEqual(
       policy.getQueuedStateFromAsrStatus({ ok: true, isThisQueued: true }),

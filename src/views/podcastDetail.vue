@@ -337,7 +337,6 @@ import { getCoverColor } from '@/utils/podcast/coverColor';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import { getEpisodeCache, setEpisodeCache } from '@/utils/podcast/episodeCache';
 import { prefetchShownotesForEpisodes } from '@/utils/podcast/shownotesEnrich';
-import { getStaleAsrPendingIds } from '@/utils/podcast/runtimeOperationRules';
 import { requestUnsubscribe } from '@/utils/podcast/subscriptionOperations';
 import {
   prefetchNasPodcast,
@@ -386,9 +385,8 @@ export default {
       selectMode: false,
       selectedEpIds: [],
       // [转文字稿] 各集转录持久态(id→done|running|paused|error)；进入页面批量读 Dexie 填充，
-      //   活动任务实时态另读 transcribeState。asrPendingMap=点了转录但未下载、正在下载待转的集。
+      //   活动任务实时态另读 transcribeState。未永久下载时由来源层临时准备音频。
       asrStatusMap: {},
-      asrPendingMap: {},
       // [F1·方案C] 固定行高窗口虚拟化：episodes 始终全量(批量下载/选择/播放广播都用它)，
       //   只渲染可视窗口 [winStart,winEnd) 一段。配 top/bottom spacer 撑出 n×rowH 的恒定总高，
       //   故 main.scrollHeight 数学恒定不抖、自绘条不跳(根治 B-74 命门:Scrollbar 每帧实时读 main.scrollHeight)。
@@ -489,52 +487,10 @@ export default {
         this.$set(this.asrStatusMap, s.episodeId, 'done');
       else if (s.status === 'error')
         this.$set(this.asrStatusMap, s.episodeId, 'error');
-      else if (s.status === 'running')
+      else if (s.status === 'preparing' || s.status === 'running')
         this.$set(this.asrStatusMap, s.episodeId, 'running');
       else if (s.status === 'canceled')
         this.$set(this.asrStatusMap, s.episodeId, 'paused');
-    },
-    // [转文字稿] 下载完成 → 对"点了转录但当时未下载"的集自动开始转录（pathMap 出现该集路径即完成）
-    '$store.state.podcastDownloads.pathMap': {
-      deep: true,
-      handler(pm) {
-        const ids = Object.keys(this.asrPendingMap);
-        if (!ids.length || !pm) return;
-        ids.forEach(id => {
-          if (!pm[id]) return;
-          this.$delete(this.asrPendingMap, id);
-          const ep = this.episodes.find(e => e.id === id);
-          if (!ep) return;
-          startTranscribe(ep).then(r => {
-            if (r && r.ok) this.$set(this.asrStatusMap, id, 'running');
-          });
-        });
-      },
-    },
-    // A pending ASR request is only valid while its download remains active or
-    // has produced a local path. Failed/canceled downloads clear progressMap;
-    // drop that pending marker on the next Vue turn so a completed pathMap
-    // update in the same batch still gets to start transcription first.
-    '$store.state.podcastDownloads.progressMap': {
-      deep: true,
-      handler() {
-        const token = (this._asrPendingCheckToken || 0) + 1;
-        this._asrPendingCheckToken = token;
-        this.$nextTick(() => {
-          if (token !== this._asrPendingCheckToken) return;
-          const progress =
-            (this.$store.state.podcastDownloads &&
-              this.$store.state.podcastDownloads.progressMap) ||
-            {};
-          const paths =
-            (this.$store.state.podcastDownloads &&
-              this.$store.state.podcastDownloads.pathMap) ||
-            {};
-          getStaleAsrPendingIds(this.asrPendingMap, progress, paths).forEach(
-            id => this.$delete(this.asrPendingMap, id)
-          );
-        });
-      },
     },
     // [B-31] 监听播放器广播：若广播的 episodeId 在自己列表里 → 重读那一集 listenStats
     '$store.state.podcastListening.listenTick'() {
@@ -1188,14 +1144,15 @@ export default {
         this.asrStatusMap = {};
       }
     },
-    // 单集转录态：done | running(本集正在转) | queued(已入队) | downloading(下载待转) | paused | error | none
+    // 单集转录态：done | running(本集正在转) | queued(已入队) | paused | error | none。
+    // 没有永久下载时来源层临时准备音频，不会进入下载状态。
     asrStateOf(ep) {
       if (!ep) return 'none';
       if (transcribeState.episodeId === ep.id) {
-        if (transcribeState.status === 'running') return 'running';
+        if (['preparing', 'running'].indexOf(transcribeState.status) >= 0)
+          return 'running';
         if (transcribeState.status === 'done') return 'done';
       }
-      if (this.asrPendingMap[ep.id]) return 'downloading';
       const s = this.asrStatusMap[ep.id];
       if (s === 'done') return 'done';
       if (s === 'running') return 'queued'; // Dexie 'running' 但非活动 = 已入队(活动那条上面已 return)
@@ -1205,7 +1162,7 @@ export default {
     },
     asrBusy(ep) {
       const st = this.asrStateOf(ep);
-      return st === 'running' || st === 'queued' || st === 'downloading';
+      return st === 'running' || st === 'queued';
     },
     asrTip(ep) {
       switch (this.asrStateOf(ep)) {
@@ -1213,8 +1170,6 @@ export default {
           return '正在转录本集';
         case 'queued':
           return '已在转录队列中';
-        case 'downloading':
-          return '下载中，完成后自动转录';
         case 'done':
           return '已生成文字稿（点击查看）';
         case 'paused':
@@ -1231,29 +1186,18 @@ export default {
         this.$store.dispatch('showToast', '正在转录本集');
         return;
       }
-      if (st === 'queued' || st === 'downloading') {
-        this.$store.dispatch(
-          'showToast',
-          st === 'queued' ? '已在转录队列中' : '正在下载，完成后自动转录'
-        );
+      if (st === 'queued') {
+        this.$store.dispatch('showToast', '已在转录队列中');
         return;
       }
       if (st === 'done') {
         this.goEpisodeDetail(ep); // 已转录 → 进详情查看文字稿
         return;
       }
-      this.startAsr(ep); // none / paused / error → 转录(未下载先下载)
+      this.startAsr(ep); // none / paused / error → 转录（必要时临时准备音频）
     },
     async startAsr(ep) {
       if (!ep) return;
-      // 未下载 → 先下载，下载完成后由 pathMap watcher 自动转录
-      if (!this.isDownloaded(ep)) {
-        this.$set(this.asrPendingMap, ep.id, true);
-        if (this.downloadPercent(ep) < 0 && !this.isQueued(ep))
-          startDownload(ep);
-        this.$store.dispatch('showToast', '已开始下载，完成后自动转录');
-        return;
-      }
       const res = await startTranscribe(ep);
       if (res && res.ok) {
         this.$set(this.asrStatusMap, ep.id, 'running'); // 乐观：已入队/开始

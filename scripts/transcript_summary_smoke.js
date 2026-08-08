@@ -75,6 +75,7 @@ async function loadTranscriptStateMachine() {
     db: path.join(mockDir, 'db.js'),
     store: path.join(mockDir, 'store.js'),
     downloads: path.join(mockDir, 'downloads.js'),
+    transcriptMedia: path.join(mockDir, 'transcript-media.js'),
     aiRefine: path.join(mockDir, 'ai-refine.js'),
     summary: path.join(mockDir, 'summary.js'),
     openAi: path.join(mockDir, 'open-ai.js'),
@@ -123,6 +124,12 @@ export default store;\n`
   fs.writeFileSync(
     files.downloads,
     'export function getDownload() { return Promise.resolve(null); }\n'
+  );
+  fs.writeFileSync(
+    files.transcriptMedia,
+    `export function getPersistentTranscriptMediaHint(episodeId) {
+  return Promise.resolve(global.__transcriptSummaryHarness.persistentHints[episodeId] || '');
+}\n`
   );
   fs.writeFileSync(
     files.aiRefine,
@@ -179,6 +186,7 @@ export function generateTranscriptSummary(options) {
             '@/utils/db': files.db,
             '@/store': files.store,
             '@/utils/podcast/downloads': files.downloads,
+            '@/utils/podcast/transcriptMedia': files.transcriptMedia,
             '@/utils/podcast/aiRefine': files.aiRefine,
             '@/utils/podcast/transcriptSummary': files.summary,
             '@/utils/podcast/openAiCompatible': files.openAi,
@@ -339,11 +347,39 @@ async function testTranscriptStateMachine(summary) {
     toasts: [],
     generate: null,
     refine: null,
+    persistentHints: {},
+    ipcCalls: [],
+    ipcListeners: {},
+    asrSegments: {},
+  };
+  harness.ipcRenderer = {
+    on(channel, listener) {
+      harness.ipcListeners[channel] = listener;
+    },
+    async invoke(channel, payload) {
+      harness.ipcCalls.push({ channel, payload });
+      if (channel === 'asr:transcribe') return { ok: true, queued: false };
+      if (channel === 'asr:read') {
+        return {
+          ok: true,
+          segments: harness.asrSegments[payload.episodeId] || [],
+          totalSec: 1,
+        };
+      }
+      return { ok: true };
+    },
   };
   global.__transcriptSummaryHarness = harness;
-  global.window = { require: null };
+  global.window = {
+    require(moduleName) {
+      return moduleName === 'electron'
+        ? { ipcRenderer: harness.ipcRenderer }
+        : null;
+    },
+  };
   const transcripts = await loadTranscriptStateMachine();
   const segments = [segment('可总结的文字稿。', 0)];
+  transcripts.registerTranscriptListeners();
 
   const noKey = await transcripts.startTranscriptSummary(
     'no-key',
@@ -369,6 +405,87 @@ async function testTranscriptStateMachine(summary) {
     status: 'available',
     configFingerprint: 'summary-smoke',
   };
+
+  // An explicit summary request without a verified AI service fails before it
+  // asks the ASR source layer to prepare any temporary media.
+  harness.settings.aiService.hasKey = false;
+  const callsBeforeUnverifiedFollowup = harness.ipcCalls.length;
+  const unverifiedFollowup = await transcripts.startTranscribeAndSummarize({
+    id: 'summary-needs-config',
+    podcastId: 'podcast',
+    audioUrl: 'https://cdn.example.test/summary-needs-config.mp3',
+  });
+  assert.deepStrictEqual(unverifiedFollowup, {
+    ok: false,
+    reason: 'configuration-unverified',
+  });
+  assert.strictEqual(
+    harness.ipcCalls.length,
+    callsBeforeUnverifiedFollowup,
+    'an unavailable AI service must prevent temporary-media preparation'
+  );
+  harness.settings.aiService.hasKey = true;
+
+  // Ordinary manual transcription is local-only. A summary is requested only
+  // after an explicit follow-up intent and a durable ASR completion event.
+  harness.generate = async options => ({
+    summary: '显式请求后的总结',
+    sourceHash: JSON.stringify(options.segments.map(item => item.display)),
+    promptVersion: 'summary-test-v1',
+    provider: 'mock',
+    model: 'mock-model',
+    usage: {},
+    chunkCount: 1,
+  });
+  const generatedBeforePlainAsr = harness.generateCalls;
+  const plainAsr = await transcripts.startTranscribe({
+    id: 'plain-transient-asr',
+    podcastId: 'podcast',
+    audioUrl: 'https://cdn.example.test/plain.mp3',
+  });
+  assert.strictEqual(plainAsr.ok, true);
+  assert.strictEqual(
+    harness.generateCalls,
+    generatedBeforePlainAsr,
+    'plain transcription must not create a network summary request'
+  );
+
+  const explicitId = 'explicit-transient-summary';
+  harness.asrSegments[explicitId] = [segment('先本地转写，再总结。', 0)];
+  const generatedBeforeExplicitFollowup = harness.generateCalls;
+  const explicitFollowup = await transcripts.startTranscribeAndSummarize({
+    id: explicitId,
+    podcastId: 'podcast',
+    audioUrl: 'https://cdn.example.test/explicit.mp3',
+  });
+  assert.strictEqual(explicitFollowup.ok, true);
+  assert.strictEqual(
+    harness.generateCalls,
+    generatedBeforeExplicitFollowup,
+    'AI must not run before the local transcript is complete'
+  );
+  await harness.ipcListeners['asr:done'](null, {
+    episodeId: explicitId,
+    ownerToken: 'transient-owner',
+    segCount: 1,
+    durationMs: 1000,
+    segPath: 'mock-segments.json',
+    txtPath: 'mock-transcript.txt',
+    model: 'mock-asr',
+  });
+  await waitFor(
+    () => harness.generateCalls === generatedBeforeExplicitFollowup + 1,
+    'the explicit ASR completion should start exactly one summary request'
+  );
+  assert.ok(
+    harness.ipcCalls.some(
+      call =>
+        call.channel === 'asr:source:release' &&
+        call.payload.episodeId === explicitId &&
+        call.payload.outcome === 'done'
+    ),
+    'temporary media may be released only after the transcript row is durable'
+  );
   let refineSignal = null;
   harness.refine = (...args) => {
     refineSignal = args[6] && args[6].signal;
@@ -646,6 +763,7 @@ async function testTranscriptStateMachine(summary) {
     promptVersion: 'summary-test-v1',
   };
   harness.transcriptSummaries.set('cached', cached);
+  const generatedBeforeCached = harness.generateCalls;
   const cachedResult = await transcripts.startTranscriptSummary(
     'cached',
     'podcast',
@@ -654,11 +772,12 @@ async function testTranscriptStateMachine(summary) {
   assert.strictEqual(cachedResult.cached, true);
   assert.strictEqual(
     harness.generateCalls,
-    0,
+    generatedBeforeCached,
     'valid cache must not re-request'
   );
 
   const startLookup = deferred();
+  const generatedBeforeCancelLookup = harness.generateCalls;
   harness.getGates.set('cancel-before-job', startLookup);
   const cancelBeforeJob = transcripts.startTranscriptSummary(
     'cancel-before-job',
@@ -671,12 +790,13 @@ async function testTranscriptStateMachine(summary) {
   assert.strictEqual(canceledBeforeJob.canceled, true);
   assert.strictEqual(
     harness.generateCalls,
-    0,
+    generatedBeforeCancelLookup,
     'cancel during cache lookup must not enter network generation'
   );
 
   const sameEpisode = deferred();
   const putCallsBeforeDedupe = harness.putCalls;
+  const generatedBeforeDedupe = harness.generateCalls;
   harness.generate = () => sameEpisode.promise;
   const first = transcripts.startTranscriptSummary(
     'dedupe',
@@ -689,7 +809,7 @@ async function testTranscriptStateMachine(summary) {
     segments
   );
   await waitFor(
-    () => harness.generateCalls === 1,
+    () => harness.generateCalls === generatedBeforeDedupe + 1,
     'same-episode request should use one generation job'
   );
   sameEpisode.resolve({
@@ -779,13 +899,14 @@ async function testTranscriptStateMachine(summary) {
   const deleteSummaryDeferred = deferred();
   harness.generate = () => deleteSummaryDeferred.promise;
   harness.transcriptDict.set('podcast:term', { id: 'podcast:term' });
+  const generatedBeforeDeleteSummary = harness.generateCalls;
   const deleteSummary = transcripts.startTranscriptSummary(
     'delete-summary',
     'podcast',
     segments
   );
   await waitFor(
-    () => harness.generateCalls >= 4,
+    () => harness.generateCalls === generatedBeforeDeleteSummary + 1,
     'the summary delete race must reach an in-flight request'
   );
   const deleteResult = await transcripts.deleteTranscript('delete-summary');

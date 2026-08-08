@@ -23,9 +23,39 @@ var MODEL_NAME = 'SenseVoiceSmall-int8';
 
 var _getWindow = null;
 var _store = null;
+var _mediaManager = null;
 var active = null; // { episodeId, phase, child, canceled, deleting, settled, exitPromise }
 var queue = []; // [{ episodeId, audioPath, title, durationSec }]
 var jobSequence = 0;
+var mediaOwnerEpisodes = new Map();
+
+// Tests and legacy callers can still exercise the queue without a source
+// manager. Production always injects the main-process-owned manager.
+function fallbackMediaManager() {
+  return {
+    acquire: function (request) {
+      var localPath = request && (request.persistentPath || request.audioPath);
+      if (!localPath) {
+        return Promise.reject(new Error('缺少音频来源'));
+      }
+      return Promise.resolve({
+        sourceType: 'persistent',
+        localPath: localPath,
+        episodeId: request.episodeId,
+        ownerToken: request.ownerToken,
+        release: function () {
+          return Promise.resolve({ ok: true, retained: true });
+        },
+      });
+    },
+    release: function () {
+      return Promise.resolve({ ok: true, retained: true });
+    },
+    releaseEpisode: function () {
+      return Promise.resolve({ ok: true });
+    },
+  };
+}
 
 function getSettings() {
   var s = {};
@@ -250,6 +280,13 @@ function finalizeJob(job, outcome) {
   job.phase = 'settled';
   resolveJobExit(job);
 
+  // A successful worker result is retained until the renderer confirms that
+  // its transcript row landed in Dexie. Every other terminal path releases
+  // transient media immediately; owner-token checks make late callbacks safe.
+  if (!job.awaitingTranscriptPersistence) {
+    releaseJobMedia(job, job.canceled ? 'canceled' : 'error');
+  }
+
   var ownsActive = active === job;
   if (ownsActive) active = null;
 
@@ -270,10 +307,14 @@ function createStartingJob(payload) {
   var resolveExit;
   var job = {
     episodeId: payload.episodeId,
-    audioPath: payload.audioPath,
+    audioPath: payload.audioPath || '',
+    audioUrl: payload.audioUrl || '',
+    persistentPath: payload.persistentPath || payload.audioPath || '',
     title: payload.title || '',
     durationSec: payload.durationSec || 0,
     token: ++jobSequence,
+    ownerToken:
+      'asr-' + Date.now().toString(36) + '-' + jobSequence.toString(36),
     phase: 'starting',
     child: null,
     childSpawned: false,
@@ -284,6 +325,8 @@ function createStartingJob(payload) {
     settled: false,
     reported: false,
     finalized: false,
+    mediaSource: null,
+    awaitingTranscriptPersistence: false,
     exitPromise: null,
     resolveExit: null,
   };
@@ -291,7 +334,24 @@ function createStartingJob(payload) {
     resolveExit = resolve;
   });
   job.resolveExit = resolveExit;
+  mediaOwnerEpisodes.set(job.ownerToken, job.episodeId);
   return job;
+}
+
+function releaseJobMedia(job, reason) {
+  if (!job || job.mediaReleased) return;
+  job.mediaReleased = true;
+  var manager = _mediaManager || fallbackMediaManager();
+  var release = job.mediaSource && job.mediaSource.release;
+  Promise.resolve(
+    release ? release(reason) : manager.release(job.ownerToken, reason)
+  )
+    .catch(function () {
+      // Best effort only. The startup orphan sweep owns the final fallback.
+    })
+    .then(function () {
+      mediaOwnerEpisodes.delete(job.ownerToken);
+    });
 }
 
 function startNext() {
@@ -323,8 +383,57 @@ async function runJob(job) {
     finalizeJob(job, { error: cfg.verifyError || 'model-missing' });
     return;
   }
+  var source;
+  try {
+    job.phase = 'preparing';
+    sendEvent('asr:progress', {
+      episodeId: job.episodeId,
+      status: 'preparing',
+      phase: 'preparing',
+      processedSec: 0,
+      totalSec: job.durationSec || 0,
+      segCount: 0,
+      preparedBytes: 0,
+      totalBytes: 0,
+    });
+    source = await (_mediaManager || fallbackMediaManager()).acquire({
+      episodeId: job.episodeId,
+      ownerToken: job.ownerToken,
+      persistentPath: job.persistentPath,
+      audioPath: job.audioPath,
+      audioUrl: job.audioUrl,
+      onProgress: function (progress) {
+        if (!isActiveJob(job) || job.canceled || job.deleting) return;
+        sendEvent('asr:progress', {
+          episodeId: job.episodeId,
+          status: 'preparing',
+          phase: 'preparing',
+          processedSec: 0,
+          totalSec: job.durationSec || 0,
+          segCount: 0,
+          preparedBytes: progress.receivedBytes || 0,
+          totalBytes: progress.totalBytes || 0,
+        });
+      },
+    });
+  } catch (e) {
+    if (isActiveJob(job)) {
+      finalizeJob(job, { error: String((e && e.message) || e) });
+    }
+    return;
+  }
+  if (!isActiveJob(job) || job.canceled || job.deleting) {
+    try {
+      await source.release('canceled');
+    } catch (e) {
+      /* ignore */
+    }
+    return;
+  }
+  job.mediaSource = source;
+  job.audioPath = source && source.localPath;
   if (!job.audioPath || !fs.existsSync(job.audioPath)) {
-    finalizeJob(job, { error: '本地音频文件不存在' });
+    finalizeJob(job, { error: '音频准备失败' });
     return;
   }
   var workDir = workDirFor(job.episodeId);
@@ -408,6 +517,7 @@ async function runJob(job) {
     } else if (ev.type === 'done') {
       job.settled = true;
       job.reported = true;
+      job.awaitingTranscriptPersistence = true;
       sendEvent('asr:done', {
         episodeId: job.episodeId,
         segCount: ev.segCount,
@@ -416,6 +526,8 @@ async function runJob(job) {
         txtPath: ev.txtPath,
         srtPath: ev.srtPath,
         model: MODEL_NAME,
+        ownerToken: job.ownerToken,
+        sourceType: (job.mediaSource && job.mediaSource.sourceType) || '',
       });
     } else if (ev.type === 'error') {
       job.settled = true;
@@ -502,9 +614,10 @@ async function runJob(job) {
   if (child && child.pid) markChildRunning();
 }
 
-export function registerAsrIpc(getWindow, store) {
+export function registerAsrIpc(getWindow, store, mediaManager) {
   _getWindow = getWindow;
   _store = store;
+  _mediaManager = mediaManager || fallbackMediaManager();
 
   ipcMain.handle('asr:status', async function (_e, payload) {
     var cfg = resolveConfig();
@@ -542,8 +655,13 @@ export function registerAsrIpc(getWindow, store) {
 
   ipcMain.handle('asr:transcribe', async function (_e, payload) {
     var episodeId = payload && payload.episodeId;
+    var audioUrl = payload && payload.audioUrl;
+    var persistentPath = payload && payload.persistentPath;
+    // `audioPath` remains accepted for the isolated queue lifecycle smoke and
+    // for old renderer sessions during a hot reload. New callers provide an
+    // audio URL plus an optional persistent hint to the source manager.
     var audioPath = payload && payload.audioPath;
-    if (!episodeId || !audioPath) {
+    if (!episodeId || (!audioUrl && !persistentPath && !audioPath)) {
       return { ok: false, error: '缺少参数' };
     }
     if (active && active.episodeId === episodeId) {
@@ -561,6 +679,8 @@ export function registerAsrIpc(getWindow, store) {
       createStartingJob({
         episodeId: episodeId,
         audioPath: audioPath,
+        audioUrl: audioUrl,
+        persistentPath: persistentPath,
         title: (payload && payload.title) || '',
         durationSec: (payload && payload.durationSec) || 0,
       })
@@ -581,7 +701,8 @@ export function registerAsrIpc(getWindow, store) {
       }
     }
     if (qi >= 0) {
-      queue.splice(qi, 1);
+      var queuedJob = queue.splice(qi, 1)[0];
+      releaseJobMedia(queuedJob, 'canceled');
       sendEvent('asr:canceled', { episodeId: episodeId });
       return { ok: true, dequeued: true };
     }
@@ -599,6 +720,33 @@ export function registerAsrIpc(getWindow, store) {
       return { ok: true };
     }
     return { ok: false, error: 'no-such-task' };
+  });
+
+  // The temporary source is deleted only after the renderer has durably saved
+  // the transcript result. A stale/foreign token cannot release another job.
+  ipcMain.handle('asr:source:release', async function (_e, payload) {
+    var episodeId = payload && payload.episodeId;
+    var ownerToken = payload && payload.ownerToken;
+    if (
+      !episodeId ||
+      !ownerToken ||
+      mediaOwnerEpisodes.get(ownerToken) !== episodeId
+    ) {
+      return { ok: false, error: 'invalid-transcript-media-owner' };
+    }
+    var outcome = (payload && payload.outcome) || 'error';
+    try {
+      var releaseResult = await (
+        _mediaManager || fallbackMediaManager()
+      ).release(ownerToken, outcome);
+      if (!releaseResult || releaseResult.ok === false) {
+        return { ok: false, error: 'transcript-media-release-failed' };
+      }
+      mediaOwnerEpisodes.delete(ownerToken);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: 'transcript-media-release-failed' };
+    }
   });
 
   // 读取已落盘文稿（done → segments.json；中断态 → 退回 segments.jsonl 的 partial）
@@ -642,7 +790,11 @@ export function registerAsrIpc(getWindow, store) {
     var episodeId = payload && payload.episodeId;
     if (!episodeId) return { ok: false, error: '缺少 episodeId' };
     queue = queue.filter(function (job) {
-      return job.episodeId !== episodeId;
+      if (job.episodeId === episodeId) {
+        releaseJobMedia(job, 'canceled');
+        return false;
+      }
+      return true;
     });
     var task = active && active.episodeId === episodeId ? active : null;
     if (task) {
@@ -673,6 +825,14 @@ export function registerAsrIpc(getWindow, store) {
     }
     if (!rmDir(workDirFor(episodeId))) {
       return { ok: false, error: 'transcript-files-delete-failed' };
+    }
+    try {
+      await (_mediaManager || fallbackMediaManager()).releaseEpisode(
+        episodeId,
+        'deleted'
+      );
+    } catch (e) {
+      return { ok: false, error: 'transcript-media-delete-failed' };
     }
     return { ok: true };
   });

@@ -28,6 +28,7 @@ import { registerPodcastIpc } from './electron/podcastFetch';
 import { registerNasIpc } from './electron/nasBridge';
 import {
   registerPodcastDownloadIpc,
+  getActivePodcastDownloadInfo,
   handlePodcastDownloadsSuspend,
   handlePodcastDownloadsResume,
   shutdownPodcastDownloadPowerRecovery,
@@ -35,6 +36,10 @@ import {
 import { registerPodcastDiscoverIpc } from './electron/podcastDiscover';
 // [转文字稿] 主进程 ASR IPC（单任务队列 + 子进程编排；模型缺失时优雅降级，不崩）
 import { registerAsrIpc } from './electron/asr';
+import {
+  createTranscriptMediaManager,
+  registerTranscriptMediaIpc,
+} from './electron/transcriptMediaSource';
 import {
   registerAsrModelIpc,
   shutdownAsrModelManager,
@@ -176,6 +181,9 @@ class Background {
     this._onPowerSuspend = null;
     this._onPowerResume = null;
     this.shortcutManager = null;
+    this.transcriptMediaManager = createTranscriptMediaManager({
+      getPersistentInfo: getActivePodcastDownloadInfo,
+    });
 
     this.init();
   }
@@ -617,7 +625,13 @@ class Background {
       registerPodcastDiscoverIpc();
       // [转文字稿] 注册 ASR IPC（传 store 以读模型路径设置；与播放/下载解耦）
       registerAsrModelIpc(() => this.window);
-      registerAsrIpc(() => this.window, this.store);
+      registerTranscriptMediaIpc(this.transcriptMediaManager);
+      this.transcriptMediaManager.cleanupInactive();
+      registerAsrIpc(
+        () => this.window,
+        this.store,
+        this.transcriptMediaManager
+      );
       // 联网 AI 凭据与请求均由主进程持有；设置页/文字稿仅通过受控 IPC 访问。
       registerAiServiceIpc();
 
@@ -687,6 +701,7 @@ class Background {
       this.unbindPowerEvents();
       shutdownAsrModelManager();
       shutdownAiServiceManager();
+      if (this.transcriptMediaManager) this.transcriptMediaManager.shutdown();
     });
 
     app.on('quit', () => {
