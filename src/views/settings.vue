@@ -879,14 +879,19 @@
         <div class="item">
           <div class="left">
             <div class="title"> {{ $t('settings.enableGlobalShortcut') }}</div>
+            <div class="shortcut-global-status" :class="shortcutGlobalStatus">
+              {{ shortcutGlobalStatusText }}
+            </div>
           </div>
           <div class="right">
             <div class="toggle">
               <input
                 id="enable-enable-global-shortcut"
-                v-model="enableGlobalShortcut"
+                :checked="shortcutGlobalEnabled"
+                :disabled="shortcutOperationBusy || shortcutInput.recording"
                 type="checkbox"
                 name="enable-enable-global-shortcut"
+                @change="setGlobalShortcutEnabled($event.target.checked)"
               />
               <label for="enable-enable-global-shortcut"></label>
             </div>
@@ -894,9 +899,7 @@
         </div>
         <div
           id="shortcut-table"
-          :class="{ 'global-disabled': !enableGlobalShortcut }"
-          tabindex="0"
-          @keydown="handleShortcutKeydown"
+          :class="{ 'global-disabled': !shortcutGlobalEnabled }"
         >
           <div class="row row-head">
             <div class="col">{{ $t('settings.pod.shortcutFn') }}</div>
@@ -910,55 +913,71 @@
           >
             <div class="col">{{ shortcutName(shortcut.id) }}</div>
             <div class="col">
-              <div
+              <button
+                type="button"
                 class="keyboard-input"
                 :class="{
                   active:
                     shortcutInput.id === shortcut.id &&
                     shortcutInput.type === 'shortcut',
                 }"
-                @click.stop="readyToRecordShortcut(shortcut.id, 'shortcut')"
+                :disabled="shortcutOperationBusy"
+                :aria-label="`录制${shortcutName(shortcut.id)}本地快捷键`"
+                @click.stop="beginShortcutCapture(shortcut.id, 'shortcut')"
+                @keydown="
+                  onShortcutFieldKeydown($event, shortcut.id, 'shortcut')
+                "
+                @blur="onShortcutFieldBlur(shortcut.id, 'shortcut')"
               >
                 {{
                   shortcutInput.id === shortcut.id &&
                   shortcutInput.type === 'shortcut' &&
-                  recordedShortcutComputed !== ''
-                    ? formatShortcut(recordedShortcutComputed)
+                  shortcutInput.recording
+                    ? '请按快捷键，Esc 取消'
                     : formatShortcut(shortcut.shortcut)
                 }}
-              </div>
+              </button>
             </div>
             <div class="col">
-              <div
+              <button
                 v-tip="
-                  enableGlobalShortcut && failedGlobalSet.has(shortcut.id)
+                  shortcutGlobalEnabled && failedGlobalSet.has(shortcut.id)
                     ? '此全局快捷键注册失败（被其它应用/系统占用或非法组合），点这里改个别的键'
                     : ''
                 "
+                type="button"
                 class="keyboard-input"
                 :class="{
                   active:
                     shortcutInput.id === shortcut.id &&
                     shortcutInput.type === 'globalShortcut' &&
-                    enableGlobalShortcut,
+                    shortcutInput.recording,
                   conflict:
-                    enableGlobalShortcut && failedGlobalSet.has(shortcut.id),
+                    shortcutGlobalEnabled && failedGlobalSet.has(shortcut.id),
                 }"
+                :disabled="shortcutOperationBusy"
+                :aria-label="`录制${shortcutName(shortcut.id)}全局快捷键`"
                 @click.stop="
-                  readyToRecordShortcut(shortcut.id, 'globalShortcut')
+                  beginShortcutCapture(shortcut.id, 'globalShortcut')
                 "
+                @keydown="
+                  onShortcutFieldKeydown($event, shortcut.id, 'globalShortcut')
+                "
+                @blur="onShortcutFieldBlur(shortcut.id, 'globalShortcut')"
                 >{{
                   shortcutInput.id === shortcut.id &&
                   shortcutInput.type === 'globalShortcut' &&
-                  recordedShortcutComputed !== ''
-                    ? formatShortcut(recordedShortcutComputed)
+                  shortcutInput.recording
+                    ? '请按快捷键，Esc 取消'
                     : formatShortcut(shortcut.globalShortcut)
-                }}</div
+                }}</button
               >
             </div>
           </div>
           <button
+            type="button"
             class="restore-default-shortcut"
+            :disabled="shortcutOperationBusy || shortcutInput.recording"
             @click="restoreDefaultShortcuts"
           >
             {{ $t('settings.pod.restoreShortcuts') }}
@@ -1068,6 +1087,8 @@ import { mapState, mapActions } from 'vuex';
 import { isLooseLoggedIn, doLogout } from '@/utils/auth';
 import { changeAppearance } from '@/utils/common';
 import defaultShortcuts from '@/utils/shortcuts';
+import { shortcutFromKeyboardEvent } from '@/utils/shortcutConfig';
+import { createShortcutRequestGate } from '@/utils/shortcutRequestGate';
 import pkg from '../../package.json';
 import { db } from '@/utils/db';
 import { setDownloadConcurrency } from '@/utils/podcast/downloads';
@@ -1116,8 +1137,6 @@ const electron =
 const ipcRenderer =
   process.env.IS_ELECTRON === true ? electron.ipcRenderer : null;
 
-const validShortcutCodes = ['=', '-', '~', '[', ']', ';', "'", ',', '.', '/'];
-
 export default {
   name: 'Settings',
   data() {
@@ -1132,8 +1151,11 @@ export default {
         id: '',
         type: '',
         recording: false,
+        captureToken: '',
       },
-      recordedShortcut: [],
+      shortcutRequestGate: createShortcutRequestGate(),
+      shortcutOperationBusy: false,
+      shortcutReleasePromise: null,
       // [缓存·C1] 缓存占用（设置页"缓存管理"展示，进页/清理后刷新）
       cacheStats: {
         cover: { count: 0, bytes: 0 },
@@ -1203,6 +1225,17 @@ export default {
     // [快捷键冲突高亮] 全局快捷键注册失败的 id 集合(主进程注册后回报)，用于对应行"全局"键标红
     failedGlobalSet() {
       return new Set(this.$store.state.failedGlobalShortcuts || []);
+    },
+    shortcutGlobalEnabled() {
+      return this.settings.enableGlobalShortcut !== false;
+    },
+    shortcutGlobalStatus() {
+      if (!this.shortcutGlobalEnabled) return 'disabled';
+      return this.failedGlobalSet.size ? 'partial' : 'enabled';
+    },
+    shortcutGlobalStatusText() {
+      if (this.shortcutGlobalStatus === 'disabled') return '已关闭';
+      return this.shortcutGlobalStatus === 'partial' ? '部分冲突' : '已启用';
     },
     // [睡眠到点关机] 睡眠定时到点后关机(仅 Windows)；默认关
     sleepShutdown: {
@@ -1413,52 +1446,6 @@ export default {
     showUserInfo() {
       return isLooseLoggedIn() && this.data.user.nickname;
     },
-    recordedShortcutComputed() {
-      let shortcut = [];
-      this.recordedShortcut.map(e => {
-        if (e.keyCode >= 65 && e.keyCode <= 90) {
-          // A-Z
-          shortcut.push(e.code.replace('Key', ''));
-        } else if (e.key === 'Meta') {
-          // ⌘ Command on macOS
-          shortcut.push('Command');
-        } else if (['Alt', 'Control', 'Shift'].includes(e.key)) {
-          shortcut.push(e.key);
-        } else if (e.keyCode >= 48 && e.keyCode <= 57) {
-          // 0-9
-          shortcut.push(e.code.replace('Digit', ''));
-        } else if (e.keyCode >= 112 && e.keyCode <= 123) {
-          // F1-F12
-          shortcut.push(e.code);
-        } else if (
-          ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key)
-        ) {
-          // Arrows
-          shortcut.push(e.code.replace('Arrow', ''));
-        } else if (validShortcutCodes.includes(e.key)) {
-          shortcut.push(e.key);
-        }
-      });
-      const sortTable = {
-        Control: 1,
-        Shift: 2,
-        Alt: 3,
-        Command: 4,
-      };
-      shortcut = shortcut.sort((a, b) => {
-        if (!sortTable[a] || !sortTable[b]) return 0;
-        if (sortTable[a] - sortTable[b] <= -1) {
-          return -1;
-        } else if (sortTable[a] - sortTable[b] >= 1) {
-          return 1;
-        } else {
-          return 0;
-        }
-      });
-      shortcut = shortcut.join('+');
-      return shortcut;
-    },
-
     lang: {
       get() {
         return this.settings.lang;
@@ -1553,17 +1540,6 @@ export default {
       set(value) {
         this.$store.commit('updateSettings', {
           key: 'closeAppOption',
-          value,
-        });
-      },
-    },
-    enableGlobalShortcut: {
-      get() {
-        return this.settings.enableGlobalShortcut;
-      },
-      set(value) {
-        this.$store.commit('updateSettings', {
-          key: 'enableGlobalShortcut',
           value,
         });
       },
@@ -1679,6 +1655,7 @@ export default {
       this.refreshAsrModelStatus();
       this.bindAsrModelProgress();
       this.refreshAiServiceStatus();
+      this.refreshShortcutState();
     }
   },
   activated() {
@@ -1691,15 +1668,18 @@ export default {
       this.refreshAsrModelStatus();
       this.bindAsrModelProgress();
       this.refreshAiServiceStatus();
+      this.refreshShortcutState();
     }
   },
   deactivated() {
+    this.releaseShortcutCapture();
     this.closeSettingsInfo();
     this.unbindSettingsInfoDismiss();
     this.stopNasPoll();
     this.unbindAsrModelProgress();
   },
   beforeDestroy() {
+    this.releaseShortcutCapture();
     this.closeSettingsInfo();
     this.unbindSettingsInfoDismiss();
     this.stopNasPoll();
@@ -2291,11 +2271,58 @@ export default {
       const d = defaultShortcuts.find(s => s.id === id);
       return (d && d.name) || id;
     },
+    nextShortcutRequest() {
+      return this.shortcutRequestGate.next();
+    },
+    isCurrentShortcutRequest(token) {
+      return this.shortcutRequestGate.isCurrent(token);
+    },
+    applyShortcutResponse(response, requestToken) {
+      if (!response || !this.isCurrentShortcutRequest(requestToken)) {
+        return false;
+      }
+      if (response.shortcutState) {
+        this.$store.commit('applyShortcutRuntimeState', response.shortcutState);
+      }
+      return true;
+    },
+    async invokeShortcut(channel, payload) {
+      if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        return { ok: false, reason: 'shortcut-manager-unavailable' };
+      }
+      try {
+        return await ipcRenderer.invoke(channel, payload);
+      } catch (error) {
+        return { ok: false, reason: 'shortcut-manager-unavailable' };
+      }
+    },
+    shortcutFailureMessage(response) {
+      const reason = (response && response.reason) || '';
+      if (reason === 'shortcut-conflict') return '与应用内快捷键冲突，未保存';
+      if (reason === 'reserved-accelerator') {
+        return '该组合键由系统或菜单固定使用';
+      }
+      if (reason === 'invalid-shortcut') return '不支持的组合键';
+      if (reason === 'global-register-failed') {
+        return '该全局快捷键被系统或其他应用占用，旧快捷键已恢复';
+      }
+      if (reason === 'menu-build-failed') return '本地快捷键不可用，未保存';
+      if (reason === 'capture-busy' || reason === 'capture-active') {
+        return '快捷键录制仍在进行，请先结束录制';
+      }
+      return '快捷键设置暂时不可用，请稍后重试';
+    },
+    async refreshShortcutState() {
+      if (!this.isElectron) return;
+      const requestToken = this.nextShortcutRequest();
+      const response = await this.invokeShortcut('shortcut:getState');
+      this.applyShortcutResponse(response, requestToken);
+    },
     clickOutside() {
-      this.exitRecordShortcut();
+      this.releaseShortcutCapture();
     },
     formatShortcut(shortcut) {
-      shortcut = shortcut
+      shortcut = String(shortcut || '')
         .replaceAll('+', ' + ')
         .replace('Up', '↑')
         .replace('Down', '↓')
@@ -2314,67 +2341,180 @@ export default {
           .replace('Control', '⌃')
           .replace('Shift', '⇧');
       }
-      return shortcut.replace('CommandOrControl', 'Ctrl');
+      return shortcut.replace('CommandOrControl', 'Ctrl') || '未设置';
     },
-    readyToRecordShortcut(id, type) {
-      if (type === 'globalShortcut' && this.enableGlobalShortcut === false) {
-        return;
-      }
-      this.shortcutInput = { id, type, recording: true };
-      this.recordedShortcut = [];
-      ipcRenderer.send('switchGlobalShortcutStatusTemporary', 'disable');
-    },
-    handleShortcutKeydown(e) {
-      if (this.shortcutInput.recording === false) return;
-      e.preventDefault();
-      if (this.recordedShortcut.find(s => s.keyCode === e.keyCode)) return;
-      this.recordedShortcut.push(e);
+    async beginShortcutCapture(id, type) {
+      if (this.shortcutOperationBusy || !this.isElectron) return;
       if (
-        (e.keyCode >= 65 && e.keyCode <= 90) || // A-Z
-        (e.keyCode >= 48 && e.keyCode <= 57) || // 0-9
-        (e.keyCode >= 112 && e.keyCode <= 123) || // F1-F12
-        ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key) || // Arrows
-        validShortcutCodes.includes(e.key)
+        this.shortcutInput.recording &&
+        this.shortcutInput.id === id &&
+        this.shortcutInput.type === type
       ) {
-        this.saveShortcut();
-      }
-    },
-    saveShortcut() {
-      const { id, type } = this.shortcutInput;
-      const combo = this.recordedShortcutComputed;
-      // [#2a 快捷键冲突检测] 同一列(本地 shortcut / 全局 globalShortcut)内与其它键撞键 → 提示并拒绝保存。
-      //   原来无任何检测、且恒提示"已保存"(实则两键映同一组合)。
-      const list =
-        (this.$store.state.settings && this.$store.state.settings.shortcuts) ||
-        [];
-      // 归一化修饰键:Win 下 CommandOrControl/Command/Cmd/Ctrl 同为 Control → 新录的 "Control+P"
-      //   也能命中默认存储的 "CommandOrControl+P"(同一物理键),避免漏判。
-      const norm = c =>
-        String(c || '').replace(
-          /CommandOrControl|Command|Cmd|Ctrl/gi,
-          'Control'
-        );
-      const dup = list.find(s => s.id !== id && norm(s[type]) === norm(combo));
-      if (dup) {
-        this.showToast(`快捷键与「${dup.name || dup.id}」冲突，未保存`);
-        this.recordedShortcut = [];
         return;
       }
-      const payload = { id, type, shortcut: combo };
-      this.$store.commit('updateShortcut', payload);
-      ipcRenderer.send('updateShortcut', payload);
-      this.showToast('快捷键已保存');
-      this.recordedShortcut = [];
+      const requestToken = this.nextShortcutRequest();
+      await this.releaseShortcutCapture({ requestToken });
+      const response = await this.invokeShortcut('shortcut:beginCapture');
+      if (!this.isCurrentShortcutRequest(requestToken)) return;
+      if (!response.ok) {
+        this.showToast(this.shortcutFailureMessage(response));
+        return;
+      }
+      this.applyShortcutResponse(response, requestToken);
+      this.shortcutInput = {
+        id,
+        type,
+        recording: true,
+        captureToken: response.captureToken || '',
+      };
     },
-    exitRecordShortcut() {
-      if (this.shortcutInput.recording === false) return;
-      this.shortcutInput = { id: '', type: '', recording: false };
-      this.recordedShortcut = [];
-      ipcRenderer.send('switchGlobalShortcutStatusTemporary', 'enable');
+    async onShortcutFieldKeydown(event, id, type) {
+      if (
+        !this.shortcutInput.recording ||
+        this.shortcutInput.id !== id ||
+        this.shortcutInput.type !== type
+      ) {
+        return;
+      }
+      const action = shortcutFromKeyboardEvent(event);
+      if (action.kind === 'tab') {
+        const requestToken = this.nextShortcutRequest();
+        this.releaseShortcutCapture({ requestToken });
+        return;
+      }
+      if (action.kind === 'continue' || action.kind === 'ignore') {
+        event.preventDefault();
+        return;
+      }
+      if (action.kind === 'cancel') {
+        event.preventDefault();
+        const requestToken = this.nextShortcutRequest();
+        await this.releaseShortcutCapture({ requestToken });
+        return;
+      }
+      event.preventDefault();
+      if (action.kind === 'invalid') {
+        this.showToast('不支持的组合键');
+        return;
+      }
+      await this.commitShortcutCandidate(id, type, action.shortcut);
     },
-    restoreDefaultShortcuts() {
-      this.$store.commit('restoreDefaultShortcuts');
-      ipcRenderer.send('restoreDefaultShortcuts');
+    async commitShortcutCandidate(id, type, shortcut) {
+      const active = this.shortcutInput;
+      if (!active.recording) return;
+      const requestToken = this.nextShortcutRequest();
+      this.shortcutOperationBusy = true;
+      const response = await this.invokeShortcut('shortcut:commit', {
+        id,
+        type,
+        shortcut,
+        captureToken: active.captureToken,
+      });
+      const current = this.applyShortcutResponse(response, requestToken);
+      const release = await this.releaseShortcutCapture({ requestToken });
+      if (!current) {
+        if (this.isCurrentShortcutRequest(requestToken)) {
+          this.shortcutOperationBusy = false;
+        }
+        return;
+      }
+      this.shortcutOperationBusy = false;
+      if (!response.ok) {
+        this.showToast(this.shortcutFailureMessage(response));
+        return;
+      }
+      if (release && release.shortcutState) {
+        this.applyShortcutResponse(release, requestToken);
+      }
+      const finalState =
+        (release && release.shortcutState) || response.shortcutState;
+      if (finalState && finalState.status === 'partial') {
+        this.showToast('快捷键已保存，部分全局快捷键未能注册');
+      } else {
+        this.showToast('快捷键已保存');
+      }
+    },
+    async releaseShortcutCapture(options) {
+      if (this.shortcutReleasePromise) {
+        return this.shortcutReleasePromise;
+      }
+      const active = this.shortcutInput;
+      if (!active.recording || !active.captureToken) return null;
+      this.shortcutInput = {
+        id: '',
+        type: '',
+        recording: false,
+        captureToken: '',
+      };
+      const releasePromise = this.invokeShortcut('shortcut:endCapture', {
+        token: active.captureToken,
+      });
+      this.shortcutReleasePromise = releasePromise;
+      try {
+        const response = await releasePromise;
+        const requestToken = options && options.requestToken;
+        if (requestToken !== undefined) {
+          this.applyShortcutResponse(response, requestToken);
+        }
+        return response;
+      } finally {
+        if (this.shortcutReleasePromise === releasePromise) {
+          this.shortcutReleasePromise = null;
+        }
+      }
+    },
+    onShortcutFieldBlur(id, type) {
+      if (
+        this.shortcutInput.recording &&
+        this.shortcutInput.id === id &&
+        this.shortcutInput.type === type
+      ) {
+        const requestToken = this.nextShortcutRequest();
+        this.releaseShortcutCapture({ requestToken });
+      }
+    },
+    async setGlobalShortcutEnabled(enabled) {
+      const requestToken = this.nextShortcutRequest();
+      this.shortcutOperationBusy = true;
+      const response = await this.invokeShortcut('shortcut:setGlobalEnabled', {
+        enabled,
+      });
+      const current = this.applyShortcutResponse(response, requestToken);
+      if (!current) {
+        if (this.isCurrentShortcutRequest(requestToken)) {
+          this.shortcutOperationBusy = false;
+        }
+        return;
+      }
+      this.shortcutOperationBusy = false;
+      if (!response.ok) {
+        this.showToast(this.shortcutFailureMessage(response));
+      } else if (response.status === 'partial') {
+        this.showToast('已启用，部分全局快捷键未能注册');
+      } else {
+        this.showToast(enabled ? '全局快捷键已启用' : '全局快捷键已关闭');
+      }
+    },
+    async restoreDefaultShortcuts() {
+      const requestToken = this.nextShortcutRequest();
+      await this.releaseShortcutCapture({ requestToken });
+      this.shortcutOperationBusy = true;
+      const response = await this.invokeShortcut('shortcut:restoreDefaults');
+      const current = this.applyShortcutResponse(response, requestToken);
+      if (!current) {
+        if (this.isCurrentShortcutRequest(requestToken)) {
+          this.shortcutOperationBusy = false;
+        }
+        return;
+      }
+      this.shortcutOperationBusy = false;
+      if (!response.ok) {
+        this.showToast(this.shortcutFailureMessage(response));
+      } else if (response.status === 'partial') {
+        this.showToast('默认快捷键已恢复，部分全局快捷键未能注册');
+      } else {
+        this.showToast('已恢复默认快捷键');
+      }
     },
   },
 };
@@ -2973,13 +3113,26 @@ input[type='number'] {
     }
   }
   .keyboard-input {
+    appearance: none;
+    border: 0;
     font-weight: 600;
+    color: var(--color-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
     background-color: var(--color-secondary-bg);
     padding: 8px 12px;
     border-radius: var(--radius-button);
     min-width: 150px;
     min-height: 34px;
     box-sizing: border-box;
+    &:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 2px;
+    }
+    &:disabled {
+      cursor: default;
+    }
     &.active {
       color: var(--color-primary);
       background-color: var(--color-primary-bg);
@@ -3018,6 +3171,18 @@ input[type='number'] {
   }
   &:focus {
     outline: none;
+  }
+}
+
+.shortcut-global-status {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-secondary);
+  &.enabled {
+    color: var(--color-primary);
+  }
+  &.partial {
+    color: #d49a24;
   }
 }
 

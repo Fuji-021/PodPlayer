@@ -1,6 +1,3 @@
-import shortcuts from '@/utils/shortcuts';
-import cloneDeep from 'lodash/cloneDeep';
-
 export default {
   updateLikedXXX(state, { name, data }) {
     state.liked[name] = data;
@@ -185,16 +182,19 @@ export default {
   updateLastfm(state, session) {
     state.lastfm = session;
   },
-  updateShortcut(state, { id, type, shortcut }) {
-    let newShortcut = state.settings.shortcuts.find(s => s.id === id);
-    newShortcut[type] = shortcut;
-    state.settings.shortcuts = state.settings.shortcuts.map(s => {
-      if (s.id !== id) return s;
-      return newShortcut;
-    });
-  },
-  restoreDefaultShortcuts(state) {
-    state.settings.shortcuts = cloneDeep(shortcuts);
+  applyShortcutRuntimeState(state, shortcutState) {
+    const next = shortcutState || {};
+    if (Array.isArray(next.shortcuts)) {
+      state.settings.shortcuts = next.shortcuts.map(item =>
+        Object.assign({}, item)
+      );
+    }
+    if (typeof next.globalEnabled === 'boolean') {
+      state.settings.enableGlobalShortcut = next.globalEnabled;
+    }
+    state.failedGlobalShortcuts = Array.isArray(next.failedIds)
+      ? next.failedIds.slice()
+      : [];
   },
   enableScrolling(state, status = null) {
     state.enableScrolling = status ? status : !state.enableScrolling;
