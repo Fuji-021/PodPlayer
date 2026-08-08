@@ -34,6 +34,7 @@
     "test:transcript-entry": "node scripts/transcript_entry_policy_smoke.js",
     "test:transcript-readability": "node scripts/transcript_readability_smoke.js",
     "test:local-storage-recovery": "node scripts/local_storage_recovery_smoke.js",
+    "test:shortcut-settings-migration": "node scripts/shortcut_settings_migration_smoke.js",
     "test:asr-queue-lifecycle": "node scripts/asr_queue_lifecycle_smoke.js",
     "test:podcast-download-integrity": "node scripts/podcast_download_integrity_smoke.js",
     "test:episode-detail-load-guard": "node scripts/episode_detail_load_guard_smoke.js",

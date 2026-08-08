@@ -39,8 +39,9 @@ function flush() {
 }
 
 class FakeChild extends EventEmitter {
-  constructor() {
+  constructor(pid) {
     super();
+    this.pid = pid;
     this.stderr = new EventEmitter();
     this.killCalls = [];
   }
@@ -100,7 +101,7 @@ export function isAsrPlatformSupported() { return true; }\n`
         setup(build) {
           const aliases = {
             electron,
-            'child_process': childProcess,
+            child_process: childProcess,
             fs: fakeFs,
             './asrModelManager': asrModel,
           };
@@ -116,10 +117,11 @@ export function isAsrPlatformSupported() { return true; }\n`
   return outfile;
 }
 
-function createHarness(configs) {
+function createHarness(configs, spawnPlan = []) {
   const events = [];
   const children = [];
   const configQueue = configs.slice();
+  const spawnQueue = spawnPlan.slice();
   return {
     handlers: {},
     events,
@@ -131,7 +133,11 @@ function createHarness(configs) {
       return next || Promise.resolve(validConfig());
     },
     spawn() {
-      const child = new FakeChild();
+      const plan = spawnQueue.length ? spawnQueue.shift() : 'running';
+      if (plan === 'throw') throw new Error('spawn-throw');
+      const child = new FakeChild(
+        plan === 'spawn-error' ? undefined : 1000 + children.length
+      );
       children.push(child);
       return child;
     },
@@ -150,8 +156,8 @@ function createHarness(configs) {
   };
 }
 
-async function createRuntime(outfile, configs) {
-  global.__asrHarness = createHarness(configs);
+async function createRuntime(outfile, configs, spawnPlan) {
+  global.__asrHarness = createHarness(configs, spawnPlan);
   delete require.cache[require.resolve(outfile)];
   const asr = require(outfile);
   asr.registerAsrIpc(global.__asrHarness.getWindow, {
@@ -199,13 +205,22 @@ async function main() {
     await flush();
     assert.strictEqual(harness.children.length, 1);
     assert.strictEqual((await status(harness, 'A')).activeStatus, 'running');
-    harness.children[0].emit('error', new Error('spawn-only-error'));
+    harness.children[0].emit('error', new Error('runtime-only-error'));
     await flush();
     assert.strictEqual(
       harness.children.length,
-      2,
-      'error without exit must finalize A and start B'
+      1,
+      'a running child error must retain A until exit/close confirms termination'
     );
+    current = await status(harness, 'A');
+    assert.strictEqual(current.busyEpisodeId, 'A');
+    assert.strictEqual(
+      current.activeError.code,
+      'worker-runtime-error-awaiting-exit'
+    );
+    harness.children[0].emit('close', 1, null);
+    await flush();
+    assert.strictEqual(harness.children.length, 2);
     harness.children[0].emit('exit', 1, null);
     assert.strictEqual(
       (await status(harness, 'B')).busyEpisodeId,
@@ -219,6 +234,44 @@ async function main() {
     );
     harness.children[1].emit('exit', 0, null);
     assert.strictEqual((await status(harness, 'B')).busy, false);
+
+    // An async spawn failure has no pid/spawn confirmation, so it is safe to
+    // settle immediately and continue with B.
+    harness = await createRuntime(
+      outfile,
+      [Promise.resolve(validConfig()), Promise.resolve(validConfig())],
+      ['spawn-error', 'running']
+    );
+    await transcribe(harness, 'spawn-failed-A');
+    await transcribe(harness, 'spawn-failed-B');
+    await flush();
+    harness.children[0].emit('error', new Error('ENOENT'));
+    await flush();
+    assert.strictEqual(harness.children.length, 2);
+    assert.strictEqual(
+      (await status(harness, 'spawn-failed-B')).busyEpisodeId,
+      'spawn-failed-B'
+    );
+    assert.strictEqual(
+      harness.events.filter(event => event.channel === 'asr:error').length,
+      1,
+      'spawn failure reports one terminal error before starting B'
+    );
+
+    // A synchronous spawn throw follows the same safe settlement path.
+    harness = await createRuntime(
+      outfile,
+      [Promise.resolve(validConfig()), Promise.resolve(validConfig())],
+      ['throw', 'running']
+    );
+    await transcribe(harness, 'spawn-throw-A');
+    await transcribe(harness, 'spawn-throw-B');
+    await flush();
+    assert.strictEqual(harness.children.length, 1);
+    assert.strictEqual(
+      (await status(harness, 'spawn-throw-B')).busyEpisodeId,
+      'spawn-throw-B'
+    );
 
     // A duplicate request while starting is coalesced, rather than spawning a
     // second worker after the deferred model verification resolves.
