@@ -16,8 +16,10 @@
       alt=""
       loading="eager"
       decoding="async"
+      :draggable="coverDragEnabled"
       :data-cover-token="requestToken"
       :data-cover-source="baseSrc"
+      @dragstart="onDragStart"
       @load="onBaseLoad"
       @error="onBaseError"
     />
@@ -34,8 +36,10 @@
       alt=""
       loading="eager"
       decoding="async"
+      :draggable="coverDragEnabled"
       :data-cover-token="requestToken"
       :data-cover-source="episodeSrc"
+      @dragstart="onDragStart"
       @load="onEpisodeLoad"
       @error="onEpisodeError"
       @transitionend="onEpisodeTransitionEnd"
@@ -65,6 +69,10 @@ import {
   cancelSubscriptionEpisodeCoverPersistence,
   enqueueSubscriptionEpisodeCoverPersistence,
 } from '@/utils/podcast/subscriptionEpisodeCoverPersistence';
+import {
+  guardPodcastCoverDrag,
+  isPodcastCoverDragEnabled,
+} from '@/utils/podcast/coverDragPreference';
 
 function isReducedMotion() {
   return !!(
@@ -114,6 +122,11 @@ export default {
     };
   },
   computed: {
+    coverDragEnabled() {
+      return isPodcastCoverDragEnabled(
+        this.$store && this.$store.state && this.$store.state.settings
+      );
+    },
     baseKey() {
       return this.requestToken + ':base:' + this.baseSrc;
     },
@@ -142,6 +155,12 @@ export default {
     this.invalidateRequests();
   },
   methods: {
+    onDragStart(event) {
+      guardPodcastCoverDrag(
+        event,
+        this.$store && this.$store.state && this.$store.state.settings
+      );
+    },
     invalidateRequests() {
       this.cancelCoverCachePersistence();
       this.requestToken += 1;

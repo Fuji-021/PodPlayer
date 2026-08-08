@@ -8,7 +8,9 @@
     :class="{ 'pod-img-loaded': loaded }"
     :src="displaySrc"
     :loading="imageLoading"
+    :draggable="coverDragEnabled"
     decoding="async"
+    @dragstart="onDragStart"
     @load="onLoad"
     @error="onError"
   />
@@ -35,12 +37,17 @@ import {
   getCachedCover,
   cacheCoverFromImg,
 } from '@/utils/podcast/coverCache';
+import {
+  guardPodcastCoverDrag,
+  isPodcastCoverDragEnabled,
+} from '@/utils/podcast/coverDragPreference';
 
 export default {
   name: 'PodImage',
   props: {
     src: { type: String, default: '' },
     loading: { type: String, default: 'lazy' },
+    podcastCover: { type: Boolean, default: false },
   },
   data() {
     // displaySrc = 实际喂给 <img> 的地址：优先本地缓存 dataURL，否则归一化后的远程 url。
@@ -49,6 +56,12 @@ export default {
   computed: {
     imageLoading() {
       return this.loading === 'eager' ? 'eager' : 'lazy';
+    },
+    coverDragEnabled() {
+      if (!this.podcastCover) return true;
+      return isPodcastCoverDragEnabled(
+        this.$store && this.$store.state && this.$store.state.settings
+      );
     },
     // [修] R13：http:// 统一升 https://，减少混合内容被浏览器拦截致空白；其余 url 原样返回。
     //   同时作为封面缓存的统一 key（http/https 归一为同一条缓存）。
@@ -70,6 +83,13 @@ export default {
     this.resolveSrc();
   },
   methods: {
+    onDragStart(event) {
+      if (!this.podcastCover) return;
+      guardPodcastCoverDrag(
+        event,
+        this.$store && this.$store.state && this.$store.state.settings
+      );
+    },
     // 解析当前应显示的封面地址：同步内存命中用本地图；否则先挂原图、异步查 Dexie 命中则换本地图。
     resolveSrc() {
       this.failed = false; // [修] R13：换 src 重置失败态，给新封面正常加载机会。

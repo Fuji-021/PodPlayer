@@ -62,7 +62,11 @@
         >
           <span class="rail-cover">
             <span class="rail-cover-halo"></span>
-            <PodImage class="rail-cover-image" :src="podcast.coverUrl" />
+            <PodImage
+              podcast-cover
+              class="rail-cover-image"
+              :src="podcast.coverUrl"
+            />
           </span>
         </button>
       </div>

@@ -14,6 +14,7 @@
           @contextmenu.prevent="toggleCoverMenu"
         >
           <PodImage
+            podcast-cover
             class="cover-lg"
             :src="podcast.coverUrl"
             @error="onCoverError"

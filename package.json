@@ -50,6 +50,7 @@
     "test:main-scroll-back-top": "node scripts/main_scroll_back_to_top_smoke.js",
     "test:transcript-summary": "node scripts/transcript_summary_smoke.js",
     "test:transient-transcript-media": "node scripts/transient_transcript_media_smoke.js",
+    "test:podcast-cover-drag": "node scripts/podcast_cover_drag_preference_smoke.js",
     "test:backup-restore": "node scripts/backup_restore_smoke.js",
     "test:backup-recovery-files": "node scripts/backup_recovery_files_smoke.js",
     "test:security-rendering": "node scripts/untrusted_html_render_smoke.js",

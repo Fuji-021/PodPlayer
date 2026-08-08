@@ -129,7 +129,10 @@ export default {
     state.settings.outputDevice = deviceId;
   },
   updateSettings(state, { key, value }) {
-    state.settings[key] = value;
+    // Old localStorage payloads can lack settings introduced by a later
+    // release. Replacing the object keeps those newly added keys reactive in
+    // Vue 2, so component-bound preferences take effect immediately.
+    state.settings = Object.assign({}, state.settings || {}, { [key]: value });
   },
   setAiServicePublicConfig(state, payload) {
     const input = payload || {};

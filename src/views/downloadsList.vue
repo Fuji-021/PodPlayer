@@ -49,7 +49,12 @@
       @dblclick="onRowDblClick(item, $event)"
       @contextmenu.prevent="openMenu($event, item)"
     >
-      <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
+      <PodImage
+        podcast-cover
+        class="cover"
+        :src="item.coverUrl"
+        @error="onCoverError"
+      />
       <div class="meta">
         <!-- [下载页改版] 单击进单集详情、双击播放(整行)；节目名单击进节目详情、双击仍播放 -->
         <div class="t" data-selection="content">{{ item.title }}</div>
@@ -91,7 +96,12 @@
           class="dl-progress-bg"
           :style="{ width: dlPercent(item) + '%' }"
         ></div>
-        <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
+        <PodImage
+          podcast-cover
+          class="cover"
+          :src="item.coverUrl"
+          @error="onCoverError"
+        />
         <div class="meta">
           <div class="t" data-selection="content">{{ item.title }}</div>
           <div class="s" data-selection="content"
