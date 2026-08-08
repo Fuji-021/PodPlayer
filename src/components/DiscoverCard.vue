@@ -80,6 +80,7 @@ import {
 import { deletePodcast } from '@/utils/podcast/service';
 import { getPodcast, peekPodcast } from '@/utils/podcast/db';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
+import { requestUnsubscribe } from '@/utils/podcast/subscriptionOperations';
 
 export default {
   name: 'DiscoverCard',
@@ -260,15 +261,17 @@ export default {
       if (this.busy || !feed) return;
       this.busy = true;
       try {
-        await deletePodcast(feed);
+        const result = await requestUnsubscribe(feed, deletePodcast);
+        if (!result.ok) {
+          this.toast('取消订阅失败，请稍后重试');
+          return;
+        }
         this.$store.commit('removeSubscribedPodcast', {
           feedUrl: feed,
           name: this.name,
         });
         this.toast('已取消订阅');
         this.$emit('changed');
-      } catch (e) {
-        this.toast('取消订阅失败：' + ((e && e.message) || e));
       } finally {
         this.busy = false;
       }

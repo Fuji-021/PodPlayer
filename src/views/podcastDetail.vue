@@ -337,6 +337,8 @@ import { getCoverColor } from '@/utils/podcast/coverColor';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import { getEpisodeCache, setEpisodeCache } from '@/utils/podcast/episodeCache';
 import { prefetchShownotesForEpisodes } from '@/utils/podcast/shownotesEnrich';
+import { getStaleAsrPendingIds } from '@/utils/podcast/runtimeOperationRules';
+import { requestUnsubscribe } from '@/utils/podcast/subscriptionOperations';
 import {
   prefetchNasPodcast,
   nasEpisodeGuidSet,
@@ -528,11 +530,9 @@ export default {
             (this.$store.state.podcastDownloads &&
               this.$store.state.podcastDownloads.pathMap) ||
             {};
-          Object.keys(this.asrPendingMap).forEach(id => {
-            if (!progress[id] && !paths[id]) {
-              this.$delete(this.asrPendingMap, id);
-            }
-          });
+          getStaleAsrPendingIds(this.asrPendingMap, progress, paths).forEach(
+            id => this.$delete(this.asrPendingMap, id)
+          );
         });
       },
     },
@@ -1310,7 +1310,11 @@ export default {
     },
     async doUnsubscribe() {
       if (!this.podcast) return;
-      await deletePodcast(this.podcast.id);
+      const result = await requestUnsubscribe(this.podcast.id, deletePodcast);
+      if (!result.ok) {
+        this.$store.dispatch('showToast', '取消订阅失败，请稍后重试');
+        return;
+      }
       // [B56-1] 全局同步：发现页/二级页/搜索里同名节目实时回到"未订阅"（与另两个取消订阅入口一致）
       this.$store.commit('removeSubscribedPodcast', {
         feedUrl: this.podcast.id,

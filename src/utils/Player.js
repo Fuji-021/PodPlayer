@@ -44,6 +44,10 @@ import {
   createPlaybackSuspendSnapshot,
   planPlaybackResume,
 } from '@/utils/powerResumePolicy';
+import {
+  getAutoCleanPreviousEpisodeId,
+  shouldRemoveQueueEntryAfterHandoff,
+} from '@/utils/podcast/runtimeOperationRules';
 
 // [D163后续·gap①] 已对某集触发过"本地文件缺失→relink 自愈"的集合：每集每会话只试一次，
 //   避免文件真被删时每次播放都重扫磁盘。
@@ -1568,7 +1572,7 @@ export default class {
         // or remove it, and the queue silently loses intent.
         Promise.resolve(this.playPodcastEpisode(next, next.podcastTitle || ''))
           .then(started => {
-            if (started === false) {
+            if (!shouldRemoveQueueEntryAfterHandoff(started)) {
               this._justEnded = false;
               return;
             }
@@ -2153,17 +2157,16 @@ export default class {
     }
     // [T5] 切集：若上一集已听完且用户开启自动清理，在此删除其本地下载文件（此时文件已不在播放中，安全）。
     //   仅当切到「不同单集」时触发，避免重播同集时误删。
-    if (this._lastListenCompleted) {
-      var _prevId = previousEpisodeId;
-      var _newId = track && track.podcastEpisodeId;
-      if (
-        _prevId &&
-        _prevId !== _newId &&
+    var autoCleanEpisodeId = getAutoCleanPreviousEpisodeId({
+      lastListenCompleted: this._lastListenCompleted,
+      previousEpisodeId: previousEpisodeId,
+      currentEpisodeId: track && track.podcastEpisodeId,
+      autoCleanEnabled:
         store.state.settings &&
-        store.state.settings.autoCleanCompletedDownloads
-      ) {
-        removeDownload(_prevId).catch(function () {});
-      }
+        store.state.settings.autoCleanCompletedDownloads,
+    });
+    if (autoCleanEpisodeId) {
+      removeDownload(autoCleanEpisodeId).catch(function () {});
     }
     // [B-31] 切集时重置广播缓存（让 5% 步进 / completed 在新集第一次 tick 就能触发广播）
     this._lastListenStep = -1;

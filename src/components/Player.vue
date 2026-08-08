@@ -922,6 +922,7 @@ import VueSlider from 'vue-slider-component';
 import ImmersiveTranscript from '@/components/ImmersiveTranscript.vue';
 import { goToListSource, hasListSource } from '@/utils/playList';
 import { formatTrackTime } from '@/utils/common';
+import { getForwardSeekTarget } from '@/utils/podcast/runtimeOperationRules';
 // [B-63] 睡眠定时"本集结束"小蓝标改用当前封面主色调（记忆点 + 与定位本集结束呼应）
 import { getCoverColor } from '@/utils/podcast/coverColor';
 // [沉浸式播放页 P0] 封面 3 色调色板（沉浸页中层三色柔和径向渐变背景用）
@@ -1904,8 +1905,7 @@ export default {
     seekForward30() {
       const cur = this.player.seek();
       const dur = this.player.currentTrackDuration || 0;
-      const next = Math.min(Math.max(0, dur - 1), (cur || 0) + 30);
-      this.player.seek(next);
+      this.player.seek(getForwardSeekTarget(cur, dur, 30));
     },
     playOrPause() {
       this.player.playOrPause();

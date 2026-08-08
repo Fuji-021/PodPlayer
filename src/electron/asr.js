@@ -276,6 +276,9 @@ function createStartingJob(payload) {
     token: ++jobSequence,
     phase: 'starting',
     child: null,
+    childSpawned: false,
+    runtimeError: null,
+    runtimeErrorCode: '',
     canceled: false,
     deleting: false,
     settled: false,
@@ -363,17 +366,28 @@ async function runJob(job) {
     return;
   }
   job.child = child;
-  job.phase = 'running';
-  sendEvent('asr:progress', {
-    episodeId: job.episodeId,
-    status: 'running',
-    processedSec: 0,
-    totalSec: job.durationSec || 0,
-    segCount: 0,
-  });
+  var childToken = job.token;
+
+  function isCurrentChild() {
+    return isActiveJob(job) && job.child === child && job.token === childToken;
+  }
+
+  function markChildRunning() {
+    if (!isCurrentChild() || job.canceled || job.deleting) return;
+    job.childSpawned = true;
+    if (job.phase === 'running') return;
+    job.phase = 'running';
+    sendEvent('asr:progress', {
+      episodeId: job.episodeId,
+      status: 'running',
+      processedSec: 0,
+      totalSec: job.durationSec || 0,
+      segCount: 0,
+    });
+  }
 
   child.on('message', function (ev) {
-    if (!ev || !isActiveJob(job) || job.deleting || job.canceled) return;
+    if (!ev || !isCurrentChild() || job.deleting || job.canceled) return;
     if (ev.type === 'progress') {
       sendEvent('asr:progress', {
         episodeId: job.episodeId,
@@ -418,43 +432,74 @@ async function runJob(job) {
     });
   }
 
-  function finalizeChildTermination(code, signal, spawnError) {
-    if (!isActiveJob(job)) return;
+  function finalizeChildTermination(code, signal) {
+    if (!isCurrentChild()) return;
     if (job.deleting) {
       finalizeJob(job);
     } else if (job.canceled) {
       finalizeJob(job, { type: 'canceled' });
     } else if (!job.reported) {
-      if (spawnError) {
-        finalizeJob(job, {
-          error: String((spawnError && spawnError.message) || spawnError),
-        });
-      } else {
-        finalizeJob(job, {
-          error:
-            '转录进程异常退出(code ' +
+      finalizeJob(job, {
+        error:
+          job.runtimeError ||
+          '转录进程异常退出(code ' +
             code +
             (signal ? '/' + signal : '') +
             ')' +
             (stderrBuf ? '：' + stderrBuf.slice(-300) : ''),
-        });
-      }
+      });
     } else {
       finalizeJob(job);
     }
   }
 
+  child.on('spawn', markChildRunning);
+
+  // child_process emits error both for a failed spawn and for a running worker.
+  // Only the former has no confirmed pid/spawn event and may release the slot.
+  // A running worker keeps ownership until exit/close confirms termination.
   child.on('error', function (err) {
-    finalizeChildTermination(null, null, err);
+    if (!isCurrentChild() || job.reported) return;
+    if (job.deleting) {
+      finalizeJob(job);
+      return;
+    }
+    if (job.canceled) {
+      finalizeJob(job, { type: 'canceled' });
+      return;
+    }
+    if (!job.childSpawned && !(child && child.pid)) {
+      finalizeJob(job, {
+        error: '无法启动转录子进程：' + String((err && err.message) || err),
+      });
+      return;
+    }
+    job.runtimeError =
+      '转录子进程运行异常，等待退出确认：' +
+      String((err && err.message) || err);
+    job.runtimeErrorCode = 'worker-runtime-error-awaiting-exit';
+    sendEvent('asr:progress', {
+      episodeId: job.episodeId,
+      status: 'running',
+      phase: 'termination-pending',
+      error: job.runtimeError,
+      errorCode: job.runtimeErrorCode,
+      totalSec: job.durationSec || 0,
+    });
   });
 
   child.on('exit', function (code, signal) {
-    finalizeChildTermination(code, signal, null);
+    finalizeChildTermination(code, signal);
   });
 
   child.on('close', function (code, signal) {
-    finalizeChildTermination(code, signal, null);
+    finalizeChildTermination(code, signal);
   });
+
+  // Successful ChildProcess instances already expose a pid before the async
+  // spawn event. Mark this synchronously so a later runtime error is never
+  // mistaken for a spawn failure.
+  if (child && child.pid) markChildRunning();
 }
 
 export function registerAsrIpc(getWindow, store) {
@@ -479,6 +524,10 @@ export function registerAsrIpc(getWindow, store) {
       busy: !!active,
       busyEpisodeId: active ? active.episodeId : '',
       activeStatus: active ? active.phase : '',
+      activeError:
+        active && active.runtimeError
+          ? { code: active.runtimeErrorCode, message: active.runtimeError }
+          : null,
       queued: queue.map(function (j) {
         return j.episodeId;
       }),

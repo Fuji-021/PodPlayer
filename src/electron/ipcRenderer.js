@@ -1,5 +1,6 @@
 import store from '@/store';
 import { db } from '@/utils/db';
+import { getForwardSeekTarget } from '@/utils/podcast/runtimeOperationRules';
 
 const player = store.state.player;
 
@@ -97,7 +98,7 @@ export function ipcRenderer(vueInstance) {
     if (inEditable()) return;
     const cur = player.seek();
     const dur = player.currentTrackDuration || 0;
-    player.seek(Math.min(Math.max(0, dur - 1), (cur || 0) + 30));
+    player.seek(getForwardSeekTarget(cur, dur, 30));
   });
 
   ipcRenderer.on('previous', () => {

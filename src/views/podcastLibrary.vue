@@ -293,6 +293,7 @@ import {
   onSubscriptionUpdatesChanged,
 } from '@/utils/podcast/subscriptionNavigation';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
+import { requestUnsubscribe } from '@/utils/podcast/subscriptionOperations';
 import SvgIcon from '@/components/SvgIcon.vue';
 
 // [A-28] 取一档节目最新一集的 pubTime（用于"节目更新时间"排序）
@@ -1006,7 +1007,11 @@ export default {
     async doUnsubscribe() {
       if (!this.unsubTarget) return;
       const target = this.unsubTarget;
-      await deletePodcast(target.id);
+      const result = await requestUnsubscribe(target.id, deletePodcast);
+      if (!result.ok) {
+        this.$store.dispatch('showToast', '取消订阅失败，请稍后重试');
+        return;
+      }
       // [B-44] 全局同步：发现页/二级页同名卡片实时回到"未订阅"
       this.$store.commit('removeSubscribedPodcast', {
         feedUrl: target.id,
