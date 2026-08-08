@@ -1,15 +1,21 @@
 import defaultShortcuts from '@/utils/shortcuts';
+import { normalizeShortcutSettings } from '@/utils/shortcutConfig';
 const { app, Menu } = require('electron');
 // import { autoUpdater } from "electron-updater"
 // const version = app.getVersion();
 
 const isMac = process.platform === 'darwin';
 
-export function createMenu(win, store) {
-  let shortcuts = store.get('settings.shortcuts');
-  if (shortcuts === undefined) {
-    shortcuts = defaultShortcuts;
-  }
+function resolveShortcut(shortcuts, id) {
+  const row = shortcuts.find(item => item && item.id === id);
+  return (row && row.shortcut) || '';
+}
+
+export function buildMenu(win, store, options) {
+  const source = options && options.shortcuts;
+  const stored =
+    source === undefined ? store.get('settings.shortcuts') : source;
+  const shortcuts = normalizeShortcutSettings(defaultShortcuts, stored);
 
   let menu = null;
   const template = [
@@ -75,7 +81,7 @@ export function createMenu(win, store) {
       submenu: [
         {
           label: 'Play',
-          accelerator: shortcuts.find(s => s.id === 'play').shortcut,
+          accelerator: resolveShortcut(shortcuts, 'play'),
           click: () => {
             win.webContents.send('play');
           },
@@ -83,35 +89,35 @@ export function createMenu(win, store) {
         {
           // [文案] 播客语义=快进 30 秒(非"下一首")，菜单 label 与功能名一致
           label: '快进 30 秒',
-          accelerator: shortcuts.find(s => s.id === 'next').shortcut,
+          accelerator: resolveShortcut(shortcuts, 'next'),
           click: () => {
             win.webContents.send('next');
           },
         },
         {
           label: '快退 15 秒',
-          accelerator: shortcuts.find(s => s.id === 'previous').shortcut,
+          accelerator: resolveShortcut(shortcuts, 'previous'),
           click: () => {
             win.webContents.send('previous');
           },
         },
         {
           label: 'Increase Volume',
-          accelerator: shortcuts.find(s => s.id === 'increaseVolume').shortcut,
+          accelerator: resolveShortcut(shortcuts, 'increaseVolume'),
           click: () => {
             win.webContents.send('increaseVolume');
           },
         },
         {
           label: 'Decrease Volume',
-          accelerator: shortcuts.find(s => s.id === 'decreaseVolume').shortcut,
+          accelerator: resolveShortcut(shortcuts, 'decreaseVolume'),
           click: () => {
             win.webContents.send('decreaseVolume');
           },
         },
         {
           label: 'Like',
-          accelerator: shortcuts.find(s => s.id === 'like').shortcut,
+          accelerator: resolveShortcut(shortcuts, 'like'),
           click: () => {
             win.webContents.send('like');
           },
@@ -120,7 +126,7 @@ export function createMenu(win, store) {
           // [#7 修] 本地"隐藏/显示播放器"快捷键原来没注册菜单 accelerator(只有全局键生效)。
           //   这里读 minimize 本地键并执行与 globalShortcut.js 同款的窗口隐藏/显示切换。
           label: '隐藏/显示播放器',
-          accelerator: shortcuts.find(s => s.id === 'minimize').shortcut,
+          accelerator: resolveShortcut(shortcuts, 'minimize'),
           click: () => {
             if (win.isVisible()) {
               win.hide();
@@ -232,5 +238,15 @@ export function createMenu(win, store) {
   // }
 
   menu = Menu.buildFromTemplate(template);
+  return menu;
+}
+
+export function applyMenu(menu) {
   Menu.setApplicationMenu(menu);
+}
+
+export function createMenu(win, store, options) {
+  const menu = buildMenu(win, store, options);
+  if (!options || options.apply !== false) applyMenu(menu);
+  return menu;
 }
