@@ -102,6 +102,12 @@ function table(name) {
       state()[name].set(row.id, row);
       return row.id;
     },
+    async update(id, patch) {
+      const current = state()[name].get(id);
+      if (!current) return 0;
+      state()[name].set(id, Object.assign({}, current, patch));
+      return 1;
+    },
     delete(id) { state()[name].delete(id); return Promise.resolve(); },
   };
 }
@@ -448,6 +454,48 @@ async function testTranscriptStateMachine(summary) {
     harness.generateCalls,
     generatedBeforePlainAsr,
     'plain transcription must not create a network summary request'
+  );
+
+  // Renderer-side task commands and terminal events preserve the distinction
+  // between a resumable pause and a destructive cancellation. The ASR queue
+  // smoke drives the matching IPC -> worker -> media-release half of the flow.
+  const pauseResult = await transcripts.pauseTranscribe('renderer-paused');
+  assert.deepStrictEqual(pauseResult, { ok: true });
+  assert.ok(
+    harness.ipcCalls.some(
+      call =>
+        call.channel === 'asr:pause' &&
+        call.payload.episodeId === 'renderer-paused'
+    )
+  );
+  harness.transcripts.set('renderer-paused', {
+    id: 'renderer-paused',
+    status: 'running',
+    segCount: 2,
+  });
+  transcripts.transcribeState.episodeId = 'renderer-paused';
+  transcripts.transcribeState.segCount = 3;
+  await harness.ipcListeners['asr:paused'](null, {
+    episodeId: 'renderer-paused',
+  });
+  assert.strictEqual(
+    harness.transcripts.get('renderer-paused').status,
+    'paused',
+    'pause persists a resumable transcript state without deleting output'
+  );
+  harness.transcripts.set('renderer-canceled', {
+    id: 'renderer-canceled',
+    status: 'running',
+    segCount: 1,
+  });
+  await harness.ipcListeners['asr:canceled'](null, {
+    episodeId: 'renderer-canceled',
+    resume: false,
+  });
+  assert.strictEqual(
+    harness.transcripts.get('renderer-canceled').status,
+    'canceled',
+    'cancellation does not masquerade as a resumable pause'
   );
 
   const explicitId = 'explicit-transient-summary';

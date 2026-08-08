@@ -24,7 +24,7 @@ const ipcRenderer = window.require
 //   不必往全局 Vuex store 增加切面。面板按 episodeId 比对决定是否展示这份实时态。
 export const transcribeState = Vue.observable({
   episodeId: '',
-  status: 'idle', // idle | preparing | running | done | error | canceled
+  status: 'idle', // idle | preparing | running | paused | done | error | canceled
   phase: '', // '' | preparing | decoding | loading | transcribing
   processedSec: 0,
   totalSec: 0,
@@ -390,6 +390,13 @@ export async function startTranscribe(episode) {
     return { ok: false, reason: 'missing-audio-url' };
   }
   clearTranscriptDeleteGuard(episode.id);
+  let existing = null;
+  try {
+    existing = await getTranscript(episode.id);
+  } catch (e) {
+    existing = null;
+  }
+  const resume = !!(existing && existing.status === 'paused');
   // [批量入队·不抢占] 仅当当前无其它正在跑的任务、或就是本集时，才接管实时态显示；
   //   否则(已有别集在转，如批量逐集转录)只入队，不把进度显示从正在转的那条抢过来。
   if (
@@ -402,11 +409,13 @@ export async function startTranscribe(episode) {
   try {
     await saveTranscript(episode.id, {
       status: 'running',
-      model: '',
-      segPath: '',
-      txtPath: '',
-      segCount: 0,
-      durationMs: (episode.duration || 0) * 1000,
+      model: resume ? existing.model || '' : '',
+      segPath: resume ? existing.segPath || '' : '',
+      txtPath: resume ? existing.txtPath || '' : '',
+      segCount: resume ? existing.segCount || 0 : 0,
+      durationMs: resume
+        ? existing.durationMs || (episode.duration || 0) * 1000
+        : (episode.duration || 0) * 1000,
       error: '',
     });
   } catch (e) {
@@ -420,6 +429,7 @@ export async function startTranscribe(episode) {
       persistentPath,
       title: episode.title || '',
       durationSec: episode.duration || 0,
+      resume,
     });
   } catch (e) {
     res = { ok: false, error: String((e && e.message) || e) };
@@ -483,6 +493,17 @@ export async function cancelTranscribe(episodeId) {
   }
 }
 
+// An active transcription pauses its local ASR worker and retains eligible
+// transient media. Queue cancellation remains a separate destructive action.
+export async function pauseTranscribe(episodeId) {
+  if (!ipcRenderer) return { ok: false };
+  try {
+    return await ipcRenderer.invoke('asr:pause', { episodeId });
+  } catch (e) {
+    return { ok: false };
+  }
+}
+
 // ---------- IPC 事件监听（启动时注册一次，复用下载端同款幂等守卫） ----------
 let _registered = false;
 export function registerTranscriptListeners() {
@@ -530,7 +551,7 @@ export function registerTranscriptListeners() {
           .invoke('asr:source:release', {
             episodeId: p.episodeId,
             ownerToken: p.ownerToken,
-            outcome: 'canceled',
+            outcome: 'canceled-delete',
           })
           .catch(() => {});
       }
@@ -608,14 +629,53 @@ export function registerTranscriptListeners() {
     store.dispatch('showToast', '生成文字稿失败：' + err);
   });
 
+  ipcRenderer.on('asr:paused', async (_e, p) => {
+    if (!p || !p.episodeId) return;
+    clearTranscriptSummaryFollowup(p.episodeId);
+    if (transcriptDeleteGuards.has(p.episodeId)) return;
+    if (transcribeState.episodeId === p.episodeId) {
+      transcribeState.status = 'paused';
+      transcribeState.phase = '';
+    }
+    try {
+      const existing = await getTranscript(p.episodeId);
+      if (transcriptDeleteGuards.has(p.episodeId)) return;
+      await saveTranscript(p.episodeId, {
+        status: 'paused',
+        model: (existing && existing.model) || '',
+        segPath: (existing && existing.segPath) || '',
+        txtPath: (existing && existing.txtPath) || '',
+        segCount:
+          (transcribeState.episodeId === p.episodeId &&
+            transcribeState.segCount) ||
+          (existing && existing.segCount) ||
+          0,
+        durationMs: (existing && existing.durationMs) || 0,
+        error: '',
+      });
+    } catch (e) {
+      /* ignore */
+    }
+  });
+
   ipcRenderer.on('asr:canceled', async (_e, p) => {
     if (!p || !p.episodeId) return;
     clearTranscriptSummaryFollowup(p.episodeId);
     if (transcriptDeleteGuards.has(p.episodeId)) return;
     if (transcribeState.episodeId === p.episodeId) {
       transcribeState.status = 'canceled';
+      transcribeState.phase = '';
     }
-    // 标记为可续（paused）：保留已转段，下次「继续转录」从断点续。
+    // Cancellation removes only the transient source. It does not delete
+    // already durable transcript output; a fresh start will not treat it as a
+    // paused continuation unless the task had been explicitly paused before.
+    if (!p.resume) {
+      await updateTranscript(p.episodeId, {
+        status: 'canceled',
+        error: '',
+      }).catch(() => {});
+      return;
+    }
     try {
       const existing = await getTranscript(p.episodeId);
       if (transcriptDeleteGuards.has(p.episodeId)) return;

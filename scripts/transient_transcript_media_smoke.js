@@ -144,7 +144,7 @@ async function main() {
     let persistentPolls = 0;
     fetchCalls = 0;
     manager = mod.createTranscriptMediaManager({
-      config: { waitForPersistentMs: 100, waitForPersistentPollMs: 0 },
+      config: { waitForPersistentPollMs: 0 },
       getPersistentInfo() {
         persistentPolls += 1;
         if (persistentPolls === 1)
@@ -166,10 +166,51 @@ async function main() {
     assert.strictEqual(source.localPath, waitedPersistent);
     assert.strictEqual(fetchCalls, 0);
 
+    // A permanent download remains the owner even beyond the old 45-second
+    // fallback threshold. The transcript request waits until it has actually
+    // settled, then reuses the final file instead of starting a second request.
+    global.__mediaHarness = newHarness();
+    const longWaitedPersistent = path.join(
+      global.__mediaHarness.userData,
+      'podcasts',
+      'feed',
+      'long-waited.mp3'
+    );
+    persistentPolls = 0;
+    let logicalWaitMs = 0;
+    fetchCalls = 0;
+    manager = mod.createTranscriptMediaManager({
+      config: { waitForPersistentPollMs: 1000 },
+      wait(ms) {
+        logicalWaitMs += ms;
+        return Promise.resolve();
+      },
+      getPersistentInfo() {
+        persistentPolls += 1;
+        if (persistentPolls <= 61) {
+          return { active: true, finalPath: longWaitedPersistent };
+        }
+        fs.mkdirSync(path.dirname(longWaitedPersistent), { recursive: true });
+        fs.writeFileSync(longWaitedPersistent, 'finished after a long download');
+        return { active: false, finalPath: longWaitedPersistent };
+      },
+      fetchToFile() {
+        fetchCalls += 1;
+      },
+    });
+    source = await manager.acquire({
+      episodeId: 'feed::long-wait-permanent',
+      ownerToken: 'long-wait-owner',
+      audioUrl: 'https://cdn.example.test/long-waited.mp3',
+    });
+    assert.strictEqual(source.sourceType, 'persistent');
+    assert.strictEqual(logicalWaitMs > 45000, true);
+    assert.strictEqual(fetchCalls, 0);
+
     global.__mediaHarness = newHarness();
     fetchCalls = 0;
     manager = mod.createTranscriptMediaManager({
-      config: { waitForPersistentMs: 100, waitForPersistentPollMs: 0 },
+      config: { waitForPersistentPollMs: 0 },
       getPersistentInfo() {
         return { active: false, finalPath: '' };
       },
@@ -308,6 +349,67 @@ async function main() {
     );
     await resumed.release('paused');
     assert.strictEqual(manager.cleanupInactive({ manual: true }).count, 0);
+
+    // A transient source held by a live owner survives manual cleanup. The
+    // cleanup command only removes inactive manifest-owned directories.
+    global.__mediaHarness = newHarness();
+    manager = mod.createTranscriptMediaManager({
+      fetchToFile(record) {
+        return Promise.resolve(writeMedia(record, 48));
+      },
+    });
+    source = await manager.acquire({
+      episodeId: 'feed::manual-cleanup-active',
+      ownerToken: 'manual-active-owner',
+      audioUrl: 'https://cdn.example.test/manual-active.mp3',
+    });
+    manager.cleanupInactive({ manual: true });
+    assert.strictEqual(fs.existsSync(source.localPath), true);
+    await source.release('done');
+
+    // Retryable failures retain an owned .part for bounded Range continuation;
+    // permanent HTTP failures discard it. Neither path adds a download record.
+    global.__mediaHarness = newHarness();
+    manager = mod.createTranscriptMediaManager({
+      fetchToFile(record) {
+        fs.mkdirSync(record.dir, { recursive: true });
+        fs.writeFileSync(record.partPath, Buffer.alloc(21, 3));
+        const error = new Error('ECONNRESET');
+        error.code = 'ECONNRESET';
+        return Promise.reject(error);
+      },
+    });
+    await assert.rejects(
+      manager.acquire({
+        episodeId: 'feed::retryable',
+        ownerToken: 'retryable-owner',
+        audioUrl: 'https://cdn.example.test/retryable.mp3',
+      }),
+      /ECONNRESET/
+    );
+    await manager.release('retryable-owner', 'error');
+    assert.strictEqual(manager.getStats().partCount, 1);
+    await manager.releaseEpisode('feed::retryable', 'canceled-delete');
+    assert.strictEqual(manager.getStats().count, 0);
+
+    global.__mediaHarness = newHarness();
+    manager = mod.createTranscriptMediaManager({
+      fetchToFile(record) {
+        fs.mkdirSync(record.dir, { recursive: true });
+        fs.writeFileSync(record.partPath, Buffer.alloc(21, 4));
+        return Promise.reject(new Error('HTTP 404'));
+      },
+    });
+    await assert.rejects(
+      manager.acquire({
+        episodeId: 'feed::fatal',
+        ownerToken: 'fatal-owner',
+        audioUrl: 'https://cdn.example.test/fatal.mp3',
+      }),
+      /HTTP 404/
+    );
+    await manager.release('fatal-owner', 'error');
+    assert.strictEqual(manager.getStats().count, 0);
 
     // A retry resumes into the original .part path even if a later response
     // reports a different content type. The Range bytes append to the first

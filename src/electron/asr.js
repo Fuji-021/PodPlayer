@@ -6,8 +6,8 @@
 //
 // ⚠️ 本文件被 webpack 打入 background bundle → 保持 Node 16 兼容语法。
 //
-// IPC：asr:transcribe / asr:cancel / asr:status / asr:read / asr:delete / asr:export
-//   事件（主→渲染）：asr:progress / asr:segment / asr:done / asr:error / asr:canceled
+// IPC：asr:transcribe / asr:pause / asr:cancel / asr:status / asr:read / asr:delete / asr:export
+//   事件（主→渲染）：asr:progress / asr:segment / asr:done / asr:error / asr:paused / asr:canceled
 import { ipcMain, app, dialog } from 'electron';
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -274,6 +274,16 @@ function resolveJobExit(job) {
   }
 }
 
+function releaseReasonForJob(job) {
+  if (!job) return 'fatal-error';
+  if (job.deleting || job.stopIntent === 'canceled-delete') {
+    return 'canceled-delete';
+  }
+  if (job.stopIntent === 'paused') return 'paused';
+  if (job.canceled) return 'canceled-delete';
+  return 'error';
+}
+
 function finalizeJob(job, outcome) {
   if (!job || job.finalized) return;
   job.finalized = true;
@@ -284,15 +294,23 @@ function finalizeJob(job, outcome) {
   // its transcript row landed in Dexie. Every other terminal path releases
   // transient media immediately; owner-token checks make late callbacks safe.
   if (!job.awaitingTranscriptPersistence) {
-    releaseJobMedia(job, job.canceled ? 'canceled' : 'error');
+    releaseJobMedia(job, releaseReasonForJob(job));
   }
 
   var ownsActive = active === job;
   if (ownsActive) active = null;
 
   if (!job.deleting && !job.reported) {
-    if (job.canceled || (outcome && outcome.type === 'canceled')) {
-      sendEvent('asr:canceled', { episodeId: job.episodeId });
+    if (job.stopIntent === 'paused' || (outcome && outcome.type === 'paused')) {
+      sendEvent('asr:paused', {
+        episodeId: job.episodeId,
+        resume: !!job.resume,
+      });
+    } else if (job.canceled || (outcome && outcome.type === 'canceled')) {
+      sendEvent('asr:canceled', {
+        episodeId: job.episodeId,
+        resume: !!job.resume,
+      });
     } else if (outcome && outcome.error) {
       sendEvent('asr:error', {
         episodeId: job.episodeId,
@@ -312,6 +330,7 @@ function createStartingJob(payload) {
     persistentPath: payload.persistentPath || payload.audioPath || '',
     title: payload.title || '',
     durationSec: payload.durationSec || 0,
+    resume: !!payload.resume,
     token: ++jobSequence,
     ownerToken:
       'asr-' + Date.now().toString(36) + '-' + jobSequence.toString(36),
@@ -321,6 +340,7 @@ function createStartingJob(payload) {
     runtimeError: null,
     runtimeErrorCode: '',
     canceled: false,
+    stopIntent: '',
     deleting: false,
     settled: false,
     reported: false,
@@ -424,7 +444,7 @@ async function runJob(job) {
   }
   if (!isActiveJob(job) || job.canceled || job.deleting) {
     try {
-      await source.release('canceled');
+      await source.release(releaseReasonForJob(job));
     } catch (e) {
       /* ignore */
     }
@@ -683,10 +703,31 @@ export function registerAsrIpc(getWindow, store, mediaManager) {
         persistentPath: persistentPath,
         title: (payload && payload.title) || '',
         durationSec: (payload && payload.durationSec) || 0,
+        resume: !!(payload && payload.resume),
       })
     );
     startNext();
     return { ok: true, queued: willQueue };
+  });
+
+  ipcMain.handle('asr:pause', async function (_e, payload) {
+    var episodeId = payload && payload.episodeId;
+    if (!episodeId) return { ok: false };
+    if (!active || active.episodeId !== episodeId) {
+      return { ok: false, error: 'no-active-task' };
+    }
+    active.stopIntent = 'paused';
+    active.canceled = true;
+    if (!active.child) {
+      finalizeJob(active, { type: 'paused' });
+    } else {
+      try {
+        active.child.kill();
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    return { ok: true, paused: true };
   });
 
   ipcMain.handle('asr:cancel', async function (_e, payload) {
@@ -702,11 +743,15 @@ export function registerAsrIpc(getWindow, store, mediaManager) {
     }
     if (qi >= 0) {
       var queuedJob = queue.splice(qi, 1)[0];
-      releaseJobMedia(queuedJob, 'canceled');
-      sendEvent('asr:canceled', { episodeId: episodeId });
+      releaseJobMedia(queuedJob, 'canceled-delete');
+      sendEvent('asr:canceled', {
+        episodeId: episodeId,
+        resume: !!queuedJob.resume,
+      });
       return { ok: true, dequeued: true };
     }
     if (active && active.episodeId === episodeId) {
+      active.stopIntent = 'canceled-delete';
       active.canceled = true;
       if (!active.child) {
         finalizeJob(active, { type: 'canceled' });
@@ -791,13 +836,14 @@ export function registerAsrIpc(getWindow, store, mediaManager) {
     if (!episodeId) return { ok: false, error: '缺少 episodeId' };
     queue = queue.filter(function (job) {
       if (job.episodeId === episodeId) {
-        releaseJobMedia(job, 'canceled');
+        releaseJobMedia(job, 'canceled-delete');
         return false;
       }
       return true;
     });
     var task = active && active.episodeId === episodeId ? active : null;
     if (task) {
+      task.stopIntent = 'canceled-delete';
       task.canceled = true;
       task.deleting = true;
       if (!task.child) {

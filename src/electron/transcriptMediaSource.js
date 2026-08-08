@@ -22,7 +22,6 @@ export const TRANSCRIPT_MEDIA_CONFIG = {
   // one bounded budget.
   totalMaxBytes: 1024 * 1024 * 1024,
   budgetCheckBytes: 4 * 1024 * 1024,
-  waitForPersistentMs: 45000,
   waitForPersistentPollMs: 250,
 };
 
@@ -176,7 +175,9 @@ function findReusableMedia(fsImpl, rootDir, episodeId, audioUrl, manifestName) {
     if (
       !manifest ||
       manifest.sourceUrlHash !== expectedUrlHash ||
-      ['paused', 'retryable'].indexOf(manifest.status) === -1
+      ['paused', 'retryable', 'retryable-error', 'shutdown'].indexOf(
+        manifest.status
+      ) === -1
     ) {
       continue;
     }
@@ -220,6 +221,29 @@ function formatExtension(audioUrl, contentType) {
 function streamFailure(error) {
   const code = error && error.code;
   return code === 'download-canceled' || code === 'transcript-media-canceled';
+}
+
+// A retained .part is useful only for failures that can plausibly succeed on a
+// later user retry. Validation, quota and permanent HTTP failures must not
+// leave a misleading resumable artifact behind.
+function isRetryableMediaFailure(error) {
+  const code = String((error && error.code) || '').toUpperCase();
+  const message = String((error && error.message) || error || '');
+  if (
+    /TRANSCRIPT-MEDIA-(CAP-EXCEEDED|INVALID|RANGE|FILE-MISSING)|DOWNLOAD-CANCELED|TRANSCRIPT-MEDIA-CANCELED/.test(
+      code
+    )
+  ) {
+    return false;
+  }
+  const http = message.match(/HTTP\s+(\d{3})/i);
+  if (http) {
+    const status = Number(http[1]);
+    return status === 408 || status === 429 || status >= 500;
+  }
+  return /ECONN|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|NETWORK|FETCH|SOCKET/i.test(
+    code + ' ' + message
+  );
 }
 
 function streamToFile(fsImpl, record, getStream, onProgress, ensureBudget) {
@@ -359,6 +383,12 @@ export function createTranscriptMediaManager(options) {
   const getStream = opts.streamGet || streamGetWithFallback;
   const getPersistentInfo = opts.getPersistentInfo || (() => null);
   const clock = opts.now || now;
+  const wait =
+    opts.wait ||
+    (ms =>
+      new Promise(resolve => {
+        setTimeout(resolve, ms);
+      }));
   const config = Object.assign({}, TRANSCRIPT_MEDIA_CONFIG, opts.config || {});
   const recordsByOwner = new Map();
   const pendingByOwner = new Map();
@@ -409,26 +439,22 @@ export function createTranscriptMediaManager(options) {
   }
 
   async function waitForPersistent(episodeId, isCanceled) {
-    const first = getPersistentInfo(episodeId);
-    if (!first || !first.active) return '';
-    const deadline = clock() + config.waitForPersistentMs;
-    let candidate = first.finalPath || '';
-    while (clock() < deadline) {
+    let next = getPersistentInfo(episodeId);
+    if (!next || !next.active) return '';
+    let candidate = next.finalPath || '';
+    // A user-started permanent download owns this audio until it settles. Do
+    // not start a second transfer merely because it has taken an arbitrary
+    // amount of time; cancellation remains the escape hatch for this wait.
+    while (next && next.active) {
       if (isCanceled && isCanceled()) {
         throw asError('transcript-media-canceled', '已取消准备音频');
       }
       if (candidate && fsImpl.existsSync(candidate)) return candidate;
-      await new Promise(resolve =>
-        setTimeout(resolve, config.waitForPersistentPollMs)
-      );
-      const next = getPersistentInfo(episodeId);
+      await wait(config.waitForPersistentPollMs);
+      next = getPersistentInfo(episodeId);
       if (next && next.finalPath) candidate = next.finalPath;
-      if ((!next || !next.active) && candidate) {
-        return fsImpl.existsSync(candidate) ? candidate : '';
-      }
-      if (!next || !next.active) return '';
     }
-    return '';
+    return candidate && fsImpl.existsSync(candidate) ? candidate : '';
   }
 
   function validPersistentPath(filePath) {
@@ -523,6 +549,7 @@ export function createTranscriptMediaManager(options) {
       connection: {},
       released: false,
       status: 'preparing',
+      failureReleaseReason: '',
       expectedBytes: 0,
       receivedBytes: 0,
       budgetCheckBytes: config.budgetCheckBytes,
@@ -585,10 +612,11 @@ export function createTranscriptMediaManager(options) {
         }
         // Retryable partial media is deliberately outside the download system.
         // It is TTL/cap bounded and is never exposed as a finished download.
-        persistManifest(
-          record,
-          fsImpl.existsSync(record.partPath) ? 'retryable' : 'error'
-        );
+        record.failureReleaseReason =
+          fsImpl.existsSync(record.partPath) && isRetryableMediaFailure(error)
+            ? 'retryable-error'
+            : 'fatal-error';
+        persistManifest(record, record.failureReleaseReason);
         throw error;
       });
     return record.promise;
@@ -640,9 +668,12 @@ export function createTranscriptMediaManager(options) {
       waitForStreamClose(record.response),
       waitForStreamClose(record.writer),
     ]);
-    const keep = reason === 'paused';
-    if (keep) {
-      persistManifest(record, 'paused');
+    let finalReason = reason || 'fatal-error';
+    if (finalReason === 'error' && record.failureReleaseReason) {
+      finalReason = record.failureReleaseReason;
+    }
+    if (['paused', 'retryable-error', 'shutdown'].indexOf(finalReason) >= 0) {
+      persistManifest(record, finalReason);
       return { ok: true, retained: true };
     }
     const root = rootDir();
@@ -651,14 +682,41 @@ export function createTranscriptMediaManager(options) {
     return { ok: removed, removed };
   }
 
+  function purgeInactiveEpisode(episodeId) {
+    const root = rootDir();
+    const episodeDir = transcriptMediaDirectory(root, episodeId);
+    if (!isPathInsideDirectory(root, episodeDir)) return false;
+    const activeDirs = new Set();
+    recordsByOwner.forEach(record => activeDirs.add(record.dir));
+    listMediaDirectories(fsImpl, root, config.manifestName)
+      .filter(dir => dir.indexOf(episodeDir + path.sep) === 0)
+      .forEach(dir => {
+        if (!activeDirs.has(dir)) safeRm(fsImpl, root, dir);
+      });
+    try {
+      if (
+        fsImpl.existsSync(episodeDir) &&
+        !fsImpl.readdirSync(episodeDir).length
+      ) {
+        fsImpl.rmdirSync(episodeDir);
+      }
+    } catch (e) {
+      // A newer owner may have entered this episode directory while cleanup ran.
+    }
+    return true;
+  }
+
   function releaseEpisode(episodeId, reason) {
     const owners = [];
     recordsByOwner.forEach((record, token) => {
       if (record.episodeId === episodeId) owners.push(token);
     });
-    return Promise.all(owners.map(token => release(token, reason))).then(
-      () => ({ ok: true })
-    );
+    return Promise.all(owners.map(token => release(token, reason))).then(() => {
+      if (['deleted', 'canceled-delete', 'fatal-error'].indexOf(reason) >= 0) {
+        purgeInactiveEpisode(episodeId);
+      }
+      return { ok: true };
+    });
   }
 
   function readDirectoryStats(root, includeInactive) {
@@ -669,7 +727,9 @@ export function createTranscriptMediaManager(options) {
       if (
         !includeInactive &&
         manifest.status !== 'paused' &&
-        manifest.status !== 'retryable'
+        manifest.status !== 'retryable' &&
+        manifest.status !== 'retryable-error' &&
+        manifest.status !== 'shutdown'
       )
         return;
       const candidate = manifest.fileName || manifest.partName || '';
@@ -683,8 +743,15 @@ export function createTranscriptMediaManager(options) {
       }
       stats.count += 1;
       stats.bytes += bytes;
-      if (manifest.status === 'paused') stats.pausedCount += 1;
-      if (manifest.status === 'retryable') stats.partCount += 1;
+      if (manifest.status === 'paused' || manifest.status === 'shutdown') {
+        stats.pausedCount += 1;
+      }
+      if (
+        manifest.status === 'retryable' ||
+        manifest.status === 'retryable-error'
+      ) {
+        stats.partCount += 1;
+      }
     });
     return stats;
   }
@@ -764,13 +831,15 @@ export function createTranscriptMediaManager(options) {
     const cutoff = clock() - config.retainedTtlMs;
     candidates.forEach(item => {
       const partExpired =
-        item.status === 'retryable' &&
+        (item.status === 'retryable' || item.status === 'retryable-error') &&
         item.updatedAt < clock() - config.partTtlMs;
       const terminal =
         [
           'completed',
           'canceled',
+          'canceled-delete',
           'error',
+          'fatal-error',
           'preparing',
           'running',
           'ready',

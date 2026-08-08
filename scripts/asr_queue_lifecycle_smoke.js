@@ -194,13 +194,19 @@ async function status(harness, episodeId) {
   return harness.handlers['asr:status'](null, { episodeId });
 }
 
-async function transcribe(harness, episodeId) {
-  return harness.handlers['asr:transcribe'](null, {
-    episodeId,
-    audioPath: `C:/mock/${episodeId}.mp3`,
-    title: episodeId,
-    durationSec: 60,
-  });
+async function transcribe(harness, episodeId, options) {
+  return harness.handlers['asr:transcribe'](
+    null,
+    Object.assign(
+      {
+        episodeId,
+        audioPath: `C:/mock/${episodeId}.mp3`,
+        title: episodeId,
+        durationSec: 60,
+      },
+      options || {}
+    )
+  );
 }
 
 async function main() {
@@ -326,6 +332,96 @@ async function main() {
     assert.strictEqual(
       harness.events.filter(event => event.channel === 'asr:canceled').length,
       1
+    );
+
+    // Renderer pause reaches the IPC handler, retains the exact transient
+    // owner after the worker closes, and a later explicit resume starts a new
+    // ASR owner. The media manager smoke separately proves that the retained
+    // owner directory/Ranged .part is reused rather than downloaded again.
+    const lifecycleReleases = [];
+    const lifecycleAcquires = [];
+    harness = await createRuntime(
+      outfile,
+      [Promise.resolve(validConfig()), Promise.resolve(validConfig())],
+      ['running', 'running'],
+      {
+        acquire(request) {
+          lifecycleAcquires.push(request);
+          return Promise.resolve({
+            sourceType: 'transient',
+            localPath: `C:/mock/${request.ownerToken}.mp3`,
+            ownerToken: request.ownerToken,
+            release(reason) {
+              lifecycleReleases.push({ ownerToken: request.ownerToken, reason });
+              return Promise.resolve({ ok: true });
+            },
+          });
+        },
+        release() {
+          return Promise.resolve({ ok: true });
+        },
+        releaseEpisode() {
+          return Promise.resolve({ ok: true });
+        },
+      }
+    );
+    await transcribe(harness, 'pause-resume');
+    await flush();
+    const pausedChild = harness.children[0];
+    assert.deepStrictEqual(
+      await harness.handlers['asr:pause'](null, { episodeId: 'pause-resume' }),
+      { ok: true, paused: true }
+    );
+    assert.strictEqual(pausedChild.killCalls.length, 1);
+    pausedChild.emit('close', null, 'SIGTERM');
+    await flush();
+    assert.deepStrictEqual(lifecycleReleases, [
+      { ownerToken: lifecycleAcquires[0].ownerToken, reason: 'paused' },
+    ]);
+    assert.strictEqual(
+      harness.events.filter(event => event.channel === 'asr:paused').length,
+      1
+    );
+    await transcribe(harness, 'pause-resume', { resume: true });
+    await flush();
+    assert.strictEqual(lifecycleAcquires.length, 2);
+
+    // Queue cancellation is destructive only for its task-local media. It
+    // never turns a queued job into a paused continuation.
+    const queueReleases = [];
+    harness = await createRuntime(
+      outfile,
+      [Promise.resolve(validConfig()), Promise.resolve(validConfig())],
+      ['running', 'running'],
+      {
+        acquire(request) {
+          return Promise.resolve({
+            sourceType: 'transient',
+            localPath: `C:/mock/${request.ownerToken}.mp3`,
+            ownerToken: request.ownerToken,
+            release(reason) {
+              queueReleases.push({ ownerToken: request.ownerToken, reason });
+              return Promise.resolve({ ok: true });
+            },
+          });
+        },
+        release(ownerToken, reason) {
+          queueReleases.push({ ownerToken, reason });
+          return Promise.resolve({ ok: true });
+        },
+        releaseEpisode() {
+          return Promise.resolve({ ok: true });
+        },
+      }
+    );
+    await transcribe(harness, 'queue-owner-A');
+    await transcribe(harness, 'queue-owner-B');
+    await flush();
+    await harness.handlers['asr:cancel'](null, { episodeId: 'queue-owner-B' });
+    await flush();
+    assert.strictEqual(
+      queueReleases.some(item => item.reason === 'canceled-delete'),
+      true
     );
 
     // A canceled running child may still emit a late done message; it must not

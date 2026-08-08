@@ -136,7 +136,7 @@
     <!-- 排队中 -->
     <div v-else-if="mode === 'queued'" class="t-hint">
       <span class="t-spin"></span>已排队，等待前一个转录任务完成…
-      <button class="t-link" @click="onCancel">取消</button>
+      <button class="t-link" @click="onCancelQueue">取消排队</button>
     </div>
 
     <!-- 转录中 -->
@@ -146,7 +146,7 @@
           <div class="t-prog-fill" :style="{ width: progressPct + '%' }"></div>
         </div>
         <span class="t-prog-pct">{{ progressLabel }}</span>
-        <button class="t-link danger" @click="onCancel">取消</button>
+        <button class="t-link" @click="onPause">暂停转写</button>
       </div>
       <div class="t-running-sub">
         {{ runningSubLabel }}
@@ -354,6 +354,7 @@ import {
   startTranscribe,
   startTranscribeAndSummarize,
   cancelTranscribe,
+  pauseTranscribe,
   deleteTranscript,
   exportTranscriptText,
   getDictParts,
@@ -457,14 +458,16 @@ export default {
       if (this.live.episodeId === this.episodeId) {
         if (this.live.status === 'preparing') return 'running';
         if (this.live.status === 'running') return 'running';
+        if (this.live.status === 'paused') return 'paused';
         if (this.live.status === 'done') return 'done';
+        if (this.live.status === 'canceled') return 'idle';
         if (
           this.live.status === 'error' &&
           this.live.error !== 'model-missing'
         ) {
           return 'error';
         }
-        // 'canceled' → 落到 dbStatus 的 paused
+        // A destructive cancellation falls back to its durable row state.
       }
       if (this.queuedLocal) return 'queued';
       const s = this.dbStatus;
@@ -1355,7 +1358,10 @@ export default {
     goModelSettings() {
       if (this.$router) this.$router.push('/settings').catch(() => {});
     },
-    onCancel() {
+    onPause() {
+      pauseTranscribe(this.episodeId);
+    },
+    onCancelQueue() {
       cancelTranscribe(this.episodeId);
       this.queuedLocal = false;
     },
