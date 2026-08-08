@@ -337,6 +337,8 @@ import { getCoverColor } from '@/utils/podcast/coverColor';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import { getEpisodeCache, setEpisodeCache } from '@/utils/podcast/episodeCache';
 import { prefetchShownotesForEpisodes } from '@/utils/podcast/shownotesEnrich';
+import { getStaleAsrPendingIds } from '@/utils/podcast/runtimeOperationRules';
+import { requestUnsubscribe } from '@/utils/podcast/subscriptionOperations';
 import {
   prefetchNasPodcast,
   nasEpisodeGuidSet,
@@ -506,6 +508,31 @@ export default {
           startTranscribe(ep).then(r => {
             if (r && r.ok) this.$set(this.asrStatusMap, id, 'running');
           });
+        });
+      },
+    },
+    // A pending ASR request is only valid while its download remains active or
+    // has produced a local path. Failed/canceled downloads clear progressMap;
+    // drop that pending marker on the next Vue turn so a completed pathMap
+    // update in the same batch still gets to start transcription first.
+    '$store.state.podcastDownloads.progressMap': {
+      deep: true,
+      handler() {
+        const token = (this._asrPendingCheckToken || 0) + 1;
+        this._asrPendingCheckToken = token;
+        this.$nextTick(() => {
+          if (token !== this._asrPendingCheckToken) return;
+          const progress =
+            (this.$store.state.podcastDownloads &&
+              this.$store.state.podcastDownloads.progressMap) ||
+            {};
+          const paths =
+            (this.$store.state.podcastDownloads &&
+              this.$store.state.podcastDownloads.pathMap) ||
+            {};
+          getStaleAsrPendingIds(this.asrPendingMap, progress, paths).forEach(
+            id => this.$delete(this.asrPendingMap, id)
+          );
         });
       },
     },
@@ -1283,7 +1310,11 @@ export default {
     },
     async doUnsubscribe() {
       if (!this.podcast) return;
-      await deletePodcast(this.podcast.id);
+      const result = await requestUnsubscribe(this.podcast.id, deletePodcast);
+      if (!result.ok) {
+        this.$store.dispatch('showToast', '取消订阅失败，请稍后重试');
+        return;
+      }
       // [B56-1] 全局同步：发现页/二级页/搜索里同名节目实时回到"未订阅"（与另两个取消订阅入口一致）
       this.$store.commit('removeSubscribedPodcast', {
         feedUrl: this.podcast.id,

@@ -73,6 +73,10 @@
   --color-navbar-bg: rgba(255, 255, 255, 0.86);
   --color-primary-bg-for-transparent: rgba(189, 207, 255, 0.28);
   --color-secondary-bg-for-transparent: rgba(209, 209, 214, 0.28);
+  // 文字稿当前播放行有独立的阅读语义，不能复用全局主色或通用透明灰。
+  --color-transcript-active-bg: #e8efff;
+  --color-transcript-active-text: #17213a;
+  --color-transcript-active-time: #283a60;
   --html-overflow-y: overlay;
   // [UI 统一] 中型动作按钮/搜索框/弹窗按钮的圆角：iOS 风的适度曲率（非全胶囊，不过弯）。
   //   全站这类按钮统一引用此变量，改一处即可整体微调。极小按钮(<24px 高)不用它，免显成伪胶囊。
@@ -94,6 +98,9 @@
   --color-navbar-bg: rgba(34, 34, 34, 0.86);
   --color-primary-bg-for-transparent: rgba(255, 255, 255, 0.12);
   --color-secondary-bg-for-transparent: rgba(255, 255, 255, 0.08);
+  --color-transcript-active-bg: #303a4d;
+  --color-transcript-active-text: #f4f7ff;
+  --color-transcript-active-time: #d8e1f4;
 }
 
 #app,

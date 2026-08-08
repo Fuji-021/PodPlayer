@@ -36,6 +36,7 @@ import {
 } from '@/utils/podcast/listenCoverage';
 import { removeDownload } from '@/utils/podcast/downloads';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
+import { readLocalStorageJson } from '@/utils/safeLocalStorage';
 import { Howl, Howler } from 'howler';
 import shuffle from 'lodash/shuffle';
 import { decode as base642Buffer } from '@/utils/base64';
@@ -43,6 +44,10 @@ import {
   createPlaybackSuspendSnapshot,
   planPlaybackResume,
 } from '@/utils/powerResumePolicy';
+import {
+  getAutoCleanPreviousEpisodeId,
+  shouldRemoveQueueEntryAfterHandoff,
+} from '@/utils/podcast/runtimeOperationRules';
 
 // [D163后续·gap①] 已对某集触发过"本地文件缺失→relink 自愈"的集合：每集每会话只试一次，
 //   避免文件真被删时每次播放都重扫磁盘。
@@ -1366,7 +1371,7 @@ export default class {
     });
   }
   _loadSelfFromLocalStorage() {
-    const player = JSON.parse(localStorage.getItem('player'));
+    const player = readLocalStorageJson('player', null, 'object');
     if (!player) return;
     for (const [key, value] of Object.entries(player)) {
       this[key] = value;
@@ -1560,10 +1565,22 @@ export default class {
       const queue = store.state.podcastQueue;
       if (queue && queue.length > 0) {
         const next = queue[0];
-        store.commit('removeFromQueue', next.id);
         // [A-24 改] 标记自然播完，让 playPodcastEpisode 不再把旧曲入队
         this._justEnded = true;
-        this.playPodcastEpisode(next, next.podcastTitle || '');
+        // Keep a malformed queue item until a real playback handoff succeeds.
+        // Otherwise a stale/no-audio entry disappears before the user can fix
+        // or remove it, and the queue silently loses intent.
+        Promise.resolve(this.playPodcastEpisode(next, next.podcastTitle || ''))
+          .then(started => {
+            if (!shouldRemoveQueueEntryAfterHandoff(started)) {
+              this._justEnded = false;
+              return;
+            }
+            store.commit('removeFromQueue', next.id);
+          })
+          .catch(() => {
+            this._justEnded = false;
+          });
         return;
       }
     }
@@ -1989,7 +2006,7 @@ export default class {
     this._justEnded = false;
     if (!episode?.audioUrl) {
       store.dispatch('showToast', '该单集没有音频地址');
-      return;
+      return Promise.resolve(false);
     }
     // [UX] 从别处再点"正在播放的同一单集" → 不打断、不重建(否则会重新缓冲/回跳进度)。
     //   仅暂停态时恢复播放；点按反馈由各调用方组件自行处理，与此无关。
@@ -2027,7 +2044,8 @@ export default class {
           audioUrl: oldTrack.podcastAudioUrl || '',
           coverUrl: (oldTrack.al && oldTrack.al.picUrl) || '',
           duration: Math.floor(dur),
-          podcastId: (oldTrack.al && oldTrack.al.id) || '',
+          podcastId:
+            oldTrack.podcastId || (oldTrack.al && oldTrack.al.id) || '',
           podcastTitle: (oldTrack.al && oldTrack.al.name) || '',
         });
       }
@@ -2072,13 +2090,21 @@ export default class {
     if (track.name) setTitle(track);
 
     // 走统一恢复路径（autoplay=true），含进度续播
-    return this._loadCurrentPodcastEpisode(true, startAt);
+    return this._loadCurrentPodcastEpisode(
+      true,
+      startAt,
+      (oldTrack && oldTrack.podcastEpisodeId) || ''
+    );
   }
 
   // [播客改造 S-1] 按 this._currentTrack（必须是已构造好的播客 track）装载 howler，
   // 不查网易云。autoplay 控制是否自动播放（重启时为 false，新点一集时为 true）。
   // 同时从 episodeProgress 表读上次进度，howler 加载完成后 seek 过去。
-  async _loadCurrentPodcastEpisode(autoplay, startAt = null) {
+  async _loadCurrentPodcastEpisode(
+    autoplay,
+    startAt = null,
+    previousEpisodeId = ''
+  ) {
     const track = this._currentTrack;
     if (!track || !track.podcastAudioUrl) return false;
 
@@ -2131,17 +2157,16 @@ export default class {
     }
     // [T5] 切集：若上一集已听完且用户开启自动清理，在此删除其本地下载文件（此时文件已不在播放中，安全）。
     //   仅当切到「不同单集」时触发，避免重播同集时误删。
-    if (this._lastListenCompleted) {
-      var _prevId = this._currentTrack && this._currentTrack.podcastEpisodeId;
-      var _newId = track && track.podcastEpisodeId;
-      if (
-        _prevId &&
-        _prevId !== _newId &&
+    var autoCleanEpisodeId = getAutoCleanPreviousEpisodeId({
+      lastListenCompleted: this._lastListenCompleted,
+      previousEpisodeId: previousEpisodeId,
+      currentEpisodeId: track && track.podcastEpisodeId,
+      autoCleanEnabled:
         store.state.settings &&
-        store.state.settings.autoCleanCompletedDownloads
-      ) {
-        removeDownload(_prevId).catch(function () {});
-      }
+        store.state.settings.autoCleanCompletedDownloads,
+    });
+    if (autoCleanEpisodeId) {
+      removeDownload(autoCleanEpisodeId).catch(function () {});
     }
     // [B-31] 切集时重置广播缓存（让 5% 步进 / completed 在新集第一次 tick 就能触发广播）
     this._lastListenStep = -1;

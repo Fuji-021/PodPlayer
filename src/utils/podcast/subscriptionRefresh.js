@@ -16,7 +16,7 @@ function readLastRefresh() {
   }
 }
 
-function markRefreshStart() {
+function markRefreshSuccess() {
   try {
     window.localStorage.setItem(REFRESH_KEY, String(Date.now()));
   } catch (e) {
@@ -41,10 +41,15 @@ export function refreshSubscribedPodcasts({
     });
   }
 
-  markRefreshStart();
   refreshInFlight = refreshAllSubscriptions()
     .then(result => {
       latestResult = result || { totalNew: 0, results: [] };
+      const hasSuccessfulFeed = (latestResult.results || []).some(
+        item => item && !item.error
+      );
+      // A complete outage must not suppress the next automatic retry for the
+      // full interval. In-flight still deduplicates concurrent callers.
+      if (hasSuccessfulFeed) markRefreshSuccess();
       if (latestResult.changed) {
         markSubscriptionUpdatesDirty();
         notifySubscriptionUpdatesChanged();

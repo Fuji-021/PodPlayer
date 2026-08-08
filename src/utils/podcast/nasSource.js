@@ -8,6 +8,7 @@
 
 // [T1 P1] 订阅对账：读库用
 import { getAllPodcasts, updatePodcast } from './db';
+import { readLocalStorageJson } from '@/utils/safeLocalStorage';
 
 const electron =
   process.env.IS_ELECTRON === true ? window.require('electron') : null;
@@ -361,23 +362,15 @@ export async function handoffToNas(feedUrl, title) {
 
 // 读"取消订阅后自动从 NAS 删档"开关（默认关；key 确为 'settings'，同 service.js nasHandoffOn 同源）。
 function nasRemoveOn() {
-  try {
-    var s = JSON.parse(window.localStorage.getItem('settings') || '{}');
-    return s.nasRemoveEnabled === true;
-  } catch (e) {
-    return false;
-  }
+  var s = readLocalStorageJson('settings', {}, 'object');
+  return s.nasRemoveEnabled === true;
 }
 
 // 读"设备 scope"（local=只在本设备执行删档，shared=多设备共享不删；默认 local）。
 function nasDeviceScope() {
-  try {
-    var s = JSON.parse(window.localStorage.getItem('settings') || '{}');
-    var v = s.nasDeviceScope;
-    return v === 'shared' ? 'shared' : 'local';
-  } catch (e) {
-    return 'local';
-  }
+  var s = readLocalStorageJson('settings', {}, 'object');
+  var v = s.nasDeviceScope;
+  return v === 'shared' ? 'shared' : 'local';
 }
 
 // 私有并发限制器：对 items 数组最多 limit 个并发地执行 fn，供 reconcileNas 使用。

@@ -1,27 +1,26 @@
 import initLocalStorage from '@/store/initLocalStorage.js';
 import pkg from '../../package.json';
+import { readLocalStorageJsonResult } from '@/utils/safeLocalStorage';
+import { mergeShortcutSettings } from '@/utils/shortcutSettingsMigration';
 
 const updateSetting = () => {
-  const parsedSettings = JSON.parse(localStorage.getItem('settings'));
+  const stored = readLocalStorageJsonResult(
+    'settings',
+    initLocalStorage.settings,
+    'object'
+  );
+  // Do not overwrite corrupt raw data. Missing values can safely be seeded.
+  if (stored.status !== 'ok' && stored.status !== 'missing') return;
+  const parsedSettings = stored.value;
   const settings = {
     ...initLocalStorage.settings,
     ...parsedSettings,
   };
 
-  if (
-    settings.shortcuts.length !== initLocalStorage.settings.shortcuts.length
-  ) {
-    // 当新增 shortcuts 时
-    const oldShortcutsId = settings.shortcuts.map(s => s.id);
-    const newShortcutsId = initLocalStorage.settings.shortcuts.filter(
-      s => oldShortcutsId.includes(s.id) === false
-    );
-    newShortcutsId.map(id => {
-      settings.shortcuts.push(
-        initLocalStorage.settings.shortcuts.find(s => s.id === id)
-      );
-    });
-  }
+  settings.shortcuts = mergeShortcutSettings(
+    initLocalStorage.settings.shortcuts,
+    parsedSettings.shortcuts
+  );
 
   if (localStorage.getItem('appVersion') === '"0.3.9"') {
     settings.lyricsBackground = true;
@@ -31,7 +30,9 @@ const updateSetting = () => {
 };
 
 const updateData = () => {
-  const parsedData = JSON.parse(localStorage.getItem('data'));
+  const stored = readLocalStorageJsonResult('data', {}, 'object');
+  if (stored.status !== 'ok' && stored.status !== 'missing') return;
+  const parsedData = stored.value;
   const data = {
     ...parsedData,
   };
@@ -39,7 +40,9 @@ const updateData = () => {
 };
 
 const updatePlayer = () => {
-  let parsedData = JSON.parse(localStorage.getItem('player'));
+  const stored = readLocalStorageJsonResult('player', {}, 'object');
+  if (stored.status !== 'ok' && stored.status !== 'missing') return;
+  let parsedData = stored.value;
   let appVersion = localStorage.getItem('appVersion');
   if (appVersion === `"0.2.5"`) parsedData = {}; // 0.2.6版本重构了player
   const data = {

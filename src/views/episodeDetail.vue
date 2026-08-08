@@ -171,6 +171,7 @@ import {
 import { sanitizeHtml } from '@/utils/podcast/sanitizeHtml';
 import { normalizeShownotesReaderMedia } from '@/utils/podcast/shownotesReaderMedia';
 import { getCoverColor } from '@/utils/podcast/coverColor';
+import { createEpisodeDetailLoadGuard } from '@/utils/podcast/episodeDetailLoadGuard';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import SvgIcon from '@/components/SvgIcon.vue';
 import TranscriptPanel from '@/components/TranscriptPanel.vue';
@@ -364,26 +365,58 @@ export default {
     '$store.state.podcastListening.listenTick'() {
       const pl = this.$store.state.podcastListening;
       if (pl && pl.episodeId && pl.episodeId === this.episodeId) {
-        getListenStats(this.episodeId)
-          .then(s => (this.listenStats = s))
+        const episodeId = this.episodeId;
+        getListenStats(episodeId)
+          .then(s => {
+            if (this.episodeId === episodeId) this.listenStats = s;
+          })
           .catch(() => {});
       }
     },
   },
+  activated() {
+    if (this.episodeId) this.load();
+  },
+  deactivated() {
+    if (this._loadGuard) this._loadGuard.invalidate();
+  },
+  beforeDestroy() {
+    if (this._loadGuard) this._loadGuard.invalidate();
+  },
   methods: {
     async load() {
-      this.episode = await getEpisode(this.episodeId);
-      if (!this.episode) {
+      const guard =
+        this._loadGuard || (this._loadGuard = createEpisodeDetailLoadGuard());
+      const request = guard.begin({
+        episodeId: this.episodeId,
+        feedUrl: this.feedUrl,
+      });
+      const isCurrent = () =>
+        guard.isCurrent(request, {
+          episodeId: this.episodeId,
+          feedUrl: this.feedUrl,
+        });
+      const episode = await getEpisode(request.episodeId);
+      if (!isCurrent()) return;
+      if (!episode) {
         this.$router.replace('/'); // [B-79] 单集不存在 → 回首页(不再甩我的订阅，同 B-70)
         return;
       }
-      this.podcast = await getPodcast(this.feedUrl);
-      const p = await getEpisodeProgress(this.episodeId).catch(() => null);
+      this.episode = episode;
+      const podcast = await getPodcast(request.feedUrl);
+      if (!isCurrent()) return;
+      this.podcast = podcast;
+      const p = await getEpisodeProgress(request.episodeId).catch(() => null);
+      if (!isCurrent()) return;
       this.progressSec = (p && p.position) || 0;
-      this.listenStats = await getListenStats(this.episodeId).catch(() => null);
+      const listenStats = await getListenStats(request.episodeId).catch(
+        () => null
+      );
+      if (!isCurrent()) return;
+      this.listenStats = listenStats;
       // [B-83/预取] 多数情况下完整文稿已被节目页后台预取(xyzFull=true)→ 这里直接秒显完整。
       //   仅当"小宇宙截断且尚未补全"时，先挂「加载完整文稿」占位(绝不先闪截断版)、抓完再渲染。
-      const ep = this.episode;
+      const ep = episode;
       const needEnrich =
         !!ep &&
         !ep.xyzFull &&
@@ -392,17 +425,16 @@ export default {
           (ep.description || '').length < 1200);
       this.enriching = needEnrich;
       if (needEnrich) {
-        await this.enrichShownotesIfNeeded();
-        if (this.episode && this.episode.id === ep.id) this.enriching = false;
+        await this.enrichShownotesIfNeeded(ep, isCurrent);
+        if (isCurrent()) this.enriching = false;
       }
     },
     // [B-83] 抓小宇宙单集页完整 shownotes 补全 description(命中更长才替换+持久化，逻辑在
     //   enrichEpisodeShownotes 内)。抓取期间用户可能已切集 → 校验仍是同一集再替换视图。
-    async enrichShownotesIfNeeded() {
-      const ep = this.episode;
+    async enrichShownotesIfNeeded(ep, isCurrent) {
       if (!ep) return;
       const full = await enrichEpisodeShownotes(ep);
-      if (full && this.episode && this.episode.id === ep.id) {
+      if (full && isCurrent && isCurrent()) {
         this.$set(this.episode, 'description', full);
         this.episode.xyzFull = true;
       }

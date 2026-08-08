@@ -2,6 +2,7 @@
 
 import axios from 'axios';
 import md5 from 'crypto-js/md5';
+import { readLocalStorageJson } from '@/utils/safeLocalStorage';
 
 const apiKey = process.env.VUE_APP_LASTFM_API_KEY;
 const apiSharedSecret = process.env.VUE_APP_LASTFM_API_SHARED_SECRET;
@@ -48,7 +49,7 @@ export function authGetSession(token) {
 export function trackUpdateNowPlaying(params) {
   params.api_key = apiKey;
   params.method = 'track.updateNowPlaying';
-  params.sk = JSON.parse(localStorage.getItem('lastfm'))['key'];
+  params.sk = readLocalStorageJson('lastfm', {}, 'object').key;
   const signature = sign(params);
 
   return axios({
@@ -65,7 +66,7 @@ export function trackUpdateNowPlaying(params) {
 export function trackScrobble(params) {
   params.api_key = apiKey;
   params.method = 'track.scrobble';
-  params.sk = JSON.parse(localStorage.getItem('lastfm'))['key'];
+  params.sk = readLocalStorageJson('lastfm', {}, 'object').key;
   const signature = sign(params);
 
   return axios({

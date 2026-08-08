@@ -8,6 +8,7 @@ import {
   getAllFavoriteIds as podGetAllFavoriteIds,
   isFavorited as podIsFavorited,
 } from '@/utils/podcast/db';
+import { podcastFavoriteOperationQueue } from '@/utils/podcast/favoriteOperationQueue';
 import { getPlaylistDetail } from '@/api/playlist';
 import { getTrackDetail } from '@/api/track';
 import {
@@ -254,24 +255,27 @@ export default {
   async togglePodcastFavorite({ commit, dispatch }, track) {
     if (!track || !track.podcastEpisodeId) return;
     const id = track.podcastEpisodeId;
-    const already = await podIsFavorited(id);
-    if (already) {
-      await podRemoveFavorite(id);
-      dispatch('showToast', '已取消收藏');
-    } else {
-      await podAddFavorite({
-        id,
-        podcastId: track.podcastId || (track.al && track.al.id) || '',
-        podcastTitle: track.al && track.al.name ? track.al.name : '',
-        title: track.name || '',
-        coverUrl: track.al && track.al.picUrl ? track.al.picUrl : '',
-        audioUrl: track.podcastAudioUrl || '',
-        duration: track.dt ? Math.floor(track.dt / 1000) : 0,
-      });
-      dispatch('showToast', '已加入收藏');
-    }
-    // 刷新 store 里的 id 列表
-    const ids = await podGetAllFavoriteIds();
-    commit('setPodcastFavoriteIds', ids);
+    return podcastFavoriteOperationQueue.run(id, async () => {
+      const already = await podIsFavorited(id);
+      if (already) {
+        await podRemoveFavorite(id);
+        dispatch('showToast', '已取消收藏');
+      } else {
+        await podAddFavorite({
+          id,
+          podcastId: track.podcastId || (track.al && track.al.id) || '',
+          podcastTitle: track.al && track.al.name ? track.al.name : '',
+          title: track.name || '',
+          coverUrl: track.al && track.al.picUrl ? track.al.picUrl : '',
+          audioUrl: track.podcastAudioUrl || '',
+          duration: track.dt ? Math.floor(track.dt / 1000) : 0,
+        });
+        dispatch('showToast', '已加入收藏');
+      }
+      // Refresh the store only after this serialized operation reaches its
+      // durable state, so the view cannot observe an intermediate toggle.
+      const ids = await podGetAllFavoriteIds();
+      commit('setPodcastFavoriteIds', ids);
+    });
   },
 };

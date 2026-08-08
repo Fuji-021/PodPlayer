@@ -45,12 +45,11 @@ import {
 } from './electron/aiServiceManager';
 // [T3] 桌面通知：新单集发现 / 下载完成 → Electron Notification
 import { initNotifications } from './electron/notifications';
-import { createMenu } from './electron/menu';
 import { createTray } from '@/electron/tray';
 import { createTouchBar } from './electron/touchBar';
 import { createThumbar } from './electron/thumbar';
 import { createDockMenu } from './electron/dockMenu';
-import { registerGlobalShortcut } from './electron/globalShortcut';
+import { createShortcutManager } from './electron/shortcutManager';
 import { autoUpdater } from 'electron-updater';
 import installExtension, { VUEJS_DEVTOOLS } from 'electron-devtools-installer';
 import { EventEmitter } from 'events';
@@ -176,6 +175,7 @@ class Background {
     this._activePowerToken = 0;
     this._onPowerSuspend = null;
     this._onPowerResume = null;
+    this.shortcutManager = null;
 
     this.init();
   }
@@ -589,8 +589,19 @@ class Background {
         createThumbar(this.window, this.trayEventEmitter);
       }
 
+      this.shortcutManager = createShortcutManager({
+        win: this.window,
+        store: this.store,
+        globalShortcut,
+      });
+
       // init ipcMain
-      initIpcMain(this.window, this.store, this.trayEventEmitter);
+      initIpcMain(
+        this.window,
+        this.store,
+        this.trayEventEmitter,
+        this.shortcutManager
+      );
 
       // [播客改造] 注册 podcast 相关 IPC handler
       registerPodcastIpc();
@@ -621,8 +632,9 @@ class Background {
       // check for updates
       this.checkForUpdates();
 
-      // create menu
-      createMenu(this.window, this.store);
+      // The manager atomically owns both the application menu and
+      // user-configurable global accelerator registrations.
+      this.shortcutManager.initialize();
 
       // create dock menu for macOS
       const createdDockMenu = createDockMenu(this.window);
@@ -631,11 +643,6 @@ class Background {
       // create touch bar
       const createdTouchBar = createTouchBar(this.window);
       if (createdTouchBar) this.window.setTouchBar(createdTouchBar);
-
-      // register global shortcuts
-      if (this.store.get('settings.enableGlobalShortcut') !== false) {
-        registerGlobalShortcut(this.window, this.store);
-      }
 
       // try to start osdlyrics process on start
       if (this.store.get('settings.enableOsdlyricsSupport')) {

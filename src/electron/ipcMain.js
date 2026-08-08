@@ -1,9 +1,5 @@
-import { app, dialog, globalShortcut, ipcMain } from 'electron';
+import { app, dialog, ipcMain } from 'electron';
 import UNM from '@unblockneteasemusic/rust-napi';
-import { registerGlobalShortcut } from '@/electron/globalShortcut';
-import cloneDeep from 'lodash/cloneDeep';
-import shortcuts from '@/utils/shortcuts';
-import { createMenu } from './menu';
 import { isCreateTray, isMac, isWindows } from '@/utils/platform';
 import { spawn } from 'child_process';
 
@@ -194,7 +190,7 @@ function stripLegacyAiSettings(options) {
   return { settings, changed };
 }
 
-export function initIpcMain(win, store, trayEventEmitter) {
+export function initIpcMain(win, store, trayEventEmitter, shortcutManager) {
   // Earlier builds mirrored legacy AI fields into generic electron-store.
   // Renderer startup keeps the local legacy value long enough to migrate it
   // into main-process credential storage; this generic copy is never a credential source.
@@ -323,13 +319,12 @@ export function initIpcMain(win, store, trayEventEmitter) {
 
   ipcMain.on('settings', (event, options) => {
     const settings = stripLegacyAiSettings(options).settings;
+    const current = store.get('settings') || {};
+    // Shortcut changes have their own main-process transaction. A stale
+    // renderer settings snapshot must never replace that authoritative result.
+    settings.shortcuts = current.shortcuts;
+    settings.enableGlobalShortcut = current.enableGlobalShortcut;
     store.set('settings', settings);
-    if (settings.enableGlobalShortcut) {
-      registerGlobalShortcut(win, store);
-    } else {
-      log('unregister global shortcut');
-      globalShortcut.unregisterAll();
-    }
   });
 
   ipcMain.on('playDiscordPresence', (event, track) => {
@@ -378,41 +373,42 @@ export function initIpcMain(win, store, trayEventEmitter) {
     store.set('proxy', '');
   });
 
-  ipcMain.on('switchGlobalShortcutStatusTemporary', (e, status) => {
-    log('switchGlobalShortcutStatusTemporary');
-    if (status === 'disable') {
-      globalShortcut.unregisterAll();
-    } else {
-      registerGlobalShortcut(win, store);
-    }
+  const unavailableShortcutManager = () => ({
+    ok: false,
+    status: 'unavailable',
+    reason: 'shortcut-manager-unavailable',
+    shortcutState: null,
+    conflictIds: [],
+    failedIds: [],
   });
-
-  ipcMain.on('updateShortcut', (e, { id, type, shortcut }) => {
-    log('updateShortcut');
-    let shortcuts = store.get('settings.shortcuts');
-    let newShortcut = shortcuts.find(s => s.id === id);
-    newShortcut[type] = shortcut;
-    store.set('settings.shortcuts', shortcuts);
-
-    createMenu(win, store);
-    globalShortcut.unregisterAll();
-    // [快捷键修 A] 尊重全局开关：用户关掉全局快捷键后，改键不应又把全局键注册回来抢系统热键。
-    if (store.get('settings.enableGlobalShortcut') !== false) {
-      registerGlobalShortcut(win, store);
-    }
-  });
-
-  ipcMain.on('restoreDefaultShortcuts', () => {
-    log('restoreDefaultShortcuts');
-    store.set('settings.shortcuts', cloneDeep(shortcuts));
-
-    createMenu(win, store);
-    globalShortcut.unregisterAll();
-    // [快捷键修 A] 同上：恢复默认也尊重全局开关，不强行重注册。
-    if (store.get('settings.enableGlobalShortcut') !== false) {
-      registerGlobalShortcut(win, store);
-    }
-  });
+  ipcMain.handle('shortcut:getState', () =>
+    shortcutManager ? shortcutManager.getState() : unavailableShortcutManager()
+  );
+  ipcMain.handle('shortcut:beginCapture', () =>
+    shortcutManager
+      ? shortcutManager.beginCapture()
+      : unavailableShortcutManager()
+  );
+  ipcMain.handle('shortcut:endCapture', (_, payload) =>
+    shortcutManager
+      ? shortcutManager.endCapture(payload)
+      : unavailableShortcutManager()
+  );
+  ipcMain.handle('shortcut:commit', (_, payload) =>
+    shortcutManager
+      ? shortcutManager.commit(payload)
+      : unavailableShortcutManager()
+  );
+  ipcMain.handle('shortcut:setGlobalEnabled', (_, payload) =>
+    shortcutManager
+      ? shortcutManager.setGlobalEnabled(payload)
+      : unavailableShortcutManager()
+  );
+  ipcMain.handle('shortcut:restoreDefaults', () =>
+    shortcutManager
+      ? shortcutManager.restoreDefaults()
+      : unavailableShortcutManager()
+  );
 
   if (isCreateTray) {
     ipcMain.on('updateTrayTooltip', (_, title) => {
