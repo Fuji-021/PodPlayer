@@ -120,17 +120,22 @@
 
     <!-- 未转录 -->
     <div v-else-if="mode === 'idle'" class="t-idle">
-      <button class="t-btn" @click="onGenerate"> 生成文字稿 </button>
-      <button class="t-link" @click="onGenerateSummary">
+      <button
+        v-tip="transcriptSourceHint"
+        class="t-btn"
+        :aria-label="'生成文字稿。' + transcriptSourceHint"
+        @click="onGenerate"
+      >
+        生成文字稿
+      </button>
+      <button
+        v-tip="transcriptSourceHint"
+        class="t-link"
+        :aria-label="'生成文字稿并总结。' + transcriptSourceHint"
+        @click="onGenerateSummary"
+      >
         生成文字稿并总结
       </button>
-      <span class="t-note">
-        {{
-          hasLocalFile
-            ? '将复用已下载音频，在本地生成带时间戳的文字稿'
-            : '将临时准备音频，在本地生成文字稿后自动清理'
-        }}
-      </span>
     </div>
 
     <!-- 排队中 -->
@@ -499,6 +504,11 @@ export default {
         return this.live.phase === 'decoding' ? '准备中' : '加载中';
       }
       return Math.floor(this.progressPct) + '%';
+    },
+    transcriptSourceHint() {
+      return this.hasLocalFile
+        ? '使用已下载音频在本地转写。'
+        : '未下载时会临时获取音频；文稿保存后自动清理。';
     },
     runningSubLabel() {
       if (this.live.phase === 'preparing') return '正在准备音频…';
@@ -1919,10 +1929,6 @@ export default {
   display: flex;
   align-items: center;
   gap: 14px;
-  .t-note {
-    font-size: 13px;
-    opacity: 0.55;
-  }
 }
 .t-hint {
   display: flex;
