@@ -442,6 +442,18 @@ export {
   streamGetWithFallback,
 };
 
+// ASR's transient source waits for an already-user-started permanent download
+// instead of racing it. This is read-only task metadata: it never changes the
+// download registry or exposes a path to the renderer.
+export function getActivePodcastDownloadInfo(episodeId) {
+  const task = activeTasks.get(episodeId);
+  if (!task || task.settled || task.canceled) return { active: false };
+  return {
+    active: true,
+    finalPath: task.finalPath || '',
+  };
+}
+
 export function registerPodcastDownloadIpc(getWindow) {
   // [orphan-download] 启动期清理上次崩溃/被杀进程残留的 *.part 半成品(正常完成已 rename 成正式名、
   //   不会留 part)。一次性同步扫 getPodcastsDir() 下各档目录删所有 *.part，避免占空间 + 污染 relink。

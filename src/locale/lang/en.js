@@ -254,6 +254,10 @@ export default {
       delete: 'Delete',
       addConn: 'Add connection',
       addNasConn: '+ Add NAS connection',
+      nasHelpLabel: 'NAS connection help',
+      nasHelpTitle: 'About NAS connections',
+      nasHelpDescription:
+        'ABS means Audiobookshelf. Use http(s)://host:port, optionally with a service base path. Find the token in Audiobookshelf: Settings > Users > API Token.',
       startupShow: 'Show on startup',
       startupHome: 'Home',
       startupLibrary: 'My subscriptions',
@@ -262,7 +266,7 @@ export default {
         'Automatically delete the local download file after an episode finishes, to free up storage space.',
       downloadConcurrency: 'Concurrent downloads',
       downloadConcurrencyDesc:
-        'Maximum number of downloads running at the same time during batch downloads (1 = one at a time; higher is faster but uses more bandwidth).',
+        'Maximum number of downloads running at the same time during batch downloads (1 = one at a time; higher values use more bandwidth).',
       cacheManage: 'Cache',
       cacheCover: 'Covers',
       cacheDiscover: 'Discover data',
@@ -273,11 +277,11 @@ export default {
       cacheAudio: 'Audio',
       audioCacheToggle: 'Auto-cache episodes you are listening to',
       audioCacheDesc:
-        'Episodes you have played for ~1 min (and not finished) are cached locally so resuming is instant; least-recently-used are evicted over the limit (unfinished are kept).',
+        'Unfinished episodes played for about one minute are cached locally for reuse; least-recently-used entries are evicted over the limit (unfinished items are kept).',
       audioCacheLimit: 'Audio cache limit',
       sleepShutdown: 'Shut down PC when sleep timer ends',
       sleepShutdownDesc:
-        'When on, the sleep timer pauses playback then shuts down Windows (with a 60s cancelable countdown). Windows only.',
+        'When on, the sleep timer pauses playback and shows a 60-second shutdown countdown. You can cancel before it ends. Windows only.',
       exportData: 'Export listening data',
       exportDataDesc:
         'Export listening progress, stats, and daily records to a file (for data analysis or migration).',
@@ -291,6 +295,9 @@ export default {
       statsBarCoverTexture: 'Stats bar cover texture',
       statsBarCoverTextureDesc:
         'Use podcast cover colors to create listening-statistics bar textures.',
+      allowPodcastCoverDrag: 'Allow dragging podcast covers',
+      allowPodcastCoverDragDesc:
+        'Allow podcast and episode covers to be dragged to external apps. This does not affect Shownotes images or queue reordering.',
       shortcut: 'Shortcuts',
       shortcutFn: 'Function',
       shortcutKey: 'Shortcut',

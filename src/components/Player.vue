@@ -95,8 +95,10 @@
                 class="cover-img"
                 :class="{ 'cover-loaded': coverLoaded }"
                 :src="coverSrc"
+                :draggable="allowPodcastCoverDrag"
                 @load="coverLoaded = true"
                 @error="coverLoaded = true"
+                @dragstart="onPodcastCoverDragStart"
                 @click.stop="goToAlbumOrPodcast"
               />
             </div>
@@ -281,6 +283,7 @@
                       </button>
                       <PodImage
                         v-if="nowPlayingItem.coverUrl"
+                        podcast-cover
                         class="qp-cover"
                         :src="nowPlayingItem.coverUrl"
                       />
@@ -316,6 +319,7 @@
                       </div>
                       <PodImage
                         v-if="item.coverUrl"
+                        podcast-cover
                         class="qp-cover"
                         :src="item.coverUrl"
                       />
@@ -511,6 +515,8 @@
                 class="imm-cover"
                 :class="{ paused: !playing }"
                 :src="coverSrc"
+                :draggable="allowPodcastCoverDrag"
+                @dragstart="onPodcastCoverDragStart"
               />
             </div>
 
@@ -674,6 +680,7 @@
                           </button>
                           <PodImage
                             v-if="nowPlayingItem.coverUrl"
+                            podcast-cover
                             class="qp-cover"
                             :src="nowPlayingItem.coverUrl"
                           />
@@ -710,6 +717,7 @@
                           </div>
                           <PodImage
                             v-if="item.coverUrl"
+                            podcast-cover
                             class="qp-cover"
                             :src="item.coverUrl"
                           />
@@ -931,6 +939,10 @@ import { getCoverPalette } from '@/utils/podcast/coverPalette';
 import { getTranscript } from '@/utils/podcast/transcripts';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
 import {
+  guardPodcastCoverDrag,
+  isPodcastCoverDragEnabled,
+} from '@/utils/podcast/coverDragPreference';
+import {
   getSleepCompletionPlan,
   shouldFinishSleepAtEnd,
   shouldHandleNaturalSleepEnd,
@@ -1082,6 +1094,11 @@ export default {
     isPodcastTrack() {
       const t = this.player.currentTrack;
       return !!(t && t.podcastEpisodeId);
+    },
+    allowPodcastCoverDrag() {
+      return (
+        !this.isPodcastTrack || isPodcastCoverDragEnabled(this.settings || {})
+      );
     },
     // [B-36] 播放栏封面：播客用原 url（复用订阅页/节目页已下过的缓存，秒显；
     // 第三方 CDN 不支持 ?param 缩放，加了反而 cache miss 重下大图），网易云走 resizeImage。
@@ -1332,6 +1349,10 @@ export default {
   methods: {
     ...mapMutations(['toggleLyrics']),
     ...mapActions(['showToast', 'likeATrack']),
+    onPodcastCoverDragStart(event) {
+      if (!this.isPodcastTrack) return;
+      guardPodcastCoverDrag(event, this.settings || {});
+    },
     handleClick(event) {
       // [沉浸式播放页 P0] 点击 bar 空白处 → 展开沉浸页。各功能区(封面/信息/金刚/右控)均 @click.stop，
       //   故此处只在真正点到 bar 背景时触发；event.target==mouseDownTarget 确保是「点击」而非拖拽松手。

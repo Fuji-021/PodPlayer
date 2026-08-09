@@ -5,7 +5,7 @@
 import Vue from 'vue';
 import { db } from '@/utils/db';
 import store from '@/store';
-import { getDownload } from '@/utils/podcast/downloads';
+import { getPersistentTranscriptMediaHint } from '@/utils/podcast/transcriptMedia';
 import { refineEpisode, AI_PROMPT_VERSION } from '@/utils/podcast/aiRefine';
 import {
   buildSummaryParagraphs,
@@ -24,10 +24,12 @@ const ipcRenderer = window.require
 //   不必往全局 Vuex store 增加切面。面板按 episodeId 比对决定是否展示这份实时态。
 export const transcribeState = Vue.observable({
   episodeId: '',
-  status: 'idle', // idle | running | done | error | canceled
-  phase: '', // '' | decoding | loading | transcribing
+  status: 'idle', // idle | preparing | running | paused | done | error | canceled
+  phase: '', // '' | preparing | decoding | loading | transcribing
   processedSec: 0,
   totalSec: 0,
+  preparedBytes: 0,
+  totalBytes: 0,
   segCount: 0,
   lastText: '', // 最近一段文本（转录中 ticker）
   error: '',
@@ -52,10 +54,12 @@ function clearTranscriptDeleteGuard(episodeId) {
 
 function resetLive(episodeId, totalSec) {
   transcribeState.episodeId = episodeId;
-  transcribeState.status = 'running';
-  transcribeState.phase = '';
+  transcribeState.status = 'preparing';
+  transcribeState.phase = 'preparing';
   transcribeState.processedSec = 0;
   transcribeState.totalSec = totalSec || 0;
+  transcribeState.preparedBytes = 0;
+  transcribeState.totalBytes = 0;
   transcribeState.segCount = 0;
   transcribeState.lastText = '';
   transcribeState.error = '';
@@ -107,6 +111,7 @@ export function updateTranscript(episodeId, patch) {
 }
 
 export async function deleteTranscript(episodeId) {
+  clearTranscriptSummaryFollowup(episodeId);
   invalidateTranscriptDerivedTasks(episodeId);
   guardTranscriptDelete(episodeId);
   let ipcResult = { ok: true };
@@ -365,36 +370,38 @@ export async function exportTranscriptText(episodeId, defaultName, txt, srt) {
   }
 }
 
-// 启动/续转。episode 需含 id、duration；本地音频路径从下载记录解析（只转已下载/已缓存的集）。
+const transcriptSummaryFollowups = new Map();
+let transcriptSummaryFollowupToken = 0;
+
+function clearTranscriptSummaryFollowup(episodeId) {
+  transcriptSummaryFollowups.delete(episodeId);
+}
+
+// 启动/续转。来源层优先复用永久下载；没有时只在主进程临时目录准备音频。
 export async function startTranscribe(episode) {
   if (!ipcRenderer) {
     store.dispatch('showToast', '转文字稿仅在桌面版可用');
     return { ok: false };
   }
   if (!episode || !episode.id) return { ok: false };
-  let audioPath = '';
-  try {
-    const row = await getDownload(episode.id);
-    if (row && row.filePath) audioPath = row.filePath;
-  } catch (e) {
-    /* ignore */
-  }
-  if (!audioPath) {
-    const pm =
-      (store.state.podcastDownloads && store.state.podcastDownloads.pathMap) ||
-      {};
-    audioPath = pm[episode.id] || '';
-  }
-  if (!audioPath) {
-    store.dispatch('showToast', '请先下载本集，再生成文字稿');
-    return { ok: false, reason: 'not-downloaded' };
+  const persistentPath = await getPersistentTranscriptMediaHint(episode.id);
+  if (!episode.audioUrl && !persistentPath) {
+    store.dispatch('showToast', '本集没有可用的音频地址');
+    return { ok: false, reason: 'missing-audio-url' };
   }
   clearTranscriptDeleteGuard(episode.id);
+  let existing = null;
+  try {
+    existing = await getTranscript(episode.id);
+  } catch (e) {
+    existing = null;
+  }
+  const resume = !!(existing && existing.status === 'paused');
   // [批量入队·不抢占] 仅当当前无其它正在跑的任务、或就是本集时，才接管实时态显示；
   //   否则(已有别集在转，如批量逐集转录)只入队，不把进度显示从正在转的那条抢过来。
   if (
     !transcribeState.episodeId ||
-    transcribeState.status !== 'running' ||
+    ['running', 'preparing'].indexOf(transcribeState.status) === -1 ||
     transcribeState.episodeId === episode.id
   ) {
     resetLive(episode.id, episode.duration || 0);
@@ -402,11 +409,13 @@ export async function startTranscribe(episode) {
   try {
     await saveTranscript(episode.id, {
       status: 'running',
-      model: '',
-      segPath: '',
-      txtPath: '',
-      segCount: 0,
-      durationMs: (episode.duration || 0) * 1000,
+      model: resume ? existing.model || '' : '',
+      segPath: resume ? existing.segPath || '' : '',
+      txtPath: resume ? existing.txtPath || '' : '',
+      segCount: resume ? existing.segCount || 0 : 0,
+      durationMs: resume
+        ? existing.durationMs || (episode.duration || 0) * 1000
+        : (episode.duration || 0) * 1000,
       error: '',
     });
   } catch (e) {
@@ -416,9 +425,11 @@ export async function startTranscribe(episode) {
   try {
     res = await ipcRenderer.invoke('asr:transcribe', {
       episodeId: episode.id,
-      audioPath,
+      audioUrl: episode.audioUrl || '',
+      persistentPath,
       title: episode.title || '',
       durationSec: episode.duration || 0,
+      resume,
     });
   } catch (e) {
     res = { ok: false, error: String((e && e.message) || e) };
@@ -447,10 +458,47 @@ export async function startTranscribe(episode) {
   return res || { ok: false };
 }
 
+// This is the only explicit handoff from local ASR to the optional network
+// summary. Opening an episode, playing it, or plain transcription never adds
+// a follow-up and therefore can never call the AI service by itself.
+export async function startTranscribeAndSummarize(episode) {
+  if (!episode || !episode.id) return { ok: false };
+  const cfg = getAiServiceConfig();
+  if (!hasOpenAiKey(cfg)) {
+    store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
+    return { ok: false, reason: 'configuration-unverified' };
+  }
+  const token = ++transcriptSummaryFollowupToken;
+  transcriptSummaryFollowups.set(episode.id, {
+    token,
+    episodeId: episode.id,
+    podcastId: episode.podcastId || String(episode.id).split('::')[0],
+  });
+  const result = await startTranscribe(episode);
+  if (!result || !result.ok) {
+    const current = transcriptSummaryFollowups.get(episode.id);
+    if (current && current.token === token)
+      clearTranscriptSummaryFollowup(episode.id);
+  }
+  return result;
+}
+
 export async function cancelTranscribe(episodeId) {
+  clearTranscriptSummaryFollowup(episodeId);
   if (!ipcRenderer) return { ok: false };
   try {
     return await ipcRenderer.invoke('asr:cancel', { episodeId });
+  } catch (e) {
+    return { ok: false };
+  }
+}
+
+// An active transcription pauses its local ASR worker and retains eligible
+// transient media. Queue cancellation remains a separate destructive action.
+export async function pauseTranscribe(episodeId) {
+  if (!ipcRenderer) return { ok: false };
+  try {
+    return await ipcRenderer.invoke('asr:pause', { episodeId });
   } catch (e) {
     return { ok: false };
   }
@@ -469,13 +517,19 @@ export function registerTranscriptListeners() {
       transcribeState.episodeId = p.episodeId;
       transcribeState.lastText = '';
     }
-    transcribeState.status = 'running';
+    transcribeState.status = p.status === 'preparing' ? 'preparing' : 'running';
     transcribeState.phase = p.phase || '';
     if (typeof p.processedSec === 'number') {
       transcribeState.processedSec = p.processedSec;
     }
     if (typeof p.totalSec === 'number' && p.totalSec) {
       transcribeState.totalSec = p.totalSec;
+    }
+    if (typeof p.preparedBytes === 'number') {
+      transcribeState.preparedBytes = p.preparedBytes;
+    }
+    if (typeof p.totalBytes === 'number') {
+      transcribeState.totalBytes = p.totalBytes;
     }
     if (typeof p.segCount === 'number') transcribeState.segCount = p.segCount;
   });
@@ -490,11 +544,24 @@ export function registerTranscriptListeners() {
 
   ipcRenderer.on('asr:done', async (_e, p) => {
     if (!p || !p.episodeId) return;
-    if (transcriptDeleteGuards.has(p.episodeId)) return;
+    if (transcriptDeleteGuards.has(p.episodeId)) {
+      clearTranscriptSummaryFollowup(p.episodeId);
+      if (p.ownerToken) {
+        await ipcRenderer
+          .invoke('asr:source:release', {
+            episodeId: p.episodeId,
+            ownerToken: p.ownerToken,
+            outcome: 'canceled-delete',
+          })
+          .catch(() => {});
+      }
+      return;
+    }
     if (transcribeState.episodeId === p.episodeId) {
       transcribeState.status = 'done';
       transcribeState.phase = '';
     }
+    let persisted = false;
     try {
       await saveTranscript(p.episodeId, {
         status: 'done',
@@ -505,18 +572,37 @@ export function registerTranscriptListeners() {
         durationMs: p.durationMs || 0,
         error: '',
       });
+      persisted = true;
     } catch (e) {
-      /* ignore */
+      persisted = false;
+    }
+    if (p.ownerToken) {
+      await ipcRenderer
+        .invoke('asr:source:release', {
+          episodeId: p.episodeId,
+          ownerToken: p.ownerToken,
+          outcome: persisted ? 'done' : 'error',
+        })
+        .catch(() => {});
     }
     if (transcriptDeleteGuards.has(p.episodeId)) {
       await db.transcripts.delete(p.episodeId).catch(() => {});
       return;
     }
+    if (!persisted) {
+      transcribeState.status = 'error';
+      transcribeState.error = '文字稿保存失败';
+      store.dispatch('showToast', '文字稿保存失败');
+      clearTranscriptSummaryFollowup(p.episodeId);
+      return;
+    }
     store.dispatch('showToast', '文字稿生成完成');
+    runTranscriptSummaryFollowup(p.episodeId);
   });
 
   ipcRenderer.on('asr:error', async (_e, p) => {
     if (!p || !p.episodeId) return;
+    clearTranscriptSummaryFollowup(p.episodeId);
     if (transcriptDeleteGuards.has(p.episodeId)) return;
     const err = (p && p.error) || '';
     if (transcribeState.episodeId === p.episodeId) {
@@ -543,13 +629,53 @@ export function registerTranscriptListeners() {
     store.dispatch('showToast', '生成文字稿失败：' + err);
   });
 
+  ipcRenderer.on('asr:paused', async (_e, p) => {
+    if (!p || !p.episodeId) return;
+    clearTranscriptSummaryFollowup(p.episodeId);
+    if (transcriptDeleteGuards.has(p.episodeId)) return;
+    if (transcribeState.episodeId === p.episodeId) {
+      transcribeState.status = 'paused';
+      transcribeState.phase = '';
+    }
+    try {
+      const existing = await getTranscript(p.episodeId);
+      if (transcriptDeleteGuards.has(p.episodeId)) return;
+      await saveTranscript(p.episodeId, {
+        status: 'paused',
+        model: (existing && existing.model) || '',
+        segPath: (existing && existing.segPath) || '',
+        txtPath: (existing && existing.txtPath) || '',
+        segCount:
+          (transcribeState.episodeId === p.episodeId &&
+            transcribeState.segCount) ||
+          (existing && existing.segCount) ||
+          0,
+        durationMs: (existing && existing.durationMs) || 0,
+        error: '',
+      });
+    } catch (e) {
+      /* ignore */
+    }
+  });
+
   ipcRenderer.on('asr:canceled', async (_e, p) => {
     if (!p || !p.episodeId) return;
+    clearTranscriptSummaryFollowup(p.episodeId);
     if (transcriptDeleteGuards.has(p.episodeId)) return;
     if (transcribeState.episodeId === p.episodeId) {
       transcribeState.status = 'canceled';
+      transcribeState.phase = '';
     }
-    // 标记为可续（paused）：保留已转段，下次「继续转录」从断点续。
+    // Cancellation removes only the transient source. It does not delete
+    // already durable transcript output; a fresh start will not treat it as a
+    // paused continuation unless the task had been explicitly paused before.
+    if (!p.resume) {
+      await updateTranscript(p.episodeId, {
+        status: 'canceled',
+        error: '',
+      }).catch(() => {});
+      return;
+    }
     try {
       const existing = await getTranscript(p.episodeId);
       if (transcriptDeleteGuards.has(p.episodeId)) return;
@@ -1060,4 +1186,34 @@ export async function startTranscriptSummary(
     if (summaryStarts.get(episodeId) === start) summaryStarts.delete(episodeId);
     if (activeSummaryJob === start) activeSummaryJob = null;
   }
+}
+
+async function runTranscriptSummaryFollowup(episodeId) {
+  const intent = transcriptSummaryFollowups.get(episodeId);
+  if (!intent) return { ok: false, reason: 'no-summary-followup' };
+  let source = null;
+  try {
+    source = await readSegments(episodeId);
+  } catch (e) {
+    source = null;
+  }
+  const current = transcriptSummaryFollowups.get(episodeId);
+  if (!current || current.token !== intent.token || !source || !source.ok) {
+    return { ok: false, reason: 'summary-followup-stale' };
+  }
+  const segments = (source.segments || []).map(segment =>
+    Object.assign({}, segment, {
+      display: (segment && (segment.display || segment.text)) || '',
+    })
+  );
+  if (!segments.length) {
+    clearTranscriptSummaryFollowup(episodeId);
+    return { ok: false, reason: 'no-transcript' };
+  }
+  // Remove the intent before the optional network request. Cancellation or a
+  // delete that happens later is still guarded by the normal summary job token.
+  clearTranscriptSummaryFollowup(episodeId);
+  return startTranscriptSummary(episodeId, intent.podcastId, segments, {
+    sourceKind: 'proofread',
+  });
 }

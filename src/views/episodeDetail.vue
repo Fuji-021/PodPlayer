@@ -9,6 +9,7 @@
         ></div>
         <div class="cover-wrap">
           <PodImage
+            podcast-cover
             class="cover"
             :src="episode.coverUrl"
             @error="onCoverError"

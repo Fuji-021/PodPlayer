@@ -19,7 +19,13 @@
               class="lc-shadow"
               :style="{ backgroundImage: `url(${p.coverUrl})` }"
             ></div>
-            <img class="lc-cover" :src="p.coverUrl" @error="onImgErr" />
+            <img
+              class="lc-cover"
+              :src="p.coverUrl"
+              :draggable="coverDragEnabled"
+              @dragstart="onPodcastCoverDragStart"
+              @error="onImgErr"
+            />
           </div>
           <div class="lc-name" data-selection="content">{{ p.title }}</div>
         </div>
@@ -40,6 +46,7 @@
         >
           <!-- 左侧=节目封面(非单集封面，便于认出来源)；卡片整体已有动作反馈，封面不再单独加光晕 -->
           <PodImage
+            podcast-cover
             class="ep-cover"
             :src="ep.podcastCoverUrl"
             @error="onImgErr"
@@ -129,6 +136,10 @@ import DiscoverCard from '@/components/DiscoverCard.vue';
 import SvgIcon from '@/components/SvgIcon.vue';
 import BouncingDots from '@/components/BouncingDots.vue';
 import { shouldPreserveSelection } from '@/utils/selectionIntent';
+import {
+  guardPodcastCoverDrag,
+  isPodcastCoverDragEnabled,
+} from '@/utils/podcast/coverDragPreference';
 
 export default {
   name: 'SearchPodcast',
@@ -146,7 +157,10 @@ export default {
     };
   },
   computed: {
-    ...mapState(['player']),
+    ...mapState(['player', 'settings']),
+    coverDragEnabled() {
+      return isPodcastCoverDragEnabled(this.settings || {});
+    },
     keywords() {
       return this.$route.params.keywords || '';
     },
@@ -163,6 +177,9 @@ export default {
     this.closeMenu();
   },
   methods: {
+    onPodcastCoverDragStart(event) {
+      guardPodcastCoverDrag(event, this.settings || {});
+    },
     async doSearch() {
       const kw = this.keywords;
       // [B] 防竞态：记录本次搜索关键词，旧响应回来后若已切词则丢弃

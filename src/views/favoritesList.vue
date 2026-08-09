@@ -10,7 +10,12 @@
       @click="play(item, $event)"
       @contextmenu.prevent="openMenu($event, item)"
     >
-      <PodImage class="cover" :src="item.coverUrl" @error="onCoverError" />
+      <PodImage
+        podcast-cover
+        class="cover"
+        :src="item.coverUrl"
+        @error="onCoverError"
+      />
       <div class="meta">
         <div class="t" data-selection="content">{{ item.title }}</div>
         <div class="s" data-selection="content">{{ item.podcastTitle }}</div>

@@ -259,15 +259,6 @@ async function testRuntimeOperationRules() {
     'src/utils/podcast/runtimeOperationRules.js',
     'runtime-operation-rules.cjs'
   );
-  assert.deepStrictEqual(
-    rules.getStaleAsrPendingIds(
-      { failed: true, downloading: true, completed: true },
-      { downloading: { status: 'downloading' } },
-      { completed: 'C:/audio.mp3' }
-    ),
-    ['failed'],
-    'a failed download must clear its pending ASR marker'
-  );
   assert.strictEqual(rules.shouldRemoveQueueEntryAfterHandoff(false), false);
   assert.strictEqual(rules.shouldRemoveQueueEntryAfterHandoff(true), true);
   assert.strictEqual(rules.shouldRemoveQueueEntryAfterHandoff(undefined), true);
@@ -334,7 +325,9 @@ function testWiringContracts() {
       'utf8'
     ),
   };
-  assert.match(files.detail, /getStaleAsrPendingIds\(/);
+  assert.doesNotMatch(files.detail, /getStaleAsrPendingIds\(|asrPendingMap/);
+  assert.match(files.detail, /startTranscribe\(ep\)/);
+  assert.match(files.detail, /必要时临时准备音频/);
   assert.match(files.player, /shouldRemoveQueueEntryAfterHandoff\(/);
   assert.match(files.player, /getAutoCleanPreviousEpisodeId\(/);
   assert.match(files.renderer, /getForwardSeekTarget\(/);

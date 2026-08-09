@@ -79,9 +79,21 @@
         <svg-icon icon-class="refresh" />
         发现 {{ pendingNewCount }} 个新单集，点击查看
       </button>
-      <div v-if="refreshFailures.length" class="updates-refresh-note">
+      <div
+        v-if="refreshFailureNotice"
+        class="updates-refresh-note"
+        role="status"
+      >
         <svg-icon icon-class="info" />
-        {{ refreshFailureText }}
+        <span>{{ refreshFailureText }}</span>
+        <button
+          class="updates-refresh-note-close"
+          type="button"
+          aria-label="关闭更新提示"
+          @click="clearRefreshFailureNotice"
+        >
+          <svg-icon icon-class="x" />
+        </button>
       </div>
       <div v-if="loadingError && hasSnapshot" class="updates-refresh-note">
         <svg-icon icon-class="info" />
@@ -240,7 +252,7 @@ export default {
       snapshot: emptySnapshot(),
       pendingSnapshot: null,
       pendingNewCount: 0,
-      refreshFailures: [],
+      refreshFailureNotice: null,
       selectedPodcastId: '',
       listenFilter: 'all',
       loaded: false,
@@ -306,10 +318,18 @@ export default {
       return (track && track.podcastEpisodeId) || '';
     },
     refreshFailureText() {
-      const count = this.refreshFailures.length;
+      const notice = this.refreshFailureNotice || {};
+      const count = Number(notice.count || 0);
+      const total = Number(notice.total || 0);
+      if (!count) return '';
+      if (total && count >= total) {
+        return count === 1
+          ? '1 个节目暂时无法更新，请稍后重试'
+          : count + ' 个节目暂时无法更新，请稍后重试';
+      }
       return count === 1
-        ? '1 个节目更新失败，其他订阅不受影响'
-        : count + ' 个节目更新失败，其他订阅不受影响';
+        ? '1 个节目暂时无法更新，其余订阅已完成'
+        : count + ' 个节目暂时无法更新，其余订阅已完成';
     },
     emptyFilterTitle() {
       if (this.selectedPodcastId) {
@@ -370,6 +390,7 @@ export default {
     this._isActive = false;
     this._loadToken = (this._loadToken || 0) + 1;
     this._refreshToken = (this._refreshToken || 0) + 1;
+    this.clearRefreshFailureNotice();
     if (this._dayRefreshTimer) clearTimeout(this._dayRefreshTimer);
   },
   beforeDestroy() {
@@ -377,6 +398,7 @@ export default {
     this._loadToken = (this._loadToken || 0) + 1;
     this._refreshToken = (this._refreshToken || 0) + 1;
     this._listenSyncToken = (this._listenSyncToken || 0) + 1;
+    this.clearRefreshFailureNotice();
     if (this._removeSubscriptionUpdatesChanged) {
       this._removeSubscriptionUpdatesChanged();
       this._removeSubscriptionUpdatesChanged = null;
@@ -520,12 +542,17 @@ export default {
       const token = (this._refreshToken || 0) + 1;
       this._refreshToken = token;
       try {
-        const result = await refreshSubscribedPodcasts();
+        const result = await refreshSubscribedPodcasts({
+          onAttempt: () => {
+            if (!this._destroyed && token === this._refreshToken) {
+              this.clearRefreshFailureNotice();
+            }
+          },
+        });
         if (this._destroyed || token !== this._refreshToken) return;
-        this.refreshFailures = (result.results || []).filter(
-          item => item.error
-        );
-        if (result.skipped || !result.changed) return;
+        if (result.skipped) return;
+        this.showRefreshFailureNotice(result.results || []);
+        if (!result.changed) return;
         const nextSnapshot = await getSubscriptionUpdatesSnapshot({
           now: this.listNow,
         });
@@ -535,6 +562,35 @@ export default {
         if (this._destroyed || token !== this._refreshToken) return;
         this.loadingError = '订阅后台刷新暂时不可用，当前列表未受影响';
       }
+    },
+    clearRefreshFailureNotice() {
+      this._refreshFailureNoticeToken =
+        (this._refreshFailureNoticeToken || 0) + 1;
+      if (this._refreshFailureNoticeTimer) {
+        clearTimeout(this._refreshFailureNoticeTimer);
+        this._refreshFailureNoticeTimer = null;
+      }
+      this.refreshFailureNotice = null;
+    },
+    showRefreshFailureNotice(results) {
+      const attempts = Array.isArray(results) ? results.filter(Boolean) : [];
+      const failures = attempts.filter(item => item.error);
+      this.clearRefreshFailureNotice();
+      if (!failures.length) return;
+
+      const token = (this._refreshFailureNoticeToken || 0) + 1;
+      this._refreshFailureNoticeToken = token;
+      this.refreshFailureNotice = {
+        count: failures.length,
+        total: attempts.length,
+      };
+      this._refreshFailureNoticeTimer = setTimeout(() => {
+        if (this._destroyed || token !== this._refreshFailureNoticeToken) {
+          return;
+        }
+        this.refreshFailureNotice = null;
+        this._refreshFailureNoticeTimer = null;
+      }, 8000);
     },
     applyPendingUpdates() {
       if (!this.pendingSnapshot) return;
@@ -1028,6 +1084,26 @@ export default {
 .updates-refresh-note .svg-icon {
   width: 15px;
   height: 15px;
+}
+
+.updates-refresh-note-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -4px -4px auto;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--color-secondary-bg-for-transparent);
+  }
 }
 
 .updates-empty {

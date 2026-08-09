@@ -129,7 +129,12 @@
             :style="{ backgroundImage: `url(${haloBg(p)})` }"
           ></div>
           <div class="cover-wrap">
-            <PodImage class="cover" :src="p.coverUrl" @error="onCoverError" />
+            <PodImage
+              podcast-cover
+              class="cover"
+              :src="p.coverUrl"
+              @error="onCoverError"
+            />
             <!-- [B-35→暂停] 封面下载进度 ring 应用户要求暂时取消。
                逻辑(podcastDlProgress) + 样式(.dl-ring) 保留，恢复时还原这段 svg 即可。 -->
             <!-- eslint-disable-next-line vue/no-unused-vars -->

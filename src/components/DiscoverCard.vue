@@ -18,7 +18,12 @@
         :style="cover ? { backgroundImage: `url(${cover})` } : {}"
       ></div>
       <div class="cover-wrap">
-        <PodImage class="cover" :src="cover" @error="onImgError" />
+        <PodImage
+          podcast-cover
+          class="cover"
+          :src="cover"
+          @error="onImgError"
+        />
         <!-- 订阅中：封面压暗 + 居中转圈（仅订阅过程，转瞬即逝） -->
         <div v-if="busy" class="cover-loading"
           ><span class="spinner"></span

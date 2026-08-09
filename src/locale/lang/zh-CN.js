@@ -253,6 +253,10 @@ export default {
       delete: '删除',
       addConn: '添加连接',
       addNasConn: '+ 添加 NAS 连接',
+      nasHelpLabel: 'NAS 连接说明',
+      nasHelpTitle: '关于 NAS 连接',
+      nasHelpDescription:
+        'ABS 是 Audiobookshelf。地址可使用 http(s)://主机:端口，并可包含服务基础路径。Token 位于 Audiobookshelf 设置 > 用户 > API Token。',
       startupShow: '启动后显示',
       startupHome: '首页',
       startupLibrary: '我的订阅',
@@ -260,7 +264,7 @@ export default {
       autoCleanDownloadsDesc: '单集听完后自动删除本地下载文件，释放存储空间',
       downloadConcurrency: '同时下载集数',
       downloadConcurrencyDesc:
-        '批量下载时最多同时进行的下载数（1=依次下载，越大越快但更占带宽）',
+        '批量下载时最多同时进行的下载数（1=依次下载；数值越高占用的带宽越多）',
       cacheManage: '缓存管理',
       cacheCover: '封面',
       cacheDiscover: '发现数据',
@@ -271,11 +275,11 @@ export default {
       cacheAudio: '音频',
       audioCacheToggle: '自动缓存在听单集',
       audioCacheDesc:
-        '听满约 1 分钟的未听完单集后台缓存到本地，切回时秒续播；超出上限按最久未用淘汰（未听完的保留）',
+        '听满约 1 分钟的未听完单集会在后台缓存到本地，切回时可优先复用；超出上限按最久未用淘汰（未听完的保留）',
       audioCacheLimit: '音频缓存上限',
       sleepShutdown: '睡眠定时到点后关机',
       sleepShutdownDesc:
-        '开启后睡眠定时到点会先暂停再关机（有 60 秒可取消倒计时，绝不误关）；仅 Windows',
+        '开启后，睡眠定时结束时先暂停播放，并显示 60 秒关机倒计时；倒计时结束前可取消。仅支持 Windows。',
       exportData: '导出收听数据',
       exportDataDesc:
         '把收听进度、统计、每日记录导出为文件（可用于数据分析或迁移）',
@@ -287,6 +291,9 @@ export default {
       nyancatStyle: '进度条彩虹猫样式',
       statsBarCoverTexture: '统计条封面纹理',
       statsBarCoverTextureDesc: '使用节目封面的色彩生成收听统计条纹理。',
+      allowPodcastCoverDrag: '允许拖出播客封面',
+      allowPodcastCoverDragDesc:
+        '允许将节目或单集封面拖到外部应用。关闭后不影响 Shownotes 图片和播放队列拖拽。',
       shortcut: '快捷键',
       shortcutFn: '功能',
       shortcutKey: '快捷键',

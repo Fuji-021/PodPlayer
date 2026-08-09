@@ -23,6 +23,9 @@ let localStorage = {
     enableReversedMode: false,
     nyancatStyle: false,
     statsBarCoverTexture: false,
+    // Existing installs retain native podcast-cover dragging unless users opt
+    // out. This deliberately does not affect shownotes or queue drag handles.
+    allowPodcastCoverDrag: true,
     showLyricsTranslation: true,
     lyricsBackground: true,
     enableOsdlyricsSupport: false,

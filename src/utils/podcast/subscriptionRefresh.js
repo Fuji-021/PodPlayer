@@ -31,6 +31,7 @@ export function getLatestSubscriptionRefreshResult() {
 export function refreshSubscribedPodcasts({
   minInterval = DEFAULT_INTERVAL,
   force = false,
+  onAttempt,
 } = {}) {
   if (refreshInFlight) return refreshInFlight;
   if (!force && Date.now() - readLastRefresh() < minInterval) {
@@ -40,6 +41,10 @@ export function refreshSubscribedPodcasts({
       results: latestResult ? latestResult.results : [],
     });
   }
+
+  // Consumers may clear transient UI from a previous completed attempt here.
+  // Skipped calls and in-flight followers deliberately do not invoke it.
+  if (typeof onAttempt === 'function') onAttempt();
 
   refreshInFlight = refreshAllSubscriptions()
     .then(result => {

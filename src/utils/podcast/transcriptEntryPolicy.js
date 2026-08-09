@@ -10,9 +10,10 @@ export function getTranscriptEntryBehavior(state) {
     return { reason: 'no-model', action: 'settings', shouldScroll: false };
   }
   if (state.mode === 'idle') {
-    return state.hasLocalFile
-      ? { reason: 'generate', action: 'generate', shouldScroll: false }
-      : { reason: 'needs-download', action: 'focus', shouldScroll: false };
+    // Permanent audio is preferred when available. Otherwise the source layer
+    // prepares a task-scoped temporary file; an entry click never starts the
+    // user-visible download workflow.
+    return { reason: 'generate', action: 'generate', shouldScroll: false };
   }
   return { reason: 'available', action: 'focus', shouldScroll: true };
 }

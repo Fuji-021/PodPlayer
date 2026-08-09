@@ -71,6 +71,7 @@
           <!-- [点击区收窄] 只有真实封面可点跳转；端帽不接管外侧过渡区。 -->
           <span class="stats-texture-endcap">
             <PodImage
+              podcast-cover
               class="thumb"
               :src="item.coverUrl"
               @error="onCoverError"

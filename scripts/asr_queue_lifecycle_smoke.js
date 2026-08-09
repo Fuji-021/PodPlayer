@@ -72,7 +72,7 @@ export const dialog = { showSaveDialog() { return Promise.resolve({ canceled: tr
   fs.writeFileSync(
     fakeFs,
     `const fakeFs = {
-  existsSync() { return true; },
+  existsSync(target) { return !!target; },
   mkdirSync() {},
   rmSync() {},
   rmdirSync() {},
@@ -117,7 +117,7 @@ export function isAsrPlatformSupported() { return true; }\n`
   return outfile;
 }
 
-function createHarness(configs, spawnPlan = []) {
+function createHarness(configs, spawnPlan = [], mediaManager) {
   const events = [];
   const children = [];
   const configQueue = configs.slice();
@@ -153,18 +153,40 @@ function createHarness(configs, spawnPlan = []) {
         },
       };
     },
+    mediaManager: mediaManager || {
+      acquire(request) {
+        return Promise.resolve({
+          sourceType: 'persistent',
+          localPath: request.persistentPath || request.audioPath,
+          ownerToken: request.ownerToken,
+          release() {
+            return Promise.resolve({ ok: true });
+          },
+        });
+      },
+      release() {
+        return Promise.resolve({ ok: true });
+      },
+      releaseEpisode() {
+        return Promise.resolve({ ok: true });
+      },
+    },
   };
 }
 
-async function createRuntime(outfile, configs, spawnPlan) {
-  global.__asrHarness = createHarness(configs, spawnPlan);
+async function createRuntime(outfile, configs, spawnPlan, mediaManager) {
+  global.__asrHarness = createHarness(configs, spawnPlan, mediaManager);
   delete require.cache[require.resolve(outfile)];
   const asr = require(outfile);
-  asr.registerAsrIpc(global.__asrHarness.getWindow, {
-    get() {
-      return {};
+  asr.registerAsrIpc(
+    global.__asrHarness.getWindow,
+    {
+      get() {
+        return {};
+      },
     },
-  });
+    global.__asrHarness.mediaManager
+  );
   return global.__asrHarness;
 }
 
@@ -172,13 +194,19 @@ async function status(harness, episodeId) {
   return harness.handlers['asr:status'](null, { episodeId });
 }
 
-async function transcribe(harness, episodeId) {
-  return harness.handlers['asr:transcribe'](null, {
-    episodeId,
-    audioPath: `C:/mock/${episodeId}.mp3`,
-    title: episodeId,
-    durationSec: 60,
-  });
+async function transcribe(harness, episodeId, options) {
+  return harness.handlers['asr:transcribe'](
+    null,
+    Object.assign(
+      {
+        episodeId,
+        audioPath: `C:/mock/${episodeId}.mp3`,
+        title: episodeId,
+        durationSec: 60,
+      },
+      options || {}
+    )
+  );
 }
 
 async function main() {
@@ -306,6 +334,96 @@ async function main() {
       1
     );
 
+    // Renderer pause reaches the IPC handler, retains the exact transient
+    // owner after the worker closes, and a later explicit resume starts a new
+    // ASR owner. The media manager smoke separately proves that the retained
+    // owner directory/Ranged .part is reused rather than downloaded again.
+    const lifecycleReleases = [];
+    const lifecycleAcquires = [];
+    harness = await createRuntime(
+      outfile,
+      [Promise.resolve(validConfig()), Promise.resolve(validConfig())],
+      ['running', 'running'],
+      {
+        acquire(request) {
+          lifecycleAcquires.push(request);
+          return Promise.resolve({
+            sourceType: 'transient',
+            localPath: `C:/mock/${request.ownerToken}.mp3`,
+            ownerToken: request.ownerToken,
+            release(reason) {
+              lifecycleReleases.push({ ownerToken: request.ownerToken, reason });
+              return Promise.resolve({ ok: true });
+            },
+          });
+        },
+        release() {
+          return Promise.resolve({ ok: true });
+        },
+        releaseEpisode() {
+          return Promise.resolve({ ok: true });
+        },
+      }
+    );
+    await transcribe(harness, 'pause-resume');
+    await flush();
+    const pausedChild = harness.children[0];
+    assert.deepStrictEqual(
+      await harness.handlers['asr:pause'](null, { episodeId: 'pause-resume' }),
+      { ok: true, paused: true }
+    );
+    assert.strictEqual(pausedChild.killCalls.length, 1);
+    pausedChild.emit('close', null, 'SIGTERM');
+    await flush();
+    assert.deepStrictEqual(lifecycleReleases, [
+      { ownerToken: lifecycleAcquires[0].ownerToken, reason: 'paused' },
+    ]);
+    assert.strictEqual(
+      harness.events.filter(event => event.channel === 'asr:paused').length,
+      1
+    );
+    await transcribe(harness, 'pause-resume', { resume: true });
+    await flush();
+    assert.strictEqual(lifecycleAcquires.length, 2);
+
+    // Queue cancellation is destructive only for its task-local media. It
+    // never turns a queued job into a paused continuation.
+    const queueReleases = [];
+    harness = await createRuntime(
+      outfile,
+      [Promise.resolve(validConfig()), Promise.resolve(validConfig())],
+      ['running', 'running'],
+      {
+        acquire(request) {
+          return Promise.resolve({
+            sourceType: 'transient',
+            localPath: `C:/mock/${request.ownerToken}.mp3`,
+            ownerToken: request.ownerToken,
+            release(reason) {
+              queueReleases.push({ ownerToken: request.ownerToken, reason });
+              return Promise.resolve({ ok: true });
+            },
+          });
+        },
+        release(ownerToken, reason) {
+          queueReleases.push({ ownerToken, reason });
+          return Promise.resolve({ ok: true });
+        },
+        releaseEpisode() {
+          return Promise.resolve({ ok: true });
+        },
+      }
+    );
+    await transcribe(harness, 'queue-owner-A');
+    await transcribe(harness, 'queue-owner-B');
+    await flush();
+    await harness.handlers['asr:cancel'](null, { episodeId: 'queue-owner-B' });
+    await flush();
+    assert.strictEqual(
+      queueReleases.some(item => item.reason === 'canceled-delete'),
+      true
+    );
+
     // A canceled running child may still emit a late done message; it must not
     // write a visible success state after cancellation.
     harness = await createRuntime(outfile, [Promise.resolve(validConfig())]);
@@ -336,6 +454,94 @@ async function main() {
       harness.events.filter(event => event.channel === 'asr:error').length,
       1
     );
+
+    // Model preflight runs before source acquisition. A missing local model
+    // must not start a transient network request or create a media owner.
+    let acquireCalls = 0;
+    harness = await createRuntime(
+      outfile,
+      [Promise.resolve({ ok: false, error: 'model-missing' })],
+      [],
+      {
+        acquire() {
+          acquireCalls += 1;
+          return Promise.resolve({ localPath: 'C:/mock/unreachable.mp3' });
+        },
+        release() {
+          return Promise.resolve({ ok: true });
+        },
+        releaseEpisode() {
+          return Promise.resolve({ ok: true });
+        },
+      }
+    );
+    await transcribe(harness, 'no-model-network');
+    await flush();
+    assert.strictEqual(acquireCalls, 0);
+    assert.strictEqual(
+      harness.events.some(
+        event =>
+          event.channel === 'asr:error' &&
+          event.payload.error === 'model-missing'
+      ),
+      true
+    );
+
+    // A transient source survives the worker close only until the renderer
+    // acknowledges that the transcript was persisted; then its exact owner is
+    // released. A foreign token is fail-closed.
+    const released = [];
+    harness = await createRuntime(
+      outfile,
+      [Promise.resolve(validConfig())],
+      ['running'],
+      {
+        acquire(request) {
+          return Promise.resolve({
+            sourceType: 'transient',
+            localPath: 'C:/mock/transient.mp3',
+            ownerToken: request.ownerToken,
+            release() {
+              return Promise.resolve({ ok: true });
+            },
+          });
+        },
+        release(ownerToken, reason) {
+          released.push({ ownerToken, reason });
+          return Promise.resolve({ ok: true });
+        },
+        releaseEpisode() {
+          return Promise.resolve({ ok: true });
+        },
+      }
+    );
+    await transcribe(harness, 'persisted-source');
+    await flush();
+    const transientChild = harness.children[0];
+    transientChild.emit('message', { type: 'done', segCount: 1 });
+    transientChild.emit('close', 0, null);
+    await flush();
+    const done = harness.events.find(event => event.channel === 'asr:done');
+    assert(done && done.payload.ownerToken);
+    assert.deepStrictEqual(
+      await harness.handlers['asr:source:release'](null, {
+        episodeId: 'persisted-source',
+        ownerToken: 'foreign-owner',
+        outcome: 'done',
+      }),
+      { ok: false, error: 'invalid-transcript-media-owner' }
+    );
+    assert.deepStrictEqual(
+      await harness.handlers['asr:source:release'](null, {
+        episodeId: 'persisted-source',
+        ownerToken: done.payload.ownerToken,
+        outcome: 'done',
+      }),
+      { ok: true }
+    );
+    assert.deepStrictEqual(released, [
+      { ownerToken: done.payload.ownerToken, reason: 'done' },
+    ]);
 
     process.stdout.write('asr queue lifecycle smoke: PASS\n');
   } finally {

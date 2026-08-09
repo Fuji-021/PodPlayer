@@ -120,17 +120,28 @@
 
     <!-- 未转录 -->
     <div v-else-if="mode === 'idle'" class="t-idle">
-      <button class="t-btn" :disabled="!hasLocalFile" @click="onGenerate">
+      <button
+        v-tip="transcriptSourceHint"
+        class="t-btn"
+        :aria-label="'生成文字稿。' + transcriptSourceHint"
+        @click="onGenerate"
+      >
         生成文字稿
       </button>
-      <span v-if="!hasLocalFile" class="t-note">下载本集后可生成文字稿</span>
-      <span v-else class="t-note">在本地把本集音频转成带时间戳的文字稿</span>
+      <button
+        v-tip="transcriptSourceHint"
+        class="t-link"
+        :aria-label="'生成文字稿并总结。' + transcriptSourceHint"
+        @click="onGenerateSummary"
+      >
+        生成文字稿并总结
+      </button>
     </div>
 
     <!-- 排队中 -->
     <div v-else-if="mode === 'queued'" class="t-hint">
       <span class="t-spin"></span>已排队，等待前一个转录任务完成…
-      <button class="t-link" @click="onCancel">取消</button>
+      <button class="t-link" @click="onCancelQueue">取消排队</button>
     </div>
 
     <!-- 转录中 -->
@@ -140,7 +151,7 @@
           <div class="t-prog-fill" :style="{ width: progressPct + '%' }"></div>
         </div>
         <span class="t-prog-pct">{{ progressLabel }}</span>
-        <button class="t-link danger" @click="onCancel">取消</button>
+        <button class="t-link" @click="onPause">暂停转写</button>
       </div>
       <div class="t-running-sub">
         {{ runningSubLabel }}
@@ -346,7 +357,9 @@ import {
   getAsrStatus,
   readSegments,
   startTranscribe,
+  startTranscribeAndSummarize,
   cancelTranscribe,
+  pauseTranscribe,
   deleteTranscript,
   exportTranscriptText,
   getDictParts,
@@ -432,7 +445,8 @@ export default {
     },
     isActiveTask() {
       return (
-        this.live.episodeId === this.episodeId && this.live.status === 'running'
+        this.live.episodeId === this.episodeId &&
+        ['preparing', 'running'].indexOf(this.live.status) >= 0
       );
     },
     // dbRow.status 归一化：'running' 但当前并无活动任务（app 重启中断）→ 视为可续 'paused'
@@ -447,15 +461,18 @@ export default {
       if (!this.modelReady) return 'no-model';
       // 实时态优先（同集）：立即反映 running/done/error，避免完成瞬间闪一下"已暂停"
       if (this.live.episodeId === this.episodeId) {
+        if (this.live.status === 'preparing') return 'running';
         if (this.live.status === 'running') return 'running';
+        if (this.live.status === 'paused') return 'paused';
         if (this.live.status === 'done') return 'done';
+        if (this.live.status === 'canceled') return 'idle';
         if (
           this.live.status === 'error' &&
           this.live.error !== 'model-missing'
         ) {
           return 'error';
         }
-        // 'canceled' → 落到 dbStatus 的 paused
+        // A destructive cancellation falls back to its durable row state.
       }
       if (this.queuedLocal) return 'queued';
       const s = this.dbStatus;
@@ -470,12 +487,31 @@ export default {
       return Math.max(0, Math.min(99, (this.live.processedSec / t) * 100));
     },
     progressLabel() {
+      if (this.live.phase === 'preparing') {
+        const totalBytes = this.live.totalBytes || 0;
+        if (!totalBytes) return '准备中';
+        return (
+          Math.max(
+            0,
+            Math.min(
+              99,
+              Math.floor(((this.live.preparedBytes || 0) / totalBytes) * 100)
+            )
+          ) + '%'
+        );
+      }
       if (this.live.phase && this.live.phase !== 'transcribing') {
         return this.live.phase === 'decoding' ? '准备中' : '加载中';
       }
       return Math.floor(this.progressPct) + '%';
     },
+    transcriptSourceHint() {
+      return this.hasLocalFile
+        ? '使用已下载音频在本地转写。'
+        : '未下载时会临时获取音频；文稿保存后自动清理。';
+    },
     runningSubLabel() {
+      if (this.live.phase === 'preparing') return '正在准备音频…';
       if (this.live.phase === 'decoding') return '正在准备音频…';
       if (this.live.phase === 'loading') return '正在载入模型…';
       const done = this.fmtClock(this.live.processedSec || 0);
@@ -558,6 +594,7 @@ export default {
       );
     },
     summaryActionLabel() {
+      if (!this.summarySourceSegments.length) return '生成文字稿并总结';
       return this.hasSummary ? '重新生成本集总结' : '生成本集总结';
     },
     summaryProgressLabel() {
@@ -573,6 +610,7 @@ export default {
         this.initializing ||
         this.mode === 'queued' ||
         this.mode === 'running' ||
+        this.mode === 'idle' ||
         this.mode === 'done' ||
         this.mode === 'paused' ||
         this.mode === 'error'
@@ -616,10 +654,6 @@ export default {
         generate: {
           label: '生成文字稿',
           tip: '生成文字稿',
-        },
-        'needs-download': {
-          label: '下载后生成',
-          tip: '下载本集后可生成文字稿',
         },
         available: {
           label: '跳到文字稿',
@@ -940,12 +974,6 @@ export default {
         this.onGenerate();
       } else if (info.reason === 'unsupported') {
         this.$store.dispatch('showToast', '当前平台暂不支持本地转文字稿');
-      } else if (
-        !this.hasLocalFile &&
-        this.modelReady &&
-        this.platformSupported
-      ) {
-        this.$store.dispatch('showToast', '下载本集后可生成文字稿');
       }
       return info;
     },
@@ -1175,13 +1203,19 @@ export default {
     },
     async onGenerateSummary() {
       const episodeId = this.episodeId;
-      if (!episodeId || !this.summarySourceSegments.length) return;
+      if (!episodeId) return;
       if (!this.aiKey) {
         this.$store.dispatch('showToast', '请先在设置中配置并测试联网 AI 服务');
         if (this.$router) this.$router.push('/settings').catch(() => {});
         return;
       }
       this.showAiTools = false;
+      if (!this.summarySourceSegments.length) {
+        this.queuedLocal = false;
+        const start = await startTranscribeAndSummarize(this.episode);
+        if (start && start.ok && start.queued) this.queuedLocal = true;
+        return;
+      }
       const res = await startTranscriptSummary(
         episodeId,
         this.podcastId,
@@ -1334,7 +1368,10 @@ export default {
     goModelSettings() {
       if (this.$router) this.$router.push('/settings').catch(() => {});
     },
-    onCancel() {
+    onPause() {
+      pauseTranscribe(this.episodeId);
+    },
+    onCancelQueue() {
       cancelTranscribe(this.episodeId);
       this.queuedLocal = false;
     },
@@ -1892,10 +1929,6 @@ export default {
   display: flex;
   align-items: center;
   gap: 14px;
-  .t-note {
-    font-size: 13px;
-    opacity: 0.55;
-  }
 }
 .t-hint {
   display: flex;

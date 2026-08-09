@@ -1,12 +1,3 @@
-export function getStaleAsrPendingIds(pendingMap, progressMap, pathMap) {
-  const pending =
-    pendingMap && typeof pendingMap === 'object' ? pendingMap : {};
-  const progress =
-    progressMap && typeof progressMap === 'object' ? progressMap : {};
-  const paths = pathMap && typeof pathMap === 'object' ? pathMap : {};
-  return Object.keys(pending).filter(id => !progress[id] && !paths[id]);
-}
-
 export function shouldRemoveQueueEntryAfterHandoff(started) {
   return started !== false;
 }

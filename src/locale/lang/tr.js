@@ -240,6 +240,10 @@ export default {
       delete: 'Delete',
       addConn: 'Add connection',
       addNasConn: '+ Add NAS connection',
+      nasHelpLabel: 'NAS connection help',
+      nasHelpTitle: 'About NAS connections',
+      nasHelpDescription:
+        'ABS means Audiobookshelf. Use http(s)://host:port, optionally with a service base path. Find the token in Audiobookshelf: Settings > Users > API Token.',
       startupShow: 'Show on startup',
       startupHome: 'Home',
       startupLibrary: 'My subscriptions',
@@ -248,7 +252,7 @@ export default {
         'Automatically delete the local download file after an episode finishes, to free up storage space.',
       downloadConcurrency: 'Concurrent downloads',
       downloadConcurrencyDesc:
-        'Maximum number of downloads running at the same time during batch downloads (1 = one at a time; higher is faster but uses more bandwidth).',
+        'Maximum number of downloads running at the same time during batch downloads (1 = one at a time; higher values use more bandwidth).',
       cacheManage: 'Önbellek',
       cacheCover: 'Kapaklar',
       cacheDiscover: 'Keşfet verisi',
@@ -259,11 +263,11 @@ export default {
       cacheAudio: 'Ses',
       audioCacheToggle: 'Dinlenen bölümleri otomatik önbelleğe al',
       audioCacheDesc:
-        'Yaklaşık 1 dk dinlediğin (ve bitirmediğin) bölümler yerele önbelleğe alınır, böylece kaldığın yerden anında devam edersin; sınır aşılınca en az kullanılanlar silinir (bitmeyenler korunur).',
+        'Yaklaşık 1 dakika dinlenen ve bitmeyen bölümler yerelde önbelleğe alınır; sınır aşılınca en az kullanılanlar silinir (bitmeyenler korunur).',
       audioCacheLimit: 'Ses önbellek sınırı',
       sleepShutdown: 'Uyku zamanlayıcı bitince bilgisayarı kapat',
       sleepShutdownDesc:
-        'Açıkken uyku zamanlayıcı dolunca duraklatır ve Windows’u kapatır (60 sn iptal edilebilir geri sayım). Yalnızca Windows.',
+        'Açıkken uyku zamanlayıcı bittiğinde oynatma duraklar ve 60 saniyelik kapatma geri sayımı gösterilir. Bitişten önce iptal edilebilir. Yalnızca Windows.',
       exportData: 'Export listening data',
       exportDataDesc:
         'Export listening progress, stats, and daily records to a file (for data analysis or migration).',
@@ -277,6 +281,9 @@ export default {
       statsBarCoverTexture: 'Stats bar cover texture',
       statsBarCoverTextureDesc:
         'Use podcast cover colors to create listening-statistics bar textures.',
+      allowPodcastCoverDrag: 'Allow dragging podcast covers',
+      allowPodcastCoverDragDesc:
+        'Allow podcast and episode covers to be dragged to external apps. This does not affect Shownotes images or queue reordering.',
       shortcut: 'Shortcuts',
       shortcutFn: 'Function',
       shortcutKey: 'Shortcut',

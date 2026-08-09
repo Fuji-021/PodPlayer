@@ -202,7 +202,31 @@
       </div>
       <div v-if="isElectron" class="item">
         <div class="left">
-          <div class="title">{{ $t('settings.pod.addConn') }}</div>
+          <div class="settings-feature-title">
+            <div class="title">{{ $t('settings.pod.addConn') }}</div>
+            <button
+              class="settings-info-button"
+              type="button"
+              :aria-label="$t('settings.pod.nasHelpLabel')"
+              :aria-expanded="settingsInfoPopover === 'nas-connection'"
+              aria-controls="nas-connection-info"
+              @mousedown.stop
+              @click.stop="toggleSettingsInfo('nas-connection')"
+            >
+              i
+            </button>
+            <div
+              v-if="settingsInfoPopover === 'nas-connection'"
+              id="nas-connection-info"
+              class="settings-info-popover"
+              role="note"
+              @mousedown.stop
+              @click.stop
+            >
+              <strong>{{ $t('settings.pod.nasHelpTitle') }}</strong>
+              <p>{{ $t('settings.pod.nasHelpDescription') }}</p>
+            </div>
+          </div>
         </div>
         <div class="right">
           <button @click="openNasDialog()">
@@ -328,7 +352,7 @@
               </div>
             </div>
             <div class="description">
-              部署模型后，可在已下载单集详情页手动生成文字稿；生成后可在沉浸页点击封面查看。
+              部署模型后，可在有可用音频地址的单集详情页手动生成文字稿；未永久下载时会临时准备音频，文字稿保存后自动清理临时媒体。
             </div>
           </div>
           <div class="right settings-feature-actions">
@@ -399,6 +423,20 @@
           </div>
         </div>
       </section>
+      <div v-if="isElectron" class="item asr-transient-media-item">
+        <div class="left">
+          <div class="title">转写临时文件</div>
+          <div class="description">{{ transcriptMediaStatusText }}</div>
+        </div>
+        <div class="right">
+          <button
+            :disabled="transcriptMedia.cleaning || !transcriptMedia.count"
+            @click="clearTranscriptMedia"
+          >
+            {{ transcriptMedia.cleaning ? '清理中' : '清理' }}
+          </button>
+        </div>
+      </div>
       <div v-if="isElectron && asrModel.installing" class="item asr-model-item">
         <div class="left">
           <div class="title">{{ asrInstallStatusText }}</div>
@@ -871,6 +909,28 @@
         </div>
       </div>
 
+      <div class="item">
+        <div class="left">
+          <div class="title">
+            {{ $t('settings.pod.allowPodcastCoverDrag') }}
+          </div>
+          <div class="description">
+            {{ $t('settings.pod.allowPodcastCoverDragDesc') }}
+          </div>
+        </div>
+        <div class="right">
+          <div class="toggle">
+            <input
+              id="allow-podcast-cover-drag"
+              v-model="allowPodcastCoverDrag"
+              type="checkbox"
+              name="allow-podcast-cover-drag"
+            />
+            <label for="allow-podcast-cover-drag"></label>
+          </div>
+        </div>
+      </div>
+
       <!-- [§12] 已删「代理」+「Real IP」段：原为网易云 API 走代理 / 伪装 IP 绕区域限制；
            本应用播客 RSS 走主进程直连、下载走 Node 原生 https(Clash TUN 路由)，不依赖此设置。
            底层 proxy/realIP 配置逻辑保留(dormant)、仅移除 UI 配置项。 -->
@@ -1102,6 +1162,10 @@ import {
   onModelInstallProgress,
 } from '@/utils/podcast/asrModel';
 import {
+  getTranscriptMediaStats,
+  cleanupTranscriptMedia,
+} from '@/utils/podcast/transcriptMedia';
+import {
   createDefaultAiServiceConfig,
   getAiServiceConfig,
   getAiServiceStatus,
@@ -1161,6 +1225,14 @@ export default {
         cover: { count: 0, bytes: 0 },
         discover: { bytes: 0, ts: 0 },
         audio: { count: 0, bytes: 0 },
+      },
+      // 仅统计 userData/tmp/transcript-media。它从不代表永久下载或备份资产。
+      transcriptMedia: {
+        count: 0,
+        bytes: 0,
+        pausedCount: 0,
+        partCount: 0,
+        cleaning: false,
       },
       // [NAS] 配置中心状态
       nas: {
@@ -1275,6 +1347,21 @@ export default {
         this.$t('settings.pod.cacheItems') +
         ' / ' +
         this.formatBytes(a.bytes || 0)
+      );
+    },
+    transcriptMediaStatusText() {
+      const media = this.transcriptMedia || {};
+      const count = Number(media.count) || 0;
+      if (!count) return '当前没有可清理的转写临时音频。';
+      const detail = [];
+      if (media.pausedCount) detail.push(media.pausedCount + ' 项可续转');
+      if (media.partCount) detail.push(media.partCount + ' 项可重试');
+      return (
+        count +
+        ' 项 / ' +
+        this.formatBytes(media.bytes || 0) +
+        (detail.length ? ' · ' + detail.join('，') : '') +
+        '。仅用于本地转写，不会显示为下载或写入备份。'
       );
     },
     // [C3] 自动音频缓存开关 + 上限(MB)
@@ -1533,6 +1620,17 @@ export default {
         });
       },
     },
+    allowPodcastCoverDrag: {
+      get() {
+        return this.settings.allowPodcastCoverDrag !== false;
+      },
+      set(value) {
+        this.$store.commit('updateSettings', {
+          key: 'allowPodcastCoverDrag',
+          value,
+        });
+      },
+    },
     closeAppOption: {
       get() {
         return this.settings.closeAppOption;
@@ -1652,6 +1750,7 @@ export default {
       this.loadNas();
       this.startNasPoll();
       this.refreshCacheStats();
+      this.refreshTranscriptMediaStats();
       this.refreshAsrModelStatus();
       this.bindAsrModelProgress();
       this.refreshAiServiceStatus();
@@ -1665,6 +1764,7 @@ export default {
       this.loadNas();
       this.startNasPoll();
       this.refreshCacheStats();
+      this.refreshTranscriptMediaStats();
       this.refreshAsrModelStatus();
       this.bindAsrModelProgress();
       this.refreshAiServiceStatus();
@@ -1958,6 +2058,43 @@ export default {
         };
       } catch (e) {
         // 忽略
+      }
+    },
+    async refreshTranscriptMediaStats() {
+      const result = await getTranscriptMediaStats();
+      if (!result || !result.ok) return;
+      this.transcriptMedia = Object.assign(
+        {
+          count: 0,
+          bytes: 0,
+          pausedCount: 0,
+          partCount: 0,
+          cleaning: false,
+        },
+        result.stats || {},
+        { cleaning: false }
+      );
+    },
+    async clearTranscriptMedia() {
+      if (this.transcriptMedia.cleaning || !this.transcriptMedia.count) return;
+      this.transcriptMedia.cleaning = true;
+      const result = await cleanupTranscriptMedia();
+      if (result && result.ok) {
+        this.transcriptMedia = Object.assign(
+          {
+            count: 0,
+            bytes: 0,
+            pausedCount: 0,
+            partCount: 0,
+            cleaning: false,
+          },
+          result.stats || {},
+          { cleaning: false }
+        );
+        this.showToast('已清理转写临时文件');
+      } else {
+        this.transcriptMedia.cleaning = false;
+        this.showToast('清理转写临时文件失败，请稍后重试');
       }
     },
     async clearAllCache() {
